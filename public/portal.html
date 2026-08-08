@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CAPTYN WiFi</title>
+    <script src="theme.js?v=2026080402"></script>
+    <link rel="stylesheet" href="theme.css?v=2026080701" />
+    <link rel="stylesheet" href="portal.css?v=2026080804" />
+  </head>
+  <body>
+    <main class="portal-app">
+      <header class="topbar">
+        <a class="brand" href="/wifi/" aria-label="CAPTYN WiFi">
+          <span class="brand-mark">C</span>
+          <span><span class="eyebrow">CAPTYN</span><strong>WiFi</strong></span>
+        </a>
+        <div class="topbar-status">
+          <span id="site-pill" class="pill muted">Loading site</span>
+          <span id="health-pill" class="pill muted">Checking</span>
+          <button id="theme-toggle-btn" class="theme-toggle" type="button" aria-label="Toggle dark mode">Dark</button>
+        </div>
+      </header>
+
+      <section class="intro-row">
+        <h1>Get connected</h1>
+        <div id="hero-meta" class="intro-meta"></div>
+      </section>
+
+      <div id="checkout-backdrop" class="checkout-backdrop"></div>
+
+      <section class="workspace">
+        <section class="plans-panel" aria-label="WiFi packages">
+          <div class="section-head">
+            <h2>Choose a package</h2>
+            <span id="plan-count" class="count-label">0 packages</span>
+          </div>
+          <div id="plans" class="plans"></div>
+        </section>
+
+        <aside id="checkout" class="checkout-panel">
+          <div class="sheet-handle" aria-hidden="true"></div>
+          <div class="section-head compact">
+            <h2 id="checkout-title">Select a package</h2>
+            <div class="checkout-head-actions">
+              <strong id="checkout-price" class="price-tag">KSh 0</strong>
+              <button id="checkout-close-btn" class="sheet-close" type="button" aria-label="Back to packages">✕</button>
+            </div>
+          </div>
+
+          <div class="step-rail" aria-label="Purchase progress">
+            <span class="step active" data-step="package">Package</span>
+            <span class="step" data-step="mpesa">M-PESA</span>
+            <span class="step" data-step="access">Access</span>
+          </div>
+
+          <div id="selected-summary" class="selected-summary"></div>
+
+          <form id="payment-form" class="payment-form">
+            <input id="plan-id" type="hidden" />
+            <label class="field" for="phone"><span>Safaricom phone</span><input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="0712345678" required /></label>
+            <button id="pay-button" type="submit">Pay Now</button>
+          </form>
+          <p id="payment-status" class="status-text"></p>
+
+          <button id="voucher-login-toggle" class="ghost existing-login-toggle" type="button">Have a voucher code?</button>
+          <form id="voucher-login-form" class="payment-form existing-login-form hidden">
+            <label class="field" for="voucher-code-input"><span>Voucher code</span><input id="voucher-code-input" name="code" type="text" autocapitalize="characters" autocomplete="off" placeholder="e.g. 7QK4M9PX" required /></label>
+            <button id="voucher-login-submit" class="secondary" type="submit">Redeem</button>
+          </form>
+          <p id="voucher-login-status" class="status-text"></p>
+
+          <button id="receipt-login-toggle" class="ghost existing-login-toggle" type="button">Already paid? Enter M-PESA code</button>
+          <form id="receipt-login-form" class="payment-form existing-login-form hidden">
+            <label class="field" for="receipt-code-input"><span>M-PESA transaction ID</span><input id="receipt-code-input" name="receipt" type="text" autocapitalize="characters" autocomplete="off" placeholder="e.g. SFC1A2B3C4" required /></label>
+            <button id="receipt-login-submit" class="secondary" type="submit">Connect</button>
+          </form>
+          <p id="receipt-login-status" class="status-text"></p>
+
+          <button id="existing-login-toggle" class="ghost existing-login-toggle" type="button">Already have a username and password?</button>
+          <form id="existing-login-form" class="payment-form existing-login-form hidden">
+            <label class="field" for="existing-username"><span>Username</span><input id="existing-username" name="username" type="text" inputmode="tel" autocomplete="username" required /></label>
+            <label class="field" for="existing-password"><span>Password</span><input id="existing-password" name="password" type="text" autocomplete="current-password" required /></label>
+            <button id="existing-login-submit" class="secondary" type="submit">Connect</button>
+          </form>
+          <p id="existing-login-status" class="status-text"></p>
+        </aside>
+      </section>
+
+      <section id="access" class="access-panel hidden">
+        <div class="section-head">
+          <h2 id="access-heading">You're connected</h2>
+          <span class="pill ok">Active</span>
+        </div>
+        <p id="access-message" class="access-message">You're all set — go ahead and browse, stream, and download.</p>
+        <div class="access-time-left" id="access-time-left"></div>
+        <div class="credential-grid">
+          <button type="button" class="credential" data-copy-target="access-username"><span>Username</span><strong id="access-username"></strong><em>Copy</em></button>
+          <button type="button" class="credential" data-copy-target="access-password"><span>Password</span><strong id="access-password"></strong><em>Copy</em></button>
+          <div class="credential static"><span>Expires</span><strong id="access-expires"></strong></div>
+        </div>
+        <button id="extend-period-btn" class="secondary extend-period-btn" type="button">Extend period</button>
+      </section>
+
+      <p id="error" class="error-text hidden"></p>
+    </main>
+
+    <div id="expiry-banner" class="expiry-banner hidden" role="status">
+      <span class="expiry-message">Your WiFi expires in <strong id="expiry-countdown">2:00</strong></span>
+      <button id="expiry-renew-btn" class="primary" type="button">Buy more time</button>
+    </div>
+
+    <div id="payment-modal" class="payment-modal hidden" role="status" aria-live="polite">
+      <div class="payment-modal-card">
+        <div id="payment-modal-icon" class="payment-modal-icon spin" aria-hidden="true"></div>
+        <h2 id="payment-modal-title">Check your phone</h2>
+        <p id="payment-modal-message" class="payment-modal-message"></p>
+        <button id="payment-modal-cancel-btn" class="ghost payment-modal-cancel" type="button">Cancel</button>
+        <button id="payment-modal-retry-btn" class="primary payment-modal-retry hidden" type="button">Try Again</button>
+      </div>
+    </div>
+
+    <script src="portal.js?v=2026080804" defer data-cfasync="false"></script>
+  </body>
+</html>

@@ -1,0 +1,163 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum WifiPaymentIntentStatus {
+  pending_confirmation
+  confirmed
+  failed
+  paid_pending_activation
+  activated
+}
+
+enum WifiEntitlementStatus {
+  pending_activation
+  active
+  expired
+  suspended
+  revoked
+}
+
+enum WifiProjectionStatus {
+  pending
+  applied
+  failed
+}
+
+model WifiSite {
+  id          String       @id
+  name        String
+  source      String       @default("captyn_housing")
+  externalId  String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  plans       WifiPlan[]
+  intents     WifiPaymentIntent[]
+  entitlements WifiEntitlement[]
+
+  @@unique([source, externalId])
+  @@index([source])
+}
+
+model WifiPlan {
+  id                String       @id @default(uuid())
+  siteId            String
+  source            String       @default("captyn_housing")
+  externalPackageId String
+  name              String
+  durationSeconds   Int
+  priceKsh          Int
+  rateLimit         String?
+  deviceLimit       Int          @default(1)
+  enabled           Boolean      @default(true)
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  site              WifiSite     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  intents           WifiPaymentIntent[]
+  entitlements      WifiEntitlement[]
+
+  @@unique([siteId, source, externalPackageId])
+  @@index([siteId, enabled])
+}
+
+model WifiPaymentIntent {
+  id                  String                  @id @default(uuid())
+  siteId              String
+  planId              String
+  source              String                  @default("captyn_housing")
+  sourceReference     String
+  customerPhone       String
+  deviceMac           String?
+  amountKsh           Int
+  provider            String                  @default("mpesa")
+  providerReference   String?
+  receiptNumber       String?
+  status              WifiPaymentIntentStatus @default(pending_confirmation)
+  rawPayload          Json?
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+  confirmedAt         DateTime?
+  site                WifiSite                @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  plan                WifiPlan                @relation(fields: [planId], references: [id], onDelete: Restrict)
+  entitlement         WifiEntitlement?
+
+  @@unique([source, sourceReference])
+  @@index([siteId, status, createdAt])
+  @@index([provider, providerReference])
+  @@index([receiptNumber])
+}
+
+model WifiEntitlement {
+  id               String                @id @default(uuid())
+  siteId           String
+  planId           String
+  paymentIntentId  String                @unique
+  customerPhone    String
+  username         String
+  cleartextSecret  String
+  deviceMac        String?
+  status           WifiEntitlementStatus @default(pending_activation)
+  startsAt         DateTime
+  expiresAt        DateTime
+  deviceLimit      Int                   @default(1)
+  rateLimit        String?
+  acctInterimSeconds Int                 @default(120)
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  site             WifiSite              @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  plan             WifiPlan              @relation(fields: [planId], references: [id], onDelete: Restrict)
+  paymentIntent    WifiPaymentIntent     @relation(fields: [paymentIntentId], references: [id], onDelete: Cascade)
+  projection       WifiRadiusProjection?
+
+  @@index([siteId, status, expiresAt])
+  @@index([username])
+  @@index([deviceMac, status, expiresAt])
+}
+
+model WifiRadiusProjection {
+  id              String                @id @default(uuid())
+  entitlementId   String                @unique
+  status          WifiProjectionStatus  @default(pending)
+  username        String
+  checkItems      Json
+  replyItems      Json
+  lastError       String?
+  appliedAt       DateTime?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  entitlement     WifiEntitlement       @relation(fields: [entitlementId], references: [id], onDelete: Cascade)
+
+  @@index([status, updatedAt])
+  @@index([username])
+}
+
+model WifiAccountingSession {
+  id                    String    @id @default(uuid())
+  acctSessionId          String
+  username              String
+  entitlementClass       String?
+  callingStationId       String?
+  calledStationId        String?
+  nasIpAddress           String?
+  nasIdentifier          String?
+  framedIpAddress        String?
+  acctSessionTimeSeconds Int?
+  inputOctets            BigInt?
+  outputOctets           BigInt?
+  terminateCause         String?
+  startedAt              DateTime?
+  stoppedAt              DateTime?
+  lastInterimAt          DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  @@unique([acctSessionId, username])
+  @@index([username])
+  @@index([nasIdentifier])
+  @@index([lastInterimAt])
+}

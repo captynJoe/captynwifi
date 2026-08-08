@@ -1,0 +1,43 @@
+sql {
+  dialect = "postgresql"
+  driver = "rlm_sql_postgresql"
+
+  server = "wifi_db"
+  port = 5432
+  login = "captyn_wifi"
+  password = "__DB_PASSWORD__"
+  radius_db = "captyn_wifi"
+
+  acct_table1 = "radacct"
+  acct_table2 = "radacct"
+  postauth_table = "radpostauth"
+  authcheck_table = "radcheck"
+  groupcheck_table = "radgroupcheck"
+  authreply_table = "radreply"
+  groupreply_table = "radgroupreply"
+  usergroup_table = "radusergroup"
+  client_table = "nas"
+
+  read_groups = no
+  delete_stale_sessions = yes
+  group_attribute = "SQL-Group"
+
+  postgresql {
+    send_application_name = yes
+    application_name = "captyn-wifi-freeradius"
+  }
+
+  pool {
+    start = 1
+    min = 1
+    max = 5
+    spare = 1
+    uses = 0
+    retry_delay = 5
+    lifetime = 0
+    idle_timeout = 60
+    max_retries = 3
+  }
+
+  $INCLUDE ${modconfdir}/${.:name}/main/${dialect}/queries.conf
+}

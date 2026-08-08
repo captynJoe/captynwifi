@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CAPTYN WiFi Admin</title>
+    <script src="theme.js?v=2026080402"></script>
+    <link rel="stylesheet" href="theme.css?v=2026080701" />
+    <link rel="stylesheet" href="admin.css?v=2026080701" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/wifi-admin/" aria-label="CAPTYN WiFi Admin">
+        <span class="brand-mark">C</span>
+        <span>
+          <span class="eyebrow">CAPTYN</span>
+          <span class="brand-title">WiFi Admin</span>
+        </span>
+      </a>
+      <div class="topbar-actions">
+        <a class="button-link secondary" href="/wifi/" target="_blank" rel="noreferrer">Client Portal</a>
+        <span id="admin-user-pill" class="pill muted hidden"></span>
+        <span id="health-pill" class="pill muted">Checking</span>
+        <button id="theme-toggle-btn" class="theme-toggle" type="button" aria-label="Toggle dark mode">Dark</button>
+        <button id="refresh-btn" class="secondary" type="button">Refresh</button>
+        <button id="logout-btn" class="secondary hidden" type="button">Sign out</button>
+      </div>
+    </header>
+
+    <main class="shell">
+      <section id="auth-panel" class="login-shell">
+        <div class="login-card">
+          <div class="login-head">
+            <span class="login-badge">Admin Access</span>
+            <h1>Sign in to WiFi</h1>
+          </div>
+
+          <form id="login-form" class="login-form" method="post" action="/wifi-admin/api/admin-auth/login" novalidate>
+            <label class="field" for="admin-email"><span>Email</span><input id="admin-email" name="email" type="email" autocomplete="username" required /></label>
+            <label class="field" for="admin-password"><span>Password</span><input id="admin-password" name="password" type="password" autocomplete="current-password" required /></label>
+            <label class="field" for="admin-two-factor"><span>2FA code</span><input id="admin-two-factor" name="twoFactorCode" type="text" inputmode="numeric" autocomplete="one-time-code" /></label>
+            <label class="check-field" for="trusted-device"><input id="trusted-device" name="trustDevice" type="checkbox" checked /><span>Trust this device</span></label>
+            <button id="login-submit" class="primary-action" type="submit">Sign in</button>
+          </form>
+          <p id="auth-error" class="error-text hidden"></p>
+        </div>
+      </section>
+
+      <section id="dashboard" class="dashboard hidden">
+        <section class="command-strip">
+          <div>
+            <p class="eyebrow">LIVE CUSTOMER VIEW</p>
+            <h1>Published rates appear on the client portal</h1>
+            <p class="supporting"><span id="published-count">0</span> enabled package<span id="published-plural">s</span> available at <strong>captyn.shop/wifi</strong>.</p>
+          </div>
+          <div class="command-actions">
+            <button id="copy-portal-btn" class="secondary" type="button">Copy URL</button>
+            <a class="button-link" href="/wifi/" target="_blank" rel="noreferrer">Open Client Portal</a>
+          </div>
+        </section>
+
+        <nav class="page-nav" aria-label="WiFi admin pages">
+          <button class="nav-item active" type="button" data-page="overview">Overview</button>
+          <button class="nav-item" type="button" data-page="setup">Setup</button>
+          <button class="nav-item" type="button" data-page="packages">Packages</button>
+          <button class="nav-item" type="button" data-page="vouchers">Vouchers</button>
+          <button class="nav-item" type="button" data-page="payments">Payments</button>
+          <button class="nav-item" type="button" data-page="access">Access</button>
+          <button class="nav-item" type="button" data-page="radius">RADIUS</button>
+          <button class="nav-item" type="button" data-page="accounting">Accounting</button>
+        </nav>
+
+        <section class="metrics-grid" aria-label="WiFi metrics">
+          <article class="metric"><span>Sites</span><strong id="metric-sites">0</strong></article>
+          <article class="metric"><span>Packages</span><strong id="metric-plans">0</strong></article>
+          <article class="metric"><span>Published</span><strong id="metric-published">0</strong></article>
+          <article class="metric"><span>Active Access</span><strong id="metric-active">0</strong></article>
+          <article class="metric"><span>RADIUS Queue</span><strong id="metric-pending">0</strong></article>
+          <article class="metric"><span>Failures</span><strong id="metric-failures">0</strong></article>
+          <article class="metric"><span>Revenue</span><strong id="metric-revenue">KSh 0</strong></article>
+        </section>
+
+        <section class="page-grid" data-page-panel="overview">
+          <article class="surface span-7">
+            <div class="panel-head"><h2>Client Portal Preview</h2><span id="preview-count"></span></div>
+            <div id="client-preview" class="client-preview"></div>
+          </article>
+          <article class="surface span-5">
+            <div class="panel-head"><h2>Failure Points</h2><span id="radius-health-label">Ready</span></div>
+            <div id="network-flow" class="flow-list"></div>
+          </article>
+          <article class="surface span-6 table-panel">
+            <div class="panel-head"><h2>Recent Payments</h2><span id="overview-payments-count"></span></div>
+            <div class="table-wrap"><table><thead><tr><th>Reference</th><th>Package</th><th>Status</th><th>Amount</th></tr></thead><tbody id="overview-payments-body"></tbody></table></div>
+          </article>
+          <article class="surface span-6 table-panel">
+            <div class="panel-head"><h2>Recent Access</h2><span id="overview-access-count"></span></div>
+            <div class="table-wrap"><table><thead><tr><th>Username</th><th>Package</th><th>Status</th><th>Expires</th></tr></thead><tbody id="overview-access-body"></tbody></table></div>
+          </article>
+        </section>
+
+        <section class="page-grid hidden" data-page-panel="setup">
+          <form id="site-form" class="surface setup-panel span-4">
+            <div class="panel-head"><h2>WiFi Site</h2><span id="site-status"></span></div>
+            <div class="setup-body">
+              <label class="field" for="site-name"><span>Name</span><input id="site-name" name="name" required placeholder="Edge" /><em class="field-hint">What this WiFi location is called, e.g. the building or venue name.</em></label>
+              <label class="field" for="site-external-id"><span>External ID <span class="optional-tag">optional</span></span><input id="site-external-id" name="externalId" placeholder="1" /><em class="field-hint">Only needed if this site is synced from another system. Leave blank otherwise.</em></label>
+              <button id="site-submit" type="submit">Create site</button>
+            </div>
+          </form>
+
+          <form id="plan-form" class="surface setup-panel span-8">
+            <div class="panel-head"><h2>WiFi Package</h2><span id="plan-status"></span></div>
+            <div class="setup-body plan-grid">
+              <input id="plan-id" type="hidden" />
+              <label class="field wide" for="plan-site"><span>Site</span><select id="plan-site" name="siteId" required></select></label>
+              <label class="field wide" for="plan-name"><span>Name</span><input id="plan-name" name="name" required placeholder="1 Hour Pass" /><em class="field-hint">What customers see on the payment page, e.g. "1 Hour Pass".</em></label>
+              <label class="field" for="plan-duration-value"><span>Time</span><input id="plan-duration-value" name="durationValue" type="number" min="1" required placeholder="1" /></label>
+              <label class="field" for="plan-duration-unit"><span>Unit</span><select id="plan-duration-unit" name="durationUnit"><option value="minutes">Minutes</option><option value="hours" selected>Hours</option><option value="days">Days</option></select><em class="field-hint">How long access lasts after the customer connects.</em></label>
+              <label class="field" for="plan-price"><span>Price KSh</span><input id="plan-price" name="priceKsh" type="number" min="0" required placeholder="50" /></label>
+              <label class="field" for="plan-download"><span>Download speed (Mbps)</span><input id="plan-download" name="downloadMbps" type="number" min="0" step="0.5" placeholder="10" /><em class="field-hint">How fast pages/videos load for the customer. Leave blank for no limit.</em></label>
+              <label class="field" for="plan-upload"><span>Upload speed (Mbps)</span><input id="plan-upload" name="uploadMbps" type="number" min="0" step="0.5" placeholder="10" /><em class="field-hint">How fast the customer can send data (calls, uploads). Leave blank for no limit.</em></label>
+              <label class="field" for="plan-devices"><span>Devices</span><input id="plan-devices" name="deviceLimit" type="number" min="1" value="1" required /><em class="field-hint">How many phones/laptops can use this login at once.</em></label>
+              <label class="check-field inline" for="plan-enabled"><input id="plan-enabled" name="enabled" type="checkbox" checked /><span>Published</span></label>
+              <div class="form-actions split-actions">
+                <button id="plan-submit" type="submit">Save package</button>
+                <button id="plan-cancel" class="secondary hidden" type="button">Cancel edit</button>
+              </div>
+            </div>
+          </form>
+
+          <article class="surface span-12 table-panel">
+            <div class="panel-head"><h2>Sites</h2><span id="sites-count"></span></div>
+            <div class="table-wrap"><table><thead><tr><th>Name</th><th>External ID</th><th>Source</th><th>Packages</th><th>Payments</th><th>Access</th><th>Updated</th></tr></thead><tbody id="sites-body"></tbody></table></div>
+          </article>
+        </section>
+
+        <section class="page-grid hidden" data-page-panel="packages">
+          <article class="surface span-12">
+            <div class="panel-head"><h2>Published Packages</h2><span id="package-card-count"></span></div>
+            <div id="package-cards" class="package-cards"></div>
+          </article>
+          <article class="surface span-12 table-panel">
+            <div class="panel-head"><h2>All Packages</h2><span id="plans-count"></span></div>
+            <div class="table-wrap"><table><thead><tr><th>Name</th><th>Site</th><th>Duration</th><th>Price</th><th>Speed</th><th>Devices</th><th>Client Portal</th><th>Actions</th></tr></thead><tbody id="plans-body"></tbody></table></div>
+          </article>
+        </section>
+
+        <section class="page-grid hidden" data-page-panel="vouchers">
+          <form id="voucher-form" class="surface setup-panel span-5">
+            <div class="panel-head"><h2>Issue Voucher</h2><span id="voucher-status"></span></div>
+            <div class="setup-body">
+              <label class="field" for="voucher-plan"><span>Package</span><select id="voucher-plan" name="planId" required></select><em class="field-hint">Sets how long the voucher lasts and its speed — same packages customers see.</em></label>
+              <label class="field" for="voucher-phone"><span>Customer phone <span class="optional-tag">optional</span></span><input id="voucher-phone" name="customerPhone" type="tel" placeholder="0712345678" /><em class="field-hint">Only for your own records — not needed to redeem the voucher.</em></label>
+              <button id="voucher-submit" type="submit">Issue voucher</button>
+            </div>
+          </form>
+          <article class="surface span-7">
+            <div class="panel-head"><h2>Voucher Ready</h2></div>
+            <div id="voucher-result" class="setup-body voucher-result">
+              <div class="empty-state">Issue a voucher to see the login details here.</div>
+            </div>
+          </article>
+
+          <form id="bulk-voucher-form" class="surface setup-panel span-5">
+            <div class="panel-head"><h2>Gift Bulk Vouchers</h2><span id="bulk-voucher-status"></span></div>
+            <div class="setup-body">
+              <label class="field" for="bulk-voucher-plan"><span>Package</span><select id="bulk-voucher-plan" name="planId" required></select><em class="field-hint">Every recipient below gets a voucher for this package.</em></label>
+              <label class="field" for="bulk-voucher-phones"><span>Phone numbers</span><textarea id="bulk-voucher-phones" name="phones" rows="6" required placeholder="0712345678&#10;0798765432&#10;+254711223344"></textarea><em class="field-hint">One phone number per line. Duplicates are removed automatically.</em></label>
+              <button id="bulk-voucher-submit" type="submit">Gift vouchers</button>
+            </div>
+          </form>
+          <article class="surface span-7 table-panel">
+            <div class="panel-head"><h2>Bulk Voucher Results</h2><span id="bulk-voucher-summary"></span></div>
+            <div class="table-wrap"><table><thead><tr><th>Phone</th><th>Status</th><th>Code / Error</th><th>Expires</th></tr></thead><tbody id="bulk-voucher-body"><tr><td colspan="4" class="empty-state">Gift vouchers to see per-phone results here.</td></tr></tbody></table></div>
+          </article>
+
+          <article class="surface span-12 table-panel">
+            <div class="panel-head"><h2>Recent Vouchers</h2><span id="vouchers-count"></span></div>
+            <div class="table-wrap"><table><thead><tr><th>Code</th><th>Package</th><th>Phone</th><th>Status</th><th>Expires</th></tr></thead><tbody id="vouchers-body"></tbody></table></div>
+          </article>
+        </section>
+
+        <section class="page-grid hidden" data-page-panel="payments">
+          <article class="surface span-12 table-panel">
+            <div class="panel-head"><h2>Payments</h2><span id="payments-count"></span></div>
+            <div class="table-wrap"><table><thead><tr><th>Reference</th><th>Site</th><th>Package</th><th>Phone</th><th>Status</th><th>Amount</th><th>Created</th></tr></thead><tbody id="payments-body"></tbody></table></div>
+          </article>
+        </section>
+
+        <section class="page-grid hidden" data-page-panel="access">
+          <article class="surface span-12 table-panel">
+            <div class="panel-head"><h2>Customer Access</h2><span id="entitlements-count"></span></div>
+            <div class="table-wrap"><table><thead><tr><th>Username</th><th>Site</th><th>Package</th><th>Status</th><th>Starts</th><th>Expires</th><th>Devices</th><th>RADIUS</th></tr></thead><tbody id="entitlements-body"></tbody></table></div>
+          </article>
+        </section>
+
+        <section class="page-grid hidden" data-page-panel="radius">
+          <article class="surface span-12">
+            <div class="panel-head"><h2>Network Diagnostics</h2><span id="network-status-generated"></span></div>
+            <div id="failure-points" class="flow-list expanded"></div>
+          </article>
+          <article class="surface span-12 table-panel">
+            <div class="panel-head"><h2>RADIUS Projections</h2><span id="projections-count"></span></div>
+            <div class="table-wrap"><table><thead><tr><th>Username</th><th>Site</th><th>Package</th><th>Status</th><th>Check</th><th>Reply</th><th>Updated</th><th>Error</th></tr></thead><tbody id="projections-body"></tbody></table></div>
+          </article>
+        </section>
+
+        <section class="page-grid hidden" data-page-panel="accounting">
+          <article class="surface span-12 table-panel">
+            <div class="panel-head"><h2>Accounting Sessions</h2><span id="accounting-count"></span></div>
+            <div class="table-wrap"><table><thead><tr><th>Username</th><th>Session</th><th>Device</th><th>Router</th><th>IP</th><th>Time</th><th>Traffic</th><th>Updated</th></tr></thead><tbody id="accounting-body"></tbody></table></div>
+          </article>
+        </section>
+      </section>
+    </main>
+
+    <script src="admin.js?v=2026080701" defer data-cfasync="false"></script>
+  </body>
+</html>

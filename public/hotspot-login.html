@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>CAPTYN WiFi</title></head>
+<body data-mac="$(mac)" data-ip="$(ip)" data-login="$(link-login-only)" data-orig="$(link-orig-esc)" data-error="$(error)">
+<p>Redirecting to CAPTYN WiFi&hellip;</p>
+<script>
+  var b = document.body;
+  var params = new URLSearchParams({
+    mac: b.dataset.mac || "",
+    ip: b.dataset.ip || "",
+    hsLogin: b.dataset.login || "",
+    hsOrig: b.dataset.orig || "",
+    error: b.dataset.error || ""
+  });
+  window.location.replace("https://captyn.shop/wifi/?" + params.toString());
+</script>
+<noscript><a href="https://captyn.shop/wifi/">Continue to captyn.shop/wifi</a></noscript>
+</body>
+</html>
