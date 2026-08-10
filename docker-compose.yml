@@ -91,7 +91,17 @@ services:
     labels:
       autoheal: "true"
     healthcheck:
-      test: ["CMD-SHELL", "PATH=/opt/sbin:/opt/bin:$$PATH radiusd -C"]
+      # `radiusd -C` (the previous check) is a full config reload: it
+      # re-instantiates every module -- including reconnecting rlm_sql to
+      # Postgres -- from a brand-new process, once a minute. That's heavy
+      # enough to intermittently starve the *running* daemon right as a real
+      # auth request comes in, and MikroTik's RADIUS client only waits 3s
+      # before giving up with "RADIUS server is not responding" -- which
+      # matches the confirmed timing of the intermittent auth failures.
+      # This instead sends a real Access-Request to the already-running
+      # daemon and just checks that *any* response comes back (Accept or
+      # Reject both prove it's alive) -- no new process, no config reload.
+      test: ["CMD-SHELL", "PATH=/opt/sbin:/opt/bin:$$PATH; echo 'User-Name=healthcheck,User-Password=healthcheck' | radclient -t 3 -r 1 127.0.0.1:1812 auth \"$$CAPTYN_WIFI_RADIUS_SECRET\" 2>&1 | grep -q '^Received '"]
       interval: 60s
       timeout: 15s
       retries: 3
