@@ -2,19 +2,29 @@
 <html>
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CAPTYN WiFi</title>
 <!--
-  Some captive-portal WebViews (notably Android's built-in "Sign in to
-  network" popup on several Samsung models) do not reliably run the
-  window.location redirect below -- the popup is left stuck on a blank
-  page. A meta-refresh redirect does not depend on JS executing at all,
-  so it is the primary redirect mechanism here; the script further down
-  is kept as a fast-path for WebViews that do run it.
+  Confirmed on a Galaxy A12 and A26: manually opening this same URL in a
+  normal browser tab works fine, but Android's built-in "Sign in to
+  network" popup shows a permanently blank page for it. That popup is a
+  restricted WebView that on some devices blocks *automatic* navigation
+  away from the first page it loads (JS redirect or meta-refresh alike)
+  as an anti-phishing measure, but still allows navigation from a real
+  tap. So a visible, tappable link is the primary path here; the
+  meta-refresh/JS below are just a convenience for the (more common)
+  WebViews that do allow auto-redirects, and are delayed slightly so the
+  button has time to render first instead of racing it.
 -->
-<meta http-equiv="refresh" content="0;url=https://captyn.shop/wifi/?mac=$(mac)&amp;ip=$(ip)&amp;hsLogin=$(link-login-only)&amp;hsOrig=$(link-orig-esc)&amp;error=$(error)">
+<meta http-equiv="refresh" content="2;url=https://captyn.shop/wifi/?mac=$(mac)&amp;ip=$(ip)&amp;hsLogin=$(link-login-only)&amp;hsOrig=$(link-orig-esc)&amp;error=$(error)">
+<style>
+  body { font-family: -apple-system, Helvetica, Arial, sans-serif; text-align: center; padding: 48px 20px; color: #0b1220; }
+  a.continue { display: inline-block; margin-top: 22px; padding: 16px 32px; border-radius: 999px; background: #2454e6; color: #fff; text-decoration: none; font-weight: 700; font-size: 17px; }
+</style>
 </head>
 <body data-mac="$(mac)" data-ip="$(ip)" data-login="$(link-login-only)" data-orig="$(link-orig-esc)" data-error="$(error)">
-<p>Redirecting to CAPTYN WiFi&hellip;</p>
+<p>Tap below to continue to CAPTYN WiFi.</p>
+<a class="continue" href="https://captyn.shop/wifi/?mac=$(mac)&amp;ip=$(ip)&amp;hsLogin=$(link-login-only)&amp;hsOrig=$(link-orig-esc)&amp;error=$(error)">Continue &rarr;</a>
 <script>
   var b = document.body;
   var params = new URLSearchParams({
@@ -26,6 +36,5 @@
   });
   window.location.replace("https://captyn.shop/wifi/?" + params.toString());
 </script>
-<noscript><a href="https://captyn.shop/wifi/">Continue to captyn.shop/wifi</a></noscript>
 </body>
 </html>
