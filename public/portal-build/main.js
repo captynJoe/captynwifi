@@ -37,6 +37,8 @@ const manualConnectFallback = requireElement("manual-connect-fallback");
 const manualConnectMessage = requireElement("manual-connect-message");
 const manualConnectOpenBtn = requireElement("manual-connect-open-btn");
 const manualConnectForm = requireElement("manual-connect-form");
+const manualConnectSubmitBtn = requireElement("manual-connect-submit-btn");
+let pendingManualConnect = null;
 const errorText = requireElement("error");
 const paymentModal = requireElement("payment-modal");
 const paymentModalIcon = requireElement("payment-modal-icon");
@@ -193,40 +195,34 @@ function portalReturnUrl() {
 function hotspotRedirectDestination() {
     return state.hotspot?.orig || portalReturnUrl();
 }
+// Chrome (and other browsers) block *form* submissions from an HTTPS page
+// to a plain-HTTP action with a full-page "not secure" interstitial --
+// MikroTik's hotspot login endpoint is inherently plain HTTP, and there is
+// no way to make that secure short of the router terminating TLS itself.
+// Worse, when that happened inside the hidden iframe below (the silent
+// auto-connect attempt), the warning rendered somewhere the user could
+// never see or dismiss, so the attempt just hung forever. A plain
+// GET navigation (iframe.src / window.location.href, not a <form> element)
+// isn't treated as a "form" by that check, so it loads normally instead.
 function autoCompleteHotspotLogin(username, password, { topLevel = false } = {}) {
     const hotspot = state.hotspot;
     if (!hotspot?.login)
         return;
-    const frameName = "hs-auto-login-frame";
-    if (!topLevel) {
-        let iframe = document.querySelector(`iframe[name=""]`);
-        if (!iframe) {
-            iframe = document.createElement("iframe");
-            iframe.name = frameName;
-            iframe.style.display = "none";
-            document.body.appendChild(iframe);
-        }
+    const params = new URLSearchParams({ username, password, dst: hotspotRedirectDestination(), popup: "false" });
+    const separator = hotspot.login.includes("?") ? "&" : "?";
+    const url = hotspot.login + separator + params.toString();
+    if (topLevel) {
+        window.location.href = url;
+        return;
     }
-    const form = document.createElement("form");
-    form.method = "POST";
-    form.action = hotspot.login;
-    if (!topLevel)
-        form.target = frameName;
-    form.style.display = "none";
-    const fields = { username, password, dst: hotspotRedirectDestination(), popup: "false" };
-    Object.entries(fields).forEach(([name, value]) => {
-        if (!value)
-            return;
-        const input = document.createElement("input");
-        input.type = "hidden";
-        input.name = name;
-        input.value = value;
-        form.appendChild(input);
-    });
-    document.body.appendChild(form);
-    form.submit();
-    if (!topLevel)
-        form.remove();
+    let iframe = document.querySelector('iframe[data-hs-auto-login]');
+    if (!iframe) {
+        iframe = document.createElement("iframe");
+        iframe.dataset.hsAutoLogin = "true";
+        iframe.style.display = "none";
+        document.body.appendChild(iframe);
+    }
+    iframe.src = url;
 }
 // Deliberately NOT gstatic.com/generate_204 — that's the exact URL Android's
 // own OS-level captive-portal detector uses, so hotspot walled gardens
@@ -756,10 +752,7 @@ function showManualConnectFallback(username, password) {
     if (state.hotspot?.login && manualConnectForm) {
         if (manualConnectMessage)
             manualConnectMessage.textContent = "Your access is active, but this device couldn't confirm it automatically.";
-        manualConnectForm.action = state.hotspot.login;
-        manualConnectForm.elements.namedItem("username").value = username;
-        manualConnectForm.elements.namedItem("password").value = password;
-        manualConnectForm.elements.namedItem("dst").value = hotspotRedirectDestination();
+        pendingManualConnect = { username, password };
         manualConnectForm.classList.remove("hidden");
         manualConnectOpenBtn?.classList.add("hidden");
     }
@@ -962,6 +955,11 @@ paymentModalCancelBtn.addEventListener("click", () => {
 paymentModalRetryBtn.addEventListener("click", () => {
     resetPaymentAttempt();
     setStep("package");
+});
+manualConnectSubmitBtn.addEventListener("click", () => {
+    if (!pendingManualConnect)
+        return;
+    autoCompleteHotspotLogin(pendingManualConnect.username, pendingManualConnect.password, { topLevel: true });
 });
 plansEl.addEventListener("click", (event) => {
     const target = event.target;

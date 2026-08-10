@@ -110,11 +110,11 @@
       <div id="manual-connect-fallback" class="manual-connect hidden">
         <p id="manual-connect-message">Your access is active, but this device couldn't confirm it automatically.</p>
         <a id="manual-connect-open-btn" class="primary hidden" href="http://neverssl.com/">Open WiFi login</a>
-        <form id="manual-connect-form" class="hidden" method="post">
+        <form id="manual-connect-form" class="hidden" method="get">
           <input type="hidden" name="username" />
           <input type="hidden" name="password" />
           <input type="hidden" name="dst" />
-          <button type="submit" class="primary">Tap to connect</button>
+          <button id="manual-connect-submit-btn" type="button" class="primary">Tap to connect</button>
         </form>
       </div>
 
