@@ -1,6 +1,18 @@
 <!doctype html>
 <html>
-<head><meta charset="utf-8"><title>CAPTYN WiFi</title></head>
+<head>
+<meta charset="utf-8">
+<title>CAPTYN WiFi</title>
+<!--
+  Some captive-portal WebViews (notably Android's built-in "Sign in to
+  network" popup on several Samsung models) do not reliably run the
+  window.location redirect below -- the popup is left stuck on a blank
+  page. A meta-refresh redirect does not depend on JS executing at all,
+  so it is the primary redirect mechanism here; the script further down
+  is kept as a fast-path for WebViews that do run it.
+-->
+<meta http-equiv="refresh" content="0;url=https://captyn.shop/wifi/?mac=$(mac)&amp;ip=$(ip)&amp;hsLogin=$(link-login-only)&amp;hsOrig=$(link-orig-esc)&amp;error=$(error)">
+</head>
 <body data-mac="$(mac)" data-ip="$(ip)" data-login="$(link-login-only)" data-orig="$(link-orig-esc)" data-error="$(error)">
 <p>Redirecting to CAPTYN WiFi&hellip;</p>
 <script>

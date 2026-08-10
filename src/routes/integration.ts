@@ -11,6 +11,7 @@ import {
 } from "../services/radiusProjection.js";
 import { issueVoucher } from "../services/voucherIssuance.js";
 import { normalizeKenyaPhone } from "../lib/phone.js";
+import { applyRadiusProjectionRows } from "../services/radiusSqlApply.js";
 
 const MAX_BULK_VOUCHER_RECIPIENTS = 200;
 const MAX_LIST_TAKE = 200;
@@ -196,6 +197,66 @@ integrationRouter.post("/housing/payments/confirmed", async (req, res, next) => 
       if (existing) return { intent, entitlement: existing, alreadyProcessed: true };
 
       const username = normalizeWifiUsername(parsed.customerPhone);
+      const existingActive = await tx.wifiEntitlement.findFirst({
+        where: { username, status: "active", expiresAt: { gt: startsAt } },
+        include: { projection: true },
+        orderBy: { expiresAt: "desc" }
+      });
+
+      if (existingActive) {
+        const extendedExpiresAt = new Date(existingActive.expiresAt.getTime() + plan.durationSeconds * 1000);
+        const extendedEntitlement = await tx.wifiEntitlement.update({
+          where: { id: existingActive.id },
+          data: { expiresAt: extendedExpiresAt }
+        });
+
+        const extendedProjection = buildRadiusProjection({
+          entitlementId: extendedEntitlement.id,
+          phone: parsed.customerPhone,
+          username: extendedEntitlement.username,
+          password: extendedEntitlement.cleartextSecret,
+          deviceMac: extendedEntitlement.deviceMac,
+          expiresAt: extendedExpiresAt,
+          durationSeconds: Math.max(60, Math.round((extendedExpiresAt.getTime() - startsAt.getTime()) / 1000)),
+          rateLimit: existingActive.rateLimit,
+          deviceLimit: existingActive.deviceLimit
+        });
+
+        await applyRadiusProjectionRows(tx, extendedProjection.username, extendedProjection.checkItems, extendedProjection.replyItems);
+        const radiusProjection = existingActive.projection
+          ? await tx.wifiRadiusProjection.update({
+              where: { id: existingActive.projection.id },
+              data: {
+                checkItems: extendedProjection.checkItems,
+                replyItems: extendedProjection.replyItems,
+                status: "applied",
+                appliedAt: startsAt,
+                lastError: null
+              }
+            })
+          : await tx.wifiRadiusProjection.create({
+              data: {
+                entitlementId: extendedEntitlement.id,
+                username: extendedProjection.username,
+                checkItems: extendedProjection.checkItems,
+                replyItems: extendedProjection.replyItems,
+                status: "applied",
+                appliedAt: startsAt
+              }
+            });
+
+        return {
+          intent: await tx.wifiPaymentIntent.update({
+            where: { id: intent.id },
+            data: { status: "activated" }
+          }),
+          entitlement: extendedEntitlement,
+          projection: radiusProjection,
+          alreadyProcessed: false,
+          extended: true
+        };
+      }
+
       const password = createRadiusSecret();
 
       const entitlement = await tx.wifiEntitlement.create({
@@ -228,13 +289,18 @@ integrationRouter.post("/housing/payments/confirmed", async (req, res, next) => 
         deviceLimit: plan.deviceLimit
       });
 
+      // Apply synchronously instead of leaving it for the async worker (see
+      // voucherIssuance.ts) — housing's resident portal attempts auto-connect
+      // right after this call returns.
+      await applyRadiusProjectionRows(tx, projection.username, projection.checkItems, projection.replyItems);
       const radiusProjection = await tx.wifiRadiusProjection.create({
         data: {
           entitlementId: entitlement.id,
           username: projection.username,
           checkItems: projection.checkItems,
           replyItems: projection.replyItems,
-          status: "pending"
+          status: "applied",
+          appliedAt: startsAt
         }
       });
 

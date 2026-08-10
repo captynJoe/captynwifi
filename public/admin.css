@@ -34,7 +34,7 @@
 .command-strip {
   min-height: 108px; display: flex; align-items: center; justify-content: space-between; gap: 18px;
   padding: clamp(18px, 3vw, 26px); box-shadow: var(--shadow-md);
-  background: linear-gradient(120deg, var(--surface) 55%, var(--brand-blue-soft) 130%);
+  background: linear-gradient(120deg, var(--surface) 50%, var(--brand-blue-soft) 128%);
 }
 .command-strip h1 { margin: 6px 0 8px; font-size: clamp(22px, 3.4vw, 32px); }
 .supporting { margin: 0; color: var(--muted); line-height: 1.5; font-weight: 500; }
@@ -83,10 +83,16 @@
   padding: 18px; display: grid; gap: 12px; min-height: 180px; transition: border-color .15s ease, box-shadow .15s ease;
 }
 .rate-card:hover { border-color: var(--brand-blue); box-shadow: var(--shadow-sm); }
+:root[data-theme="dark"] .command-strip, :root[data-theme="dark"] .surface, :root[data-theme="dark"] .metric, :root[data-theme="dark"] .login-card { border-color: rgba(32, 245, 154, .24); }
+:root[data-theme="dark"] .rate-card { background: linear-gradient(180deg, rgba(25, 245, 143, .045), rgba(5, 8, 6, .98)); box-shadow: inset 0 1px 0 rgba(216, 255, 233, .04); }
+:root[data-theme="dark"] .rate-card:hover { box-shadow: var(--focus-ring), 0 18px 40px rgba(0, 0, 0, .38); }
 .rate-card .site { color: var(--brand-blue); font-size: 11.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
 .rate-card h3 { font-size: 18px; }
+.rate-badge { width: fit-content; min-height: 24px; display: inline-flex; align-items: center; padding: 0 9px; border-radius: 999px; background: var(--brand-cyan-soft); color: var(--brand-cyan); font-size: 11px; font-weight: 800; }
+.rate-pitch { color: var(--muted); font-size: 12.5px; font-weight: 650; line-height: 1.45; }
 .rate-card strong { font-family: var(--font-display); font-size: 27px; line-height: 1; color: var(--text-strong); }
-.rate-meta { display: grid; gap: 5px; color: var(--muted); font-size: 12.5px; font-weight: 600; }
+.rate-meta { display: flex; gap: 7px; flex-wrap: wrap; color: var(--muted); font-size: 12px; font-weight: 700; }
+.rate-meta span { min-height: 24px; display: inline-flex; align-items: center; padding: 0 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-soft); }
 
 .flow-list { display: grid; gap: 10px; padding: 18px; }
 .flow-list.expanded { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -115,15 +121,50 @@ td { max-width: 260px; overflow-wrap: anywhere; }
 .action-row { display: inline-flex; gap: 8px; flex-wrap: wrap; }
 .action-row button, .action-row .button-link { min-height: 30px; padding: 0 11px; font-size: 12px; }
 
+
+.clickable-row { cursor: pointer; }
+.clickable-row:hover td { background: color-mix(in srgb, var(--brand-blue-soft) 45%, transparent); }
+.clickable-row.selected td { background: var(--brand-blue-soft); }
+.access-detail-panel { scroll-margin-top: 88px; }
+.access-detail-body { display: grid; gap: 14px; padding: 18px; }
+.access-detail-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.access-stat {
+  min-height: 92px; display: grid; align-content: space-between; gap: 8px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-soft); padding: 13px 14px;
+}
+.access-stat span { color: var(--muted); font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
+.access-stat strong { color: var(--text-strong); font-size: 14px; overflow-wrap: anywhere; }
+.access-stat em { color: var(--muted); font-size: 12px; font-style: normal; font-weight: 650; }
+.access-actions {
+  display: flex; align-items: end; gap: 10px; flex-wrap: wrap;
+  border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-soft); padding: 12px;
+}
+.access-actions .field.compact { width: min(190px, 100%); gap: 6px; }
+.access-actions .field.compact input, .access-actions .field.compact select { min-height: 36px; }
+.access-actions button { min-height: 36px; padding: 0 12px; font-size: 12.5px; }
+.access-actions .danger { background: var(--red); border-color: var(--red); color: #fff; }
+.limit-actions { background: var(--surface); }
+.inline-status { color: var(--muted); font-size: 12.5px; font-weight: 800; padding: 9px 4px; }
+.inline-status.ok { color: var(--green); }
+.inline-status.bad { color: var(--red); }
+.access-technical { display: grid; gap: 10px; }
+.access-technical details { border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); overflow: hidden; }
+.access-technical summary { cursor: pointer; padding: 12px 14px; color: var(--text-strong); font-weight: 800; }
+.access-technical table { min-width: 720px; }
+.panel-head span.synced { color: var(--green); }
+.panel-head span.different { color: var(--amber); }
+.panel-head span.unknown { color: var(--muted); }
+
 @media (max-width: 1100px) {
   .metrics-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .span-4, .span-5, .span-6, .span-7, .span-8 { grid-column: span 12; }
   .client-preview, .package-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .access-detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 760px) {
   .topbar, .command-strip { align-items: stretch; flex-direction: column; }
   .topbar-actions, .command-actions { justify-content: flex-start; }
-  .metrics-grid, .client-preview, .package-cards, .plan-grid, .flow-list.expanded { grid-template-columns: 1fr; }
+  .metrics-grid, .client-preview, .package-cards, .plan-grid, .flow-list.expanded, .access-detail-grid { grid-template-columns: 1fr; }
   .plan-grid .wide, .split-actions { grid-column: auto; }
 }
 @media (max-width: 520px) {
@@ -131,3 +172,158 @@ td { max-width: 260px; overflow-wrap: anywhere; }
   .topbar-actions, .topbar-actions button, .topbar-actions .button-link, .command-actions, .command-actions button, .command-actions .button-link { width: 100%; }
   button, .button-link { width: 100%; }
 }
+
+
+/* Limited package treatment in admin previews. */
+.rate-card.limited {
+  border-color: rgba(255, 209, 102, .38);
+  box-shadow: inset 3px 0 0 rgba(255, 209, 102, .48);
+}
+.rate-card.limited .rate-badge {
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+.rate-card.limited strong {
+  color: var(--amber);
+}
+:root[data-theme="light"] .rate-card.limited {
+  background: #fffaf0;
+}
+:root[data-theme="dark"] .rate-card.limited {
+  background: linear-gradient(180deg, rgba(255, 209, 102, .05), rgba(7, 7, 2, .98));
+  border-color: rgba(255, 209, 102, .32);
+}
+:root[data-theme="dark"] .rate-card.limited .rate-badge {
+  background: rgba(255, 209, 102, .14);
+  color: #ffd166;
+}
+:root[data-theme="dark"] .rate-card.limited strong {
+  color: #ffd166;
+}
+.status.limited {
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+.status.standard {
+  background: var(--brand-blue-soft);
+  color: var(--brand-blue);
+}
+
+
+/* Speed emphasis for package decisions. */
+.rate-speed {
+  background: rgba(35, 221, 255, .14) !important;
+  border-color: rgba(35, 221, 255, .34) !important;
+  color: var(--brand-cyan) !important;
+  font-weight: 950;
+  letter-spacing: .02em;
+}
+:root[data-theme="light"] .rate-speed {
+  background: rgba(36, 84, 230, .10) !important;
+  border-color: rgba(36, 84, 230, .24) !important;
+  color: #2454e6 !important;
+}
+
+
+/* CAPTYN Welcome package treatment. */
+.rate-card.welcome {
+  border-color: rgba(35, 221, 255, .46);
+  background: linear-gradient(180deg, rgba(35, 221, 255, .08), rgba(20, 32, 86, .10));
+  box-shadow: inset 3px 0 0 rgba(35, 221, 255, .70);
+}
+.rate-card.welcome .rate-badge {
+  background: rgba(35, 221, 255, .16);
+  color: var(--brand-cyan);
+}
+.rate-card.welcome strong {
+  color: var(--brand-cyan);
+}
+:root[data-theme="light"] .rate-card.welcome {
+  border-color: rgba(36, 84, 230, .34);
+  background: linear-gradient(180deg, rgba(36, 84, 230, .07), rgba(35, 221, 255, .07));
+  box-shadow: inset 3px 0 0 rgba(36, 84, 230, .52), 0 14px 34px rgba(36, 84, 230, .08);
+}
+:root[data-theme="light"] .rate-card.welcome .rate-badge,
+:root[data-theme="light"] .rate-card.welcome strong {
+  color: #2454e6;
+}
+
+
+/* Speed-tier color ramp: warm starter to Gulfstream cyan. */
+.plan-speed.speed-starter,
+.rate-speed.speed-starter {
+  background: rgba(255, 82, 82, .14) !important;
+  border-color: rgba(255, 82, 82, .34) !important;
+  color: #ff6b6b !important;
+  box-shadow: none;
+}
+.plan-speed.speed-cruise,
+.rate-speed.speed-cruise {
+  background: rgba(255, 209, 102, .13) !important;
+  border-color: rgba(255, 209, 102, .30) !important;
+  color: #ffd166 !important;
+}
+.plan-speed.speed-highspeed,
+.rate-speed.speed-highspeed {
+  background: rgba(70, 125, 255, .14) !important;
+  border-color: rgba(70, 125, 255, .34) !important;
+  color: #7fa2ff !important;
+}
+.plan-speed.speed-gulfstream,
+.rate-speed.speed-gulfstream {
+  background: rgba(35, 221, 255, .18) !important;
+  border-color: rgba(35, 221, 255, .48) !important;
+  color: var(--brand-cyan) !important;
+  box-shadow: 0 0 20px rgba(35, 221, 255, .14);
+}
+:root[data-theme="light"] .plan-speed.speed-starter,
+:root[data-theme="light"] .rate-speed.speed-starter {
+  background: rgba(220, 38, 38, .09) !important;
+  border-color: rgba(220, 38, 38, .22) !important;
+  color: #c2410c !important;
+}
+:root[data-theme="light"] .plan-speed.speed-cruise,
+:root[data-theme="light"] .rate-speed.speed-cruise {
+  background: rgba(217, 119, 6, .10) !important;
+  border-color: rgba(217, 119, 6, .24) !important;
+  color: #a16207 !important;
+}
+:root[data-theme="light"] .plan-speed.speed-highspeed,
+:root[data-theme="light"] .rate-speed.speed-highspeed {
+  background: rgba(36, 84, 230, .10) !important;
+  border-color: rgba(36, 84, 230, .24) !important;
+  color: #2454e6 !important;
+}
+:root[data-theme="light"] .plan-speed.speed-gulfstream,
+:root[data-theme="light"] .rate-speed.speed-gulfstream {
+  background: rgba(8, 145, 178, .12) !important;
+  border-color: rgba(8, 145, 178, .26) !important;
+  color: #047da0 !important;
+}
+
+
+/* Dynamic governor visibility. */
+.governor-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; padding: 18px; }
+.governor-card {
+  min-height: 112px; display: grid; align-content: space-between; gap: 10px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-soft); padding: 14px 16px;
+}
+.governor-card span, .governor-setting span { color: var(--muted); font-size: 11px; font-weight: 850; text-transform: uppercase; letter-spacing: .04em; }
+.governor-card strong { font-family: var(--font-display); color: var(--text-strong); font-size: 26px; line-height: 1.05; overflow-wrap: anywhere; }
+.governor-card em { color: var(--muted); font-style: normal; font-size: 12px; font-weight: 650; }
+.governor-card.state-card.green { border-color: color-mix(in srgb, var(--green) 45%, var(--line)); box-shadow: inset 3px 0 0 var(--green); }
+.governor-card.state-card.yellow { border-color: color-mix(in srgb, var(--amber) 55%, var(--line)); box-shadow: inset 3px 0 0 var(--amber); }
+.governor-card.state-card.red, .governor-card.state-card.critical { border-color: color-mix(in srgb, var(--red) 55%, var(--line)); box-shadow: inset 3px 0 0 var(--red); }
+.governor-settings { display: grid; gap: 10px; padding: 18px; }
+.governor-setting {
+  min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-soft); padding: 10px 12px;
+}
+.governor-setting strong { color: var(--text-strong); font-size: 13px; }
+.status.green, .status.GREEN { background: var(--green-soft); color: var(--green); }
+.status.yellow, .status.YELLOW { background: var(--amber-soft); color: var(--amber); }
+.status.red, .status.RED, .status.critical, .status.CRITICAL { background: var(--red-soft); color: var(--red); }
+.status.on, .status.enabled { background: var(--green-soft); color: var(--green); }
+.status.off, .status.disabled { background: var(--surface-soft); color: var(--muted); }
+@media (max-width: 1100px) { .governor-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 760px) { .governor-summary { grid-template-columns: 1fr; } }

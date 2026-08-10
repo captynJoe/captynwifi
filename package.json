@@ -5,14 +5,16 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "npm run build:portal && tsc -p tsconfig.json",
     "start": "node dist/server.js",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.portal.json",
     "test": "node --import tsx --test tests/*.test.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
-    "radius:worker": "node dist/workers/radiusSqlWorker.js"
+    "radius:worker": "node dist/workers/radiusSqlWorker.js",
+    "build:portal": "tsc -p tsconfig.portal.json",
+    "governor:worker": "node dist/workers/dynamicGovernorWorker.js"
   },
   "dependencies": {
     "@prisma/client": "^6.3.1",

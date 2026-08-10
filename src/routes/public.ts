@@ -1,17 +1,23 @@
 import crypto from "node:crypto";
 import { Router } from "express";
-import type { Prisma, WifiPaymentIntent } from "@prisma/client";
+import type { Prisma, WifiPaymentIntent, WifiPlan } from "@prisma/client";
 import { z } from "zod";
 import { config } from "../config.js";
 import { prisma } from "../prisma.js";
 import { formatDarajaMsisdn, getMpesaStatus, initiateWifiStkPush } from "../services/mpesa.js";
 import { buildRadiusProjection, createRadiusSecret, normalizeDeviceMac, normalizeWifiUsername } from "../services/radiusProjection.js";
+import { applyRadiusProjectionRows } from "../services/radiusSqlApply.js";
 
 export const publicRouter = Router();
 
 const stkRequestSchema = z.object({
   planId: z.string().min(1),
   phone: z.string().min(7),
+  deviceMac: z.string().trim().optional().nullable()
+});
+
+const freeAccessSchema = z.object({
+  planId: z.string().min(1),
   deviceMac: z.string().trim().optional().nullable()
 });
 
@@ -29,6 +35,12 @@ type StkCallback = {
 
 function sourceReference() {
   return `wifi-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+}
+
+function freeAccessUsername(deviceMac: string | null) {
+  const compactMac = deviceMac?.replace(/[^A-F0-9]/gi, "").toLowerCase();
+  if (compactMac) return `free-${compactMac}`;
+  return `free-${crypto.randomBytes(6).toString("hex")}`;
 }
 
 function toJsonSafe<T>(value: T): T {
@@ -62,6 +74,19 @@ function publicEntitlement(entitlement: { username: string; cleartextSecret: str
     deviceLimit: entitlement.deviceLimit,
     rateLimit: entitlement.rateLimit
   };
+}
+
+async function findCurrentEntitlementForUsername(username: string, at = new Date()) {
+  const active = await prisma.wifiEntitlement.findFirst({
+    where: { username, status: "active", expiresAt: { gt: at } },
+    orderBy: { expiresAt: "desc" }
+  });
+  if (active) return active;
+
+  return prisma.wifiEntitlement.findFirst({
+    where: { username },
+    orderBy: { expiresAt: "desc" }
+  });
 }
 
 function metadataValue(metadata: CallbackMetadata | undefined, name: string) {
@@ -118,15 +143,15 @@ async function activatePaymentIntent(intent: WifiPaymentIntent, confirmedAt = ne
     });
 
     if (existingActive) {
+      // Extending only ever adds time — it must never touch the plan/rate
+      // limit/device limit the customer already has. A cheap top-up (e.g. a
+      // 30-minute Flash pass) bought while a longer, better-tier entitlement
+      // (e.g. a Weekly pass) is still active must not downgrade that
+      // customer's speed or device limit to the top-up's tier.
       const extendedExpiresAt = new Date(existingActive.expiresAt.getTime() + paymentIntent.plan.durationSeconds * 1000);
       const extendedEntitlement = await tx.wifiEntitlement.update({
         where: { id: existingActive.id },
-        data: {
-          expiresAt: extendedExpiresAt,
-          planId: paymentIntent.planId,
-          rateLimit: paymentIntent.plan.rateLimit,
-          deviceLimit: paymentIntent.plan.deviceLimit
-        }
+        data: { expiresAt: extendedExpiresAt }
       });
 
       const extendedProjection = buildRadiusProjection({
@@ -137,17 +162,22 @@ async function activatePaymentIntent(intent: WifiPaymentIntent, confirmedAt = ne
         deviceMac: extendedEntitlement.deviceMac,
         expiresAt: extendedExpiresAt,
         durationSeconds: Math.max(60, Math.round((extendedExpiresAt.getTime() - startsAt.getTime()) / 1000)),
-        rateLimit: paymentIntent.plan.rateLimit,
-        deviceLimit: paymentIntent.plan.deviceLimit
+        rateLimit: existingActive.rateLimit,
+        deviceLimit: existingActive.deviceLimit
       });
 
+      // Apply synchronously (see voucherIssuance.ts for why) — auto-connect
+      // fires ~1.5s after payment confirmation, well inside the async
+      // worker's poll gap.
+      await applyRadiusProjectionRows(tx, extendedProjection.username, extendedProjection.checkItems, extendedProjection.replyItems);
       const radiusProjection = existingActive.projection
         ? await tx.wifiRadiusProjection.update({
             where: { id: existingActive.projection.id },
             data: {
               checkItems: extendedProjection.checkItems,
               replyItems: extendedProjection.replyItems,
-              status: "pending",
+              status: "applied",
+              appliedAt: startsAt,
               lastError: null
             }
           })
@@ -157,7 +187,8 @@ async function activatePaymentIntent(intent: WifiPaymentIntent, confirmedAt = ne
               username: extendedProjection.username,
               checkItems: extendedProjection.checkItems,
               replyItems: extendedProjection.replyItems,
-              status: "pending"
+              status: "applied",
+              appliedAt: startsAt
             }
           });
 
@@ -203,13 +234,17 @@ async function activatePaymentIntent(intent: WifiPaymentIntent, confirmedAt = ne
       deviceLimit: paymentIntent.plan.deviceLimit
     });
 
+    // Apply synchronously — see voucherIssuance.ts for why (auto-connect
+    // fires seconds after payment confirmation, inside the worker's poll gap).
+    await applyRadiusProjectionRows(tx, projection.username, projection.checkItems, projection.replyItems);
     const radiusProjection = await tx.wifiRadiusProjection.create({
       data: {
         entitlementId: entitlement.id,
         username: projection.username,
         checkItems: projection.checkItems,
         replyItems: projection.replyItems,
-        status: "pending"
+        status: "applied",
+        appliedAt: startsAt
       }
     });
 
@@ -223,6 +258,125 @@ async function activatePaymentIntent(intent: WifiPaymentIntent, confirmedAt = ne
   });
 }
 
+async function activateFreePlan(plan: WifiPlan, deviceMac: string | null) {
+  const startsAt = new Date();
+  const username = freeAccessUsername(deviceMac);
+  const sourceRef = sourceReference();
+
+  return prisma.$transaction(async (tx) => {
+    const existingActive = await tx.wifiEntitlement.findFirst({
+      where: { username, status: "active", expiresAt: { gt: startsAt } },
+      include: { projection: true },
+      orderBy: { expiresAt: "desc" }
+    });
+
+    const intent = await tx.wifiPaymentIntent.create({
+      data: {
+        siteId: plan.siteId,
+        planId: plan.id,
+        source: "captyn_wifi_free",
+        sourceReference: sourceRef,
+        customerPhone: username,
+        deviceMac,
+        amountKsh: 0,
+        provider: "free",
+        status: "activated",
+        confirmedAt: startsAt
+      }
+    });
+
+    if (existingActive) {
+      const expiresAt = new Date(existingActive.expiresAt.getTime() + plan.durationSeconds * 1000);
+      const entitlement = await tx.wifiEntitlement.update({
+        where: { id: existingActive.id },
+        data: { expiresAt, deviceMac: existingActive.deviceMac ?? deviceMac }
+      });
+      const projection = buildRadiusProjection({
+        entitlementId: entitlement.id,
+        phone: username,
+        username: entitlement.username,
+        password: entitlement.cleartextSecret,
+        deviceMac: entitlement.deviceMac,
+        expiresAt,
+        durationSeconds: Math.max(60, Math.round((expiresAt.getTime() - startsAt.getTime()) / 1000)),
+        rateLimit: entitlement.rateLimit,
+        deviceLimit: entitlement.deviceLimit
+      });
+
+      await applyRadiusProjectionRows(tx, projection.username, projection.checkItems, projection.replyItems);
+      const radiusProjection = existingActive.projection
+        ? await tx.wifiRadiusProjection.update({
+            where: { id: existingActive.projection.id },
+            data: {
+              checkItems: projection.checkItems,
+              replyItems: projection.replyItems,
+              status: "applied",
+              appliedAt: startsAt,
+              lastError: null
+            }
+          })
+        : await tx.wifiRadiusProjection.create({
+            data: {
+              entitlementId: entitlement.id,
+              username: projection.username,
+              checkItems: projection.checkItems,
+              replyItems: projection.replyItems,
+              status: "applied",
+              appliedAt: startsAt
+            }
+          });
+
+      return { intent, entitlement, projection: radiusProjection, extended: true };
+    }
+
+    const expiresAt = new Date(startsAt.getTime() + plan.durationSeconds * 1000);
+    const password = createRadiusSecret();
+    const entitlement = await tx.wifiEntitlement.create({
+      data: {
+        siteId: plan.siteId,
+        planId: plan.id,
+        paymentIntentId: intent.id,
+        customerPhone: username,
+        username,
+        cleartextSecret: password,
+        deviceMac,
+        status: "active",
+        startsAt,
+        expiresAt,
+        deviceLimit: plan.deviceLimit,
+        rateLimit: plan.rateLimit,
+        acctInterimSeconds: config.defaultAcctInterimSeconds
+      }
+    });
+
+    const projection = buildRadiusProjection({
+      entitlementId: entitlement.id,
+      phone: username,
+      username,
+      password,
+      deviceMac,
+      expiresAt,
+      durationSeconds: plan.durationSeconds,
+      rateLimit: plan.rateLimit,
+      deviceLimit: plan.deviceLimit
+    });
+
+    await applyRadiusProjectionRows(tx, projection.username, projection.checkItems, projection.replyItems);
+    const radiusProjection = await tx.wifiRadiusProjection.create({
+      data: {
+        entitlementId: entitlement.id,
+        username: projection.username,
+        checkItems: projection.checkItems,
+        replyItems: projection.replyItems,
+        status: "applied",
+        appliedAt: startsAt
+      }
+    });
+
+    return { intent, entitlement, projection: radiusProjection, extended: false };
+  });
+}
+
 publicRouter.get("/sites", async (_req, res, next) => {
   try {
     const sites = await prisma.wifiSite.findMany({
@@ -233,11 +387,39 @@ publicRouter.get("/sites", async (_req, res, next) => {
           // resident payments; they're not meant to be independently purchasable
           // through the walk-in portal at their (often discounted) resident price.
           where: { enabled: true, source: "captyn_admin" },
-          orderBy: [{ durationSeconds: "asc" }, { priceKsh: "asc" }]
+          orderBy: [{ priceKsh: "asc" }, { durationSeconds: "asc" }, { name: "asc" }]
         }
       }
     });
     return res.json({ data: toJsonSafe(sites.filter((site) => site.plans.length > 0)) });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+publicRouter.post("/access/free", async (req, res, next) => {
+  try {
+    const parsed = freeAccessSchema.parse(req.body);
+    const plan = await prisma.wifiPlan.findFirst({
+      where: { id: parsed.planId, enabled: true, source: "captyn_admin" },
+      include: { site: true }
+    });
+    if (!plan) return res.status(404).json({ error: "WiFi package not found or disabled." });
+    if (plan.priceKsh !== 0) return res.status(400).json({ error: "This package requires payment." });
+
+    const activated = await activateFreePlan(plan, normalizeDeviceMac(parsed.deviceMac));
+    return res.status(201).json({
+      data: toJsonSafe({
+        id: activated.intent.id,
+        status: activated.intent.status,
+        sourceReference: activated.intent.sourceReference,
+        amountKsh: activated.intent.amountKsh,
+        site: plan.site,
+        plan,
+        entitlement: publicEntitlement(activated.entitlement),
+        extended: activated.extended
+      })
+    });
   } catch (error) {
     return next(error);
   }
@@ -271,6 +453,7 @@ publicRouter.get("/payments/:id", async (req, res, next) => {
         status: intent.status,
         sourceReference: intent.sourceReference,
         providerReference: intent.providerReference,
+        receiptNumber: intent.receiptNumber,
         amountKsh: intent.amountKsh,
         site: intent.site,
         plan: intent.plan,
@@ -342,11 +525,16 @@ publicRouter.post("/payments/lookup-by-receipt", async (req, res, next) => {
       where: { receiptNumber: receipt },
       include: { entitlement: true }
     });
-    if (!intent?.entitlement) return res.status(404).json({ error: "No payment found for that M-PESA code." });
-    if (intent.entitlement.status !== "active" || intent.entitlement.expiresAt <= new Date()) {
+    if (!intent) return res.status(404).json({ error: "No payment found for that M-PESA code." });
+
+    const entitlement =
+      intent.entitlement ??
+      (intent.status === "activated" ? await findCurrentEntitlementForUsername(normalizeWifiUsername(intent.customerPhone)) : null);
+    if (!entitlement) return res.status(404).json({ error: "No payment found for that M-PESA code." });
+    if (entitlement.status !== "active" || entitlement.expiresAt <= new Date()) {
       return res.status(404).json({ error: "That payment's WiFi access has already expired." });
     }
-    return res.json({ data: toJsonSafe(publicEntitlement(intent.entitlement)) });
+    return res.json({ data: toJsonSafe(publicEntitlement(entitlement)) });
   } catch (error) {
     return next(error);
   }
@@ -356,13 +544,9 @@ publicRouter.get("/entitlements/:username/status", async (req, res, next) => {
   try {
     const username = req.params.username.trim();
     if (!username) return res.status(400).json({ error: "Username required" });
-    const entitlement = await prisma.wifiEntitlement.findFirst({
-      where: { username },
-      orderBy: { createdAt: "desc" },
-      select: { status: true, expiresAt: true }
-    });
+    const entitlement = await findCurrentEntitlementForUsername(username);
     if (!entitlement) return res.status(404).json({ error: "Not found" });
-    return res.json({ data: toJsonSafe(entitlement) });
+    return res.json({ data: toJsonSafe({ status: entitlement.status, expiresAt: entitlement.expiresAt }) });
   } catch (error) {
     return next(error);
   }

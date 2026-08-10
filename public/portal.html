@@ -5,35 +5,39 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>CAPTYN WiFi</title>
     <script src="theme.js?v=2026080402"></script>
-    <link rel="stylesheet" href="theme.css?v=2026080701" />
-    <link rel="stylesheet" href="portal.css?v=2026080804" />
+    <link rel="stylesheet" href="theme.css?v=2026080924" />
+    <link rel="stylesheet" href="portal.css?v=2026080949" />
   </head>
   <body>
     <main class="portal-app">
       <header class="topbar">
         <a class="brand" href="/wifi/" aria-label="CAPTYN WiFi">
-          <span class="brand-mark">C</span>
           <span><span class="eyebrow">CAPTYN</span><strong>WiFi</strong></span>
         </a>
-        <div class="topbar-status">
-          <span id="site-pill" class="pill muted">Loading site</span>
-          <span id="health-pill" class="pill muted">Checking</span>
-          <button id="theme-toggle-btn" class="theme-toggle" type="button" aria-label="Toggle dark mode">Dark</button>
+        <div class="topbar-status settings-control">
+          <button id="settings-toggle-btn" class="settings-toggle" type="button" aria-label="Open portal settings" aria-controls="settings-menu" aria-expanded="false">⚙</button>
+          <div id="settings-menu" class="settings-menu hidden" role="menu" aria-label="Portal settings">
+            <button id="theme-toggle-btn" class="theme-toggle settings-menu-item" type="button" role="menuitem">Theme</button>
+            <button id="welcome-access-btn" class="settings-menu-item welcome-access-btn" type="button" role="menuitem">Start welcome access</button>
+          </div>
         </div>
       </header>
 
       <section class="intro-row">
-        <h1>Get connected</h1>
-        <div id="hero-meta" class="intro-meta"></div>
+        <div class="intro-copy-block">
+          <h1>Get connected</h1>
+        </div>
+        <button id="have-code-btn" class="ghost have-code-btn" type="button">Already paid? Enter access code →</button>
       </section>
 
       <div id="checkout-backdrop" class="checkout-backdrop"></div>
 
       <section class="workspace">
         <section class="plans-panel" aria-label="WiFi packages">
-          <div class="section-head">
-            <h2>Choose a package</h2>
-            <span id="plan-count" class="count-label">0 packages</span>
+          <div class="section-head plans-heading-row">
+            <div class="plans-heading">
+              <h2>Browse by speed</h2>
+            </div>
           </div>
           <div id="plans" class="plans"></div>
         </section>
@@ -41,49 +45,44 @@
         <aside id="checkout" class="checkout-panel">
           <div class="sheet-handle" aria-hidden="true"></div>
           <div class="section-head compact">
-            <h2 id="checkout-title">Select a package</h2>
+            <h2 id="checkout-title">Select access</h2>
             <div class="checkout-head-actions">
               <strong id="checkout-price" class="price-tag">KSh 0</strong>
               <button id="checkout-close-btn" class="sheet-close" type="button" aria-label="Back to packages">✕</button>
             </div>
           </div>
 
-          <div class="step-rail" aria-label="Purchase progress">
-            <span class="step active" data-step="package">Package</span>
-            <span class="step" data-step="mpesa">M-PESA</span>
-            <span class="step" data-step="access">Access</span>
-          </div>
-
           <div id="selected-summary" class="selected-summary"></div>
 
           <form id="payment-form" class="payment-form">
             <input id="plan-id" type="hidden" />
-            <label class="field" for="phone"><span>Safaricom phone</span><input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="0712345678" required /></label>
+            <label class="field" for="phone"><span>M-PESA phone</span><input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+254" value="+254" required /></label>
             <button id="pay-button" type="submit">Pay Now</button>
           </form>
           <p id="payment-status" class="status-text"></p>
 
-          <button id="voucher-login-toggle" class="ghost existing-login-toggle" type="button">Have a voucher code?</button>
+          <button id="voucher-login-toggle" class="ghost existing-login-toggle" type="button">Redeem voucher</button>
           <form id="voucher-login-form" class="payment-form existing-login-form hidden">
             <label class="field" for="voucher-code-input"><span>Voucher code</span><input id="voucher-code-input" name="code" type="text" autocapitalize="characters" autocomplete="off" placeholder="e.g. 7QK4M9PX" required /></label>
             <button id="voucher-login-submit" class="secondary" type="submit">Redeem</button>
           </form>
           <p id="voucher-login-status" class="status-text"></p>
 
-          <button id="receipt-login-toggle" class="ghost existing-login-toggle" type="button">Already paid? Enter M-PESA code</button>
+          <button id="receipt-login-toggle" class="ghost existing-login-toggle" type="button">Use M-PESA receipt</button>
           <form id="receipt-login-form" class="payment-form existing-login-form hidden">
             <label class="field" for="receipt-code-input"><span>M-PESA transaction ID</span><input id="receipt-code-input" name="receipt" type="text" autocapitalize="characters" autocomplete="off" placeholder="e.g. SFC1A2B3C4" required /></label>
             <button id="receipt-login-submit" class="secondary" type="submit">Connect</button>
           </form>
           <p id="receipt-login-status" class="status-text"></p>
 
-          <button id="existing-login-toggle" class="ghost existing-login-toggle" type="button">Already have a username and password?</button>
+          <button id="existing-login-toggle" class="ghost existing-login-toggle" type="button">Technical login</button>
           <form id="existing-login-form" class="payment-form existing-login-form hidden">
             <label class="field" for="existing-username"><span>Username</span><input id="existing-username" name="username" type="text" inputmode="tel" autocomplete="username" required /></label>
             <label class="field" for="existing-password"><span>Password</span><input id="existing-password" name="password" type="text" autocomplete="current-password" required /></label>
             <button id="existing-login-submit" class="secondary" type="submit">Connect</button>
           </form>
           <p id="existing-login-status" class="status-text"></p>
+          <a class="sponsor-link checkout-sponsor" href="https://captyn.shop/" target="_blank" rel="noopener">Powered by captyn.shop</a>
         </aside>
       </section>
 
@@ -92,15 +91,34 @@
           <h2 id="access-heading">You're connected</h2>
           <span class="pill ok">Active</span>
         </div>
-        <p id="access-message" class="access-message">You're all set — go ahead and browse, stream, and download.</p>
-        <div class="access-time-left" id="access-time-left"></div>
-        <div class="credential-grid">
-          <button type="button" class="credential" data-copy-target="access-username"><span>Username</span><strong id="access-username"></strong><em>Copy</em></button>
-          <button type="button" class="credential" data-copy-target="access-password"><span>Password</span><strong id="access-password"></strong><em>Copy</em></button>
-          <div class="credential static"><span>Expires</span><strong id="access-expires"></strong></div>
+        <div class="access-overview">
+          <div class="access-time-left" id="access-time-left"></div>
+          <div class="credential static expires-card"><span>Expires</span><strong id="access-expires"></strong></div>
         </div>
-        <button id="extend-period-btn" class="secondary extend-period-btn" type="button">Extend period</button>
+        <details id="access-login-details" class="login-details">
+          <summary>Connection details</summary>
+          <div class="credential-grid compact">
+            <button id="access-username-card" type="button" class="credential" data-copy-target="access-username"><span>Username</span><strong id="access-username"></strong><em>Copy</em></button>
+            <button id="access-password-card" type="button" class="credential" data-copy-target="access-password"><span>Password</span><strong id="access-password"></strong><em>Copy</em></button>
+            <div id="access-recovery-card" class="credential static hidden"><span>Receipt</span><strong id="access-recovery"></strong></div>
+          </div>
+        </details>
+        <button id="extend-period-btn" class="secondary extend-period-btn" type="button">Add time</button>
+        <a class="sponsor-link access-sponsor" href="https://captyn.shop/" target="_blank" rel="noopener">Powered by captyn.shop</a>
       </section>
+
+      <div id="manual-connect-fallback" class="manual-connect hidden">
+        <p id="manual-connect-message">Your access is active, but this device couldn't confirm it automatically.</p>
+        <a id="manual-connect-open-btn" class="primary hidden" href="http://neverssl.com/">Open WiFi login</a>
+        <form id="manual-connect-form" class="hidden" method="post">
+          <input type="hidden" name="username" />
+          <input type="hidden" name="password" />
+          <input type="hidden" name="dst" />
+          <button type="submit" class="primary">Tap to connect</button>
+        </form>
+      </div>
+
+      <footer class="portal-footer" aria-label="CAPTYN WiFi footer"><span>CAPTYN WiFi</span><a class="sponsor-link" href="https://captyn.shop/" target="_blank" rel="noopener">captyn.shop</a><a href="tel:+254711635755">+254711635755</a></footer>
 
       <p id="error" class="error-text hidden"></p>
     </main>
@@ -120,6 +138,6 @@
       </div>
     </div>
 
-    <script src="portal.js?v=2026080804" defer data-cfasync="false"></script>
+    <script type="module" src="portal-build/main.js?v=2026080948" data-cfasync="false"></script>
   </body>
 </html>

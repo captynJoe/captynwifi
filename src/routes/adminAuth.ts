@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { ZodError } from "zod";
-import { adminLoginSchema, authenticateCaptynAdmin, verifyAdminSessionToken } from "../adminCredentialAuth.js";
+import { adminLoginSchema, authenticateCaptynAdmin, restoreCaptynAdminTrustedSession, trustedSessionSchema, verifyAdminSessionToken } from "../adminCredentialAuth.js";
 
 export const adminAuthRouter = Router();
 
@@ -31,6 +31,21 @@ adminAuthRouter.post("/login", async (req, res, next) => {
   } catch (error) {
     if (error instanceof ZodError) {
       return res.status(400).json({ error: "Email, password, and a valid code are required.", issues: error.issues });
+    }
+    const mapped = errorPayload(error);
+    if (mapped.status >= 500) return next(error);
+    return res.status(mapped.status).json(mapped.body);
+  }
+});
+
+adminAuthRouter.post("/trusted-session", async (req, res, next) => {
+  try {
+    const input = trustedSessionSchema.parse(req.body);
+    const data = await restoreCaptynAdminTrustedSession(input);
+    return res.json({ data });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      return res.status(400).json({ error: "Trusted device token is required.", issues: error.issues });
     }
     const mapped = errorPayload(error);
     if (mapped.status >= 500) return next(error);

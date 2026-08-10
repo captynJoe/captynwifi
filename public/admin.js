@@ -27,6 +27,9 @@ const state = {
   sessionUser: null,
   activePage: "overview",
   editingPlanId: "",
+  selectedEntitlementId: "",
+  accessDetail: null,
+  accessActionMessage: "",
   cache: {}
 };
 
@@ -70,6 +73,7 @@ const planNameInput = document.getElementById("plan-name");
 const planDurationValueInput = document.getElementById("plan-duration-value");
 const planDurationUnitSelect = document.getElementById("plan-duration-unit");
 const planPriceInput = document.getElementById("plan-price");
+const planCategorySelect = document.getElementById("plan-category");
 const planDownloadInput = document.getElementById("plan-download");
 const planUploadInput = document.getElementById("plan-upload");
 const planDevicesInput = document.getElementById("plan-devices");
@@ -90,7 +94,8 @@ const endpoints = {
   entitlements: adminApi("/entitlements"),
   projections: adminApi("/radius-projections"),
   accounting: adminApi("/accounting-sessions"),
-  networkStatus: adminApi("/network-status")
+  networkStatus: adminApi("/network-status"),
+  governorStatus: adminApi("/governor-status")
 };
 
 const voucherForm = document.getElementById("voucher-form");
@@ -106,6 +111,10 @@ const bulkVoucherPlanSelect = document.getElementById("bulk-voucher-plan");
 const bulkVoucherSubmit = document.getElementById("bulk-voucher-submit");
 const bulkVoucherStatus = document.getElementById("bulk-voucher-status");
 const bulkVoucherSummary = document.getElementById("bulk-voucher-summary");
+const accessDetailPanel = document.getElementById("access-detail-panel");
+const accessDetailTitle = document.getElementById("access-detail-title");
+const accessDetailStatus = document.getElementById("access-detail-status");
+const accessDetailBody = document.getElementById("access-detail-body");
 
 function text(value, fallback = "-") {
   if (value === null || value === undefined || value === "") return fallback;
@@ -145,27 +154,49 @@ function durationParts(seconds) {
   if (value > 0 && value % 3600 === 0) return { value: value / 3600, unit: "hours" };
   return { value: Math.max(1, Math.round(value / 60)), unit: "minutes" };
 }
+function ratePartFromMbps(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return "";
+  if (Number.isInteger(number)) return `${number}M`;
+  return `${Math.max(1, Math.round(number * 1000))}k`;
+}
+function mbpsFromRatePart(value) {
+  const match = /^(\d+)([kKmM])?$/.exec(String(value || "").trim());
+  if (!match) return "";
+  const number = Number(match[1]);
+  if (!Number.isFinite(number) || number <= 0) return "";
+  return (match[2] || "M").toLowerCase() === "k" ? String(number / 1000) : String(number);
+}
 function composeRateLimit(downloadMbps, uploadMbps) {
-  const down = Number(downloadMbps);
-  const up = Number(uploadMbps);
-  const hasDown = Number.isFinite(down) && down > 0;
-  const hasUp = Number.isFinite(up) && up > 0;
-  if (!hasDown && !hasUp) return "";
+  const down = ratePartFromMbps(downloadMbps);
+  const up = ratePartFromMbps(uploadMbps);
+  if (!down && !up) return "";
   // MikroTik Rate-Limit format is upload/download from the router's point of view.
-  return `${hasUp ? up : down}M/${hasDown ? down : up}M`;
+  return `${up || down}/${down || up}`;
 }
 function parseRateLimit(rateLimit) {
-  const match = /^([\d.]+)M\/([\d.]+)M$/i.exec(String(rateLimit || "").trim());
+  const match = /^(\d+(?:[kKmM])?)\/(\d+(?:[kKmM])?)$/.exec(String(rateLimit || "").trim());
   if (!match) return { download: "", upload: "" };
-  return { upload: match[1], download: match[2] };
+  return { upload: mbpsFromRatePart(match[1]), download: mbpsFromRatePart(match[2]) };
 }
 function friendlyRate(rateLimit) {
   const { download, upload } = parseRateLimit(rateLimit);
   if (!download && !upload) return rateLimit ? escapeHtml(rateLimit) : "Standard speed";
   const parts = [];
-  if (download) parts.push(`${download} Mbps down`);
-  if (upload) parts.push(`${upload} Mbps up`);
+  if (download) parts.push(`↓ ${download} Mbps`);
+  if (upload) parts.push(`↑ ${upload} Mbps`);
   return parts.join(" / ");
+}
+function adminRateParts(plan) {
+  const parsed = parseRateLimit(plan?.rateLimit);
+  return { download: Number(parsed.download || 0), upload: Number(parsed.upload || 0) };
+}
+function speedTierClass(plan) {
+  const { download } = adminRateParts(plan);
+  if (download <= 5) return "speed-starter";
+  if (download <= 12) return "speed-cruise";
+  if (download <= 20) return "speed-highspeed";
+  return "speed-gulfstream";
 }
 function escapeHtml(value) {
   return text(value, "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
@@ -179,8 +210,16 @@ function setHealth(kind, label) { healthPill.className = `pill ${kind}`; healthP
 function setAuthError(message) { authError.textContent = message; authError.classList.toggle("hidden", !message); }
 function setInlineStatus(element, message, kind = "") { if (element) { element.textContent = message; element.className = kind; } }
 
+function comparePlansByPrice(a, b) {
+  const priceDelta = Number(a?.priceKsh || 0) - Number(b?.priceKsh || 0);
+  if (priceDelta) return priceDelta;
+  const durationDelta = Number(a?.durationSeconds || 0) - Number(b?.durationSeconds || 0);
+  if (durationDelta) return durationDelta;
+  return String(a?.name || "").localeCompare(String(b?.name || ""));
+}
+
 function enabledPlans() {
-  return (state.cache.plans || []).filter((plan) => plan.enabled);
+  return (state.cache.plans || []).filter((plan) => plan.enabled).sort(comparePlansByPrice);
 }
 
 function setSignedIn(user) {
@@ -189,14 +228,27 @@ function setSignedIn(user) {
   adminUserPill.classList.toggle("hidden", !user?.email);
   logoutBtn.classList.toggle("hidden", !user?.email);
 }
-function clearSession() {
+function clearSession(options = {}) {
   state.sessionToken = "";
   state.sessionUser = null;
   state.cache = {};
   removeStoredValue(SESSION_KEY, window.sessionStorage);
+  if (options.forgetTrusted) {
+    state.trustedDeviceToken = "";
+    removeStoredValue(TRUSTED_DEVICE_KEY, window.localStorage);
+  }
   setSignedIn(null);
   dashboard.classList.add("hidden");
   authPanel.classList.remove("hidden");
+}
+function storeAdminSession(result) {
+  state.sessionToken = result.sessionToken;
+  storeValue(SESSION_KEY, state.sessionToken, window.sessionStorage);
+  if (result.trustedDeviceToken) {
+    state.trustedDeviceToken = result.trustedDeviceToken;
+    storeValue(TRUSTED_DEVICE_KEY, state.trustedDeviceToken, window.localStorage);
+  }
+  setSignedIn(result.user);
 }
 
 async function api(path, options = {}) {
@@ -237,13 +289,32 @@ async function login(credentials) {
   }
   return payload.data;
 }
+async function restoreTrustedSession() {
+  if (!state.trustedDeviceToken) return false;
+  try {
+    const response = await fetch(authApi("/trusted-session"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trustedDeviceToken: state.trustedDeviceToken })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "Trusted device expired.");
+    storeAdminSession(payload.data);
+    await loadDashboard();
+    return true;
+  } catch (_error) {
+    state.trustedDeviceToken = "";
+    removeStoredValue(TRUSTED_DEVICE_KEY, window.localStorage);
+    return false;
+  }
+}
 
-function renderRows(id, rows, mapper, emptyColspan = 8) {
+function renderRows(id, rows, mapper, emptyColspan = 8, rowAttrs) {
   const body = document.getElementById(`${id}-body`);
   const count = document.getElementById(`${id}-count`);
   if (count) count.textContent = `${rows.length} rows`;
   body.innerHTML = rows.length
-    ? rows.map((row) => `<tr>${cells(mapper(row))}</tr>`).join("")
+    ? rows.map((row) => `<tr${rowAttrs ? ` ${rowAttrs(row)}` : ""}>${cells(mapper(row))}</tr>`).join("")
     : `<tr><td class="muted" colspan="${emptyColspan}">No records yet.</td></tr>`;
 }
 
@@ -310,19 +381,165 @@ function renderVouchers() {
   ], 5);
 }
 
+function accessRowAttrs(item) {
+  const selected = item.id === state.selectedEntitlementId ? " selected" : "";
+  return `class="clickable-row${selected}" data-entitlement-id="${escapeHtml(item.id)}" tabindex="0"`;
+}
+
+function snapshotState(entitlement) {
+  if (!entitlement?.plan) return "unknown";
+  const sameRate = String(entitlement.rateLimit || "") === String(entitlement.plan.rateLimit || "");
+  const sameDevices = Number(entitlement.deviceLimit || 0) === Number(entitlement.plan.deviceLimit || 0);
+  return sameRate && sameDevices ? "synced" : "different";
+}
+
+function accessStat(label, value, extra = "") {
+  return `<div class="access-stat"><span>${escapeHtml(label)}</span><strong>${value}</strong>${extra ? `<em>${extra}</em>` : ""}</div>`;
+}
+
+function renderAttributeRows(rows) {
+  return rows?.length
+    ? rows.map((row) => `<tr>${cells([escapeHtml(row.attribute), escapeHtml(row.op), `<span class="mono">${escapeHtml(row.value)}</span>`])}</tr>`).join("")
+    : '<tr><td colspan="3" class="muted">No rows.</td></tr>';
+}
+
+function renderAccountingRows(rows) {
+  return rows?.length
+    ? rows.map((row) => `<tr>${cells([
+        `<span class="mono">${escapeHtml(row.acctSessionId)}</span>`,
+        escapeHtml(row.callingStationId),
+        escapeHtml(row.framedIpAddress),
+        escapeHtml(row.acctSessionTimeSeconds),
+        `${escapeHtml(row.inputOctets || 0)} / ${escapeHtml(row.outputOctets || 0)}`,
+        fmtDate(row.updatedAt)
+      ])}</tr>`).join("")
+    : '<tr><td colspan="6" class="muted">No accounting sessions yet.</td></tr>';
+}
+
+function renderAccessDetail(message = state.accessActionMessage || "") {
+  if (!state.selectedEntitlementId) {
+    accessDetailPanel?.classList.add("hidden");
+    return;
+  }
+  accessDetailPanel?.classList.remove("hidden");
+  const cached = (state.cache.entitlements || []).find((item) => item.id === state.selectedEntitlementId);
+  const detail = state.accessDetail;
+  const entitlement = detail?.entitlement || cached;
+  accessDetailTitle.textContent = entitlement ? `Access: ${entitlement.username}` : "Access detail";
+  accessDetailStatus.textContent = message || (entitlement ? snapshotState(entitlement) : "Loading");
+  accessDetailStatus.className = message ? "warn" : snapshotState(entitlement);
+
+  if (!entitlement || !detail) {
+    accessDetailBody.innerHTML = '<div class="empty-state">Loading access detail...</div>';
+    return;
+  }
+
+  const planRate = entitlement.plan?.rateLimit || "";
+  const accessRate = entitlement.rateLimit || "";
+  const packageMeta = `${friendlyRate(planRate)} / ${escapeHtml(entitlement.plan?.deviceLimit || 0)} device${Number(entitlement.plan?.deviceLimit) === 1 ? "" : "s"}`;
+  const accessMeta = `${friendlyRate(accessRate)} / ${escapeHtml(entitlement.deviceLimit || 0)} device${Number(entitlement.deviceLimit) === 1 ? "" : "s"}`;
+  const payment = entitlement.paymentIntent || {};
+  const reference = payment.receiptNumber || payment.providerReference || payment.sourceReference || "-";
+
+  const currentRate = parseRateLimit(entitlement.rateLimit);
+  accessDetailBody.innerHTML = `
+    <div class="access-detail-grid">
+      ${accessStat("Status", status(entitlement.status))}
+      ${accessStat("Customer", `<span class="mono">${escapeHtml(entitlement.username)}</span>`, escapeHtml(entitlement.deviceMac || "No device lock"))}
+      ${accessStat("Current access", accessMeta)}
+      ${accessStat("Current package", packageMeta, snapshotState(entitlement) === "synced" ? "settings synced" : "package changed")}
+      ${accessStat("Starts", fmtDate(entitlement.startsAt))}
+      ${accessStat("Expires", fmtDate(entitlement.expiresAt))}
+      ${accessStat("Payment", `<span class="mono">${escapeHtml(reference)}</span>`, fmtMoney(payment.amountKsh || 0))}
+      ${accessStat("RADIUS", status(entitlement.projection?.status || "missing"), fmtDate(entitlement.projection?.appliedAt))}
+    </div>
+    <div class="access-actions">
+      <label class="field compact" for="access-extension-seconds"><span>Add time</span><select id="access-extension-seconds"><option value="1800">30 minutes</option><option value="3600">1 hour</option><option value="21600">6 hours</option><option value="86400">1 day</option><option value="604800">7 days</option></select></label>
+      <button type="button" class="secondary" data-access-action="extend">Extend</button>
+      <button type="button" class="secondary" data-access-action="sync_package_settings">Sync package limits</button>
+      <button type="button" class="secondary" data-access-action="reapply_radius">Reapply RADIUS</button>
+      <button type="button" class="secondary" data-access-action="reactivate">Reactivate</button>
+      <button type="button" class="danger" data-access-action="suspend">Suspend</button>
+      <button type="button" class="danger" data-access-action="expire">Expire now</button>
+      <span id="access-action-status" class="inline-status"></span>
+    </div>
+    <div class="access-actions limit-actions">
+      <label class="field compact" for="access-download"><span>Download Mbps</span><input id="access-download" type="number" min="0" step="0.5" value="${escapeHtml(currentRate.download)}" placeholder="blank = no limit" /></label>
+      <label class="field compact" for="access-upload"><span>Upload Mbps</span><input id="access-upload" type="number" min="0" step="0.5" value="${escapeHtml(currentRate.upload)}" placeholder="blank = no limit" /></label>
+      <label class="field compact" for="access-devices"><span>Devices</span><input id="access-devices" type="number" min="1" max="50" value="${escapeHtml(entitlement.deviceLimit || 1)}" /></label>
+      <button type="button" data-access-action="update_limits">Save custom limits</button>
+    </div>
+    <div class="access-technical">
+      <details open><summary>RADIUS reply rows</summary><div class="table-wrap"><table><thead><tr><th>Attribute</th><th>Op</th><th>Value</th></tr></thead><tbody>${renderAttributeRows(detail.radreply)}</tbody></table></div></details>
+      <details><summary>RADIUS check rows</summary><div class="table-wrap"><table><thead><tr><th>Attribute</th><th>Op</th><th>Value</th></tr></thead><tbody>${renderAttributeRows(detail.radcheck)}</tbody></table></div></details>
+      <details><summary>Recent accounting</summary><div class="table-wrap"><table><thead><tr><th>Session</th><th>Device</th><th>IP</th><th>Seconds</th><th>Traffic</th><th>Updated</th></tr></thead><tbody>${renderAccountingRows(detail.accounting)}</tbody></table></div></details>
+    </div>
+  `;
+}
+
+function renderAccessRows(id, rows, compact = false) {
+  renderRows(id, rows, (item) => compact ? [
+    `<span class="mono">${escapeHtml(item.username)}</span>`,
+    escapeHtml(item.plan?.name),
+    status(item.status),
+    fmtDate(item.expiresAt)
+  ] : [
+    `<span class="mono">${escapeHtml(item.username)}</span>`,
+    escapeHtml(item.site?.name),
+    escapeHtml(item.plan?.name),
+    status(item.status),
+    fmtDate(item.startsAt),
+    fmtDate(item.expiresAt),
+    escapeHtml(item.deviceLimit),
+    status(item.projection?.status || "missing")
+  ], compact ? 4 : 8, accessRowAttrs);
+}
+
+function planCategory(plan) {
+  return plan?.category === "limited" || Number(plan?.priceKsh || 0) === 0 ? "limited" : "standard";
+}
+function isWelcomePlan(plan) {
+  return String(plan.name || "").toLowerCase() === "captyn welcome";
+}
+function promotedBadge(plan) {
+  if (isWelcomePlan(plan)) return "Welcome";
+  const name = String(plan.name || "").toLowerCase();
+  if (name === "cruise 4 hr") return "Popular";
+  if (name === "highspeed 6 hr") return "Fast";
+  if (name === "cruise day") return "Recommended";
+  if (name === "cruise weekly") return "Best value";
+  if (name === "gulfstream hour") return "Gulfstream";
+  return "";
+}
+function packageTone(plan) {
+  const name = String(plan.name || "").toLowerCase();
+  const badge = promotedBadge(plan);
+  if (isWelcomePlan(plan)) return { badge, pitch: "Free welcome access while CAPTYN WiFi monitors real usage, failures, and demand." };
+  if (planCategory(plan) === "limited") return { badge, pitch: "Entry access for quick checks, urgent chats, and light browsing." };
+  if (name.includes("gulfstream")) return { badge, pitch: "Top-speed burst for heavy downloads, uploads, and urgent high-bandwidth work." };
+  if (name.includes("highspeed")) return { badge, pitch: "Higher speed access for calls, uploads, and heavier browsing." };
+  if (name.includes("cruise")) return { badge, pitch: "Balanced speed and time for everyday browsing." };
+  if (name.includes("starter")) return { badge, pitch: "Low-cost access for simple browsing and messaging." };
+  if (name.includes("monthly")) return { badge, pitch: "Resident-friendly access for steady everyday use." };
+  return { badge, pitch: "Clear speed and time trade-off for everyday browsing." };
+}
 function rateCard(plan, withAction = false) {
-  return `<article class="rate-card">
+  const tone = packageTone(plan);
+  const badgeHtml = tone.badge ? '<span class="rate-badge">' + escapeHtml(tone.badge) + '</span>' : "";
+  return `<article class="rate-card ${planCategory(plan) === "limited" ? "limited" : "standard"} ${isWelcomePlan(plan) ? "welcome" : ""}">
     <div>
       <div class="site">${escapeHtml(plan.site?.name)}</div>
       <h3>${escapeHtml(plan.name)}</h3>
     </div>
+    ${badgeHtml}
     <strong>${fmtMoney(plan.priceKsh)}</strong>
+    <p class="rate-pitch">${escapeHtml(tone.pitch)}</p>
     <div class="rate-meta">
       <span>${durationLabel(plan.durationSeconds)}</span>
-      <span>${friendlyRate(plan.rateLimit)}</span>
+      <span class="rate-speed ${speedTierClass(plan)}">Speed ${friendlyRate(plan.rateLimit)}</span>
       <span>${escapeHtml(plan.deviceLimit)} device${Number(plan.deviceLimit) === 1 ? "" : "s"}</span>
     </div>
-    ${withAction ? `<span class="action-row"><button class="secondary" type="button" data-edit-plan="${escapeHtml(plan.id)}">Edit</button><a class="button-link secondary" href="/wifi/" target="_blank" rel="noreferrer">View</a></span>` : ""}
+    ${withAction ? `<span class="action-row"><button class="secondary" type="button" data-edit-plan="${escapeHtml(plan.id)}">Edit package</button><a class="button-link secondary" href="/wifi/" target="_blank" rel="noreferrer">Preview</a></span>` : ""}
   </article>`;
 }
 
@@ -337,6 +554,72 @@ function renderPlanCards() {
   cards.innerHTML = published.length ? published.map((plan) => rateCard(plan, true)).join("") : empty;
 }
 
+
+
+function governorNumber(value, decimals = 2) {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric)) return "0";
+  return numeric.toLocaleString(undefined, { maximumFractionDigits: decimals });
+}
+
+function governorStateClass(stateName) {
+  return String(stateName || "idle").toLowerCase();
+}
+
+function renderGovernorStatus() {
+  const governor = state.cache.governorStatus || {};
+  const latest = governor.latest || {};
+  const totals = governor.totals || {};
+  const config = governor.config || {};
+  const currentState = latest.state || "NO DATA";
+  const mode = config.dryRun ? "Dry run" : config.applyRadiusSql ? "Applying" : "Observing";
+  const generated = document.getElementById("governor-generated");
+  if (generated) generated.textContent = governor.generatedAt ? `Checked ${fmtDate(governor.generatedAt)}` : mode;
+  const modeLabel = document.getElementById("governor-mode");
+  if (modeLabel) modeLabel.textContent = mode;
+
+  const summary = document.getElementById("governor-summary");
+  if (summary) {
+    summary.innerHTML = `
+      <div class="governor-card state-card ${governorStateClass(currentState)}"><span>Current state</span><strong>${escapeHtml(currentState)}</strong><em>${fmtDate(latest.createdAt)}</em></div>
+      <div class="governor-card"><span>Active now</span><strong>${escapeHtml(latest.activeSessionCount ?? 0)}</strong><em>Peak ${escapeHtml(totals.maxActive ?? 0)} in 24h</em></div>
+      <div class="governor-card"><span>Demand now</span><strong>${governorNumber(latest.activeDemandMbps)} Mbps</strong><em>Peak ${governorNumber(totals.maxDemandMbps)} Mbps</em></div>
+      <div class="governor-card"><span>Utilization</span><strong>${governorNumber(Number(latest.utilizationScore || 0) * 100, 1)}%</strong><em>Peak ${governorNumber(Number(totals.maxUtilization || 0) * 100, 1)}%</em></div>
+    `;
+  }
+
+  const settings = document.getElementById("governor-settings");
+  if (settings) {
+    settings.innerHTML = `
+      <div class="governor-setting"><span>Enabled</span>${status(config.enabled ? "enabled" : "disabled")}</div>
+      <div class="governor-setting"><span>Dry run</span>${status(config.dryRun ? "on" : "off")}</div>
+      <div class="governor-setting"><span>RADIUS writes</span>${status(config.applyRadiusSql ? "enabled" : "disabled")}</div>
+      <div class="governor-setting"><span>Kick on change</span>${status(config.kickOnChange ? "enabled" : "disabled")}</div>
+      <div class="governor-setting"><span>WAN cap</span><strong>${governorNumber(config.wanDownloadMbps, 0)} / ${governorNumber(config.wanUploadMbps, 0)} Mbps</strong></div>
+      <div class="governor-setting"><span>Poll</span><strong>${governorNumber(Number(config.pollIntervalMs || 0) / 1000, 0)}s</strong></div>
+    `;
+  }
+
+  renderRows("governor-states", governor.stateRows || [], (item) => [
+    status(item.state),
+    escapeHtml(item.events || 0),
+    escapeHtml(item.maxActive || 0),
+    `${governorNumber(item.maxDemandMbps)} Mbps`,
+    `${governorNumber(Number(item.maxUtilization || 0) * 100, 1)}%`,
+    fmtDate(item.lastSeen)
+  ], 6);
+
+  renderRows("governor-events", governor.recentEvents || [], (item) => [
+    fmtDate(item.createdAt),
+    status(item.state),
+    escapeHtml(item.activeSessionCount || 0),
+    `${governorNumber(item.activeDemandMbps)} Mbps`,
+    `${governorNumber(Number(item.utilizationScore || 0) * 100, 1)}%`,
+    item.username ? `<span class="mono">${escapeHtml(item.username)}</span>` : "-",
+    item.targetRateLimit ? `<span class="mono">${escapeHtml(item.previousRateLimit || "-")} -> ${escapeHtml(item.targetRateLimit)}</span>` : "-",
+    escapeHtml(item.reason)
+  ], 8);
+}
 
 function renderNetworkStatus() {
   const diagnostics = state.cache.networkStatus || {};
@@ -361,6 +644,7 @@ function renderAll() {
   renderBulkVoucherPlanOptions();
   renderPlanCards();
   renderNetworkStatus();
+  renderGovernorStatus();
   renderVouchers();
 
   const payments = state.cache.payments || [];
@@ -373,12 +657,7 @@ function renderAll() {
     fmtMoney(item.amountKsh)
   ], 4);
 
-  renderRows("overview-access", entitlements.slice(0, 5), (item) => [
-    `<span class="mono">${escapeHtml(item.username)}</span>`,
-    escapeHtml(item.plan?.name),
-    status(item.status),
-    fmtDate(item.expiresAt)
-  ], 4);
+  renderAccessRows("overview-access", entitlements.slice(0, 5), true);
 
   renderRows("sites", state.cache.sites || [], (item) => [
     escapeHtml(item.name),
@@ -395,11 +674,12 @@ function renderAll() {
     escapeHtml(item.site?.name),
     shortDuration(item.durationSeconds),
     fmtMoney(item.priceKsh),
+    planCategory(item) === "limited" ? status("limited") : status("standard"),
     friendlyRate(item.rateLimit),
     escapeHtml(item.deviceLimit),
     item.enabled ? status("published") : status("disabled"),
     `<span class="action-row"><button class="secondary" type="button" data-edit-plan="${escapeHtml(item.id)}">Edit</button>${item.enabled ? '<a class="button-link secondary" href="/wifi/" target="_blank" rel="noreferrer">View</a>' : ""}</span>`
-  ], 8);
+  ], 9);
 
   renderRows("payments", payments, (item) => [
     `<span class="mono">${escapeHtml(item.sourceReference)}</span>`,
@@ -411,16 +691,8 @@ function renderAll() {
     fmtDate(item.createdAt)
   ], 7);
 
-  renderRows("entitlements", entitlements, (item) => [
-    `<span class="mono">${escapeHtml(item.username)}</span>`,
-    escapeHtml(item.site?.name),
-    escapeHtml(item.plan?.name),
-    status(item.status),
-    fmtDate(item.startsAt),
-    fmtDate(item.expiresAt),
-    escapeHtml(item.deviceLimit),
-    status(item.projection?.status || "missing")
-  ], 8);
+  renderAccessRows("entitlements", entitlements);
+  renderAccessDetail();
 
   renderRows("projections", state.cache.projections || [], (item) => [
     `<span class="mono">${escapeHtml(item.username)}</span>`,
@@ -449,7 +721,7 @@ async function loadDashboard() {
   setAuthError("");
   refreshBtn.disabled = true;
   try {
-    const [summary, sites, plans, payments, entitlements, projections, accounting, networkStatus] = await Promise.all([
+    const [summary, sites, plans, payments, entitlements, projections, accounting, networkStatus, governorStatus] = await Promise.all([
       api(adminApi("/summary")),
       api(endpoints.sites),
       api(endpoints.plans),
@@ -457,9 +729,10 @@ async function loadDashboard() {
       api(endpoints.entitlements),
       api(endpoints.projections),
       api(endpoints.accounting),
-      api(endpoints.networkStatus)
+      api(endpoints.networkStatus),
+      api(endpoints.governorStatus)
     ]);
-    state.cache = { sites, plans, payments, entitlements, projections, accounting, networkStatus };
+    state.cache = { sites, plans, payments, entitlements, projections, accounting, networkStatus, governorStatus };
     renderSummary(summary);
     renderAll();
     authPanel.classList.add("hidden");
@@ -486,6 +759,7 @@ function resetPlanForm() {
   planForm.reset();
   planDurationUnitSelect.value = "hours";
   planDevicesInput.value = "1";
+  planCategorySelect.value = "standard";
   planDownloadInput.value = "";
   planUploadInput.value = "";
   planEnabledInput.checked = true;
@@ -506,6 +780,7 @@ function editPlan(planId) {
   planDurationValueInput.value = String(duration.value);
   planDurationUnitSelect.value = duration.unit;
   planPriceInput.value = String(plan.priceKsh || 0);
+  planCategorySelect.value = planCategory(plan);
   const rate = parseRateLimit(plan.rateLimit);
   planDownloadInput.value = rate.download;
   planUploadInput.value = rate.upload;
@@ -516,6 +791,72 @@ function editPlan(planId) {
   setInlineStatus(planStatus, "Editing", "warn");
   setPage("setup");
   window.scrollTo({ top: dashboard.offsetTop, behavior: "smooth" });
+}
+
+async function selectAccess(entitlementId, preserveMessage = false) {
+  if (!entitlementId) return;
+  if (state.selectedEntitlementId !== entitlementId || !preserveMessage) state.accessActionMessage = "";
+  state.selectedEntitlementId = entitlementId;
+  state.accessDetail = null;
+  renderAll();
+  setPage("access");
+  try {
+    state.accessDetail = await api(adminApi(`/entitlements/${encodeURIComponent(entitlementId)}`));
+    renderAll();
+    accessDetailPanel?.scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (error) {
+    accessDetailPanel?.classList.remove("hidden");
+    accessDetailBody.innerHTML = `<div class="empty-state">${escapeHtml(error instanceof Error ? error.message : "Unable to load access detail.")}</div>`;
+  }
+}
+
+function routerActionMessage(router) {
+  if (!router) return "Saved. Router session was not checked.";
+  if (router.error) return `Saved, but router kick failed: ${router.error}`;
+  if (router.skippedReason) return `Saved. ${router.skippedReason}`;
+  if (router.attempted && router.removed > 0) return `Saved. Router session kicked (${router.removed}). Customer will reauthenticate with new settings.`;
+  if (router.attempted) return "Saved. No active router session was found to kick.";
+  return "Saved.";
+}
+
+async function runAccessAction(action) {
+  if (!state.selectedEntitlementId) return;
+  if (action === "expire" && !window.confirm("Expire this access now and remove its RADIUS login rows?")) return;
+  if (action === "suspend" && !window.confirm("Suspend this access and remove its RADIUS login rows?")) return;
+  const statusEl = document.getElementById("access-action-status");
+  if (statusEl) {
+    statusEl.textContent = "Working";
+    statusEl.className = "inline-status";
+  }
+  const body = { action };
+  if (action === "extend") {
+    const seconds = Number(document.getElementById("access-extension-seconds")?.value || 0);
+    if (!seconds) return;
+    body.extensionSeconds = seconds;
+  }
+  if (action === "update_limits") {
+    const rateLimit = composeRateLimit(
+      document.getElementById("access-download")?.value,
+      document.getElementById("access-upload")?.value
+    );
+    body.rateLimit = rateLimit || null;
+    body.deviceLimit = Number(document.getElementById("access-devices")?.value || 1);
+  }
+  try {
+    const result = await writeApi(adminApi(`/entitlements/${encodeURIComponent(state.selectedEntitlementId)}/actions`), "POST", body);
+    state.accessActionMessage = routerActionMessage(result?.router);
+    if (statusEl) {
+      statusEl.textContent = state.accessActionMessage;
+      statusEl.className = result?.router?.error ? "inline-status bad" : "inline-status ok";
+    }
+    await loadDashboard();
+    await selectAccess(state.selectedEntitlementId, true);
+  } catch (error) {
+    if (statusEl) {
+      statusEl.textContent = error instanceof Error ? error.message : "Action failed";
+      statusEl.className = "inline-status bad";
+    }
+  }
 }
 
 loginForm.addEventListener("submit", async (event) => {
@@ -533,13 +874,7 @@ loginForm.addEventListener("submit", async (event) => {
       trustDevice: trustedDeviceInput.checked
     };
     const result = await login(credentials);
-    state.sessionToken = result.sessionToken;
-    storeValue(SESSION_KEY, state.sessionToken, window.sessionStorage);
-    if (result.trustedDeviceToken) {
-      state.trustedDeviceToken = result.trustedDeviceToken;
-      storeValue(TRUSTED_DEVICE_KEY, state.trustedDeviceToken, window.localStorage);
-    }
-    setSignedIn(result.user);
+    storeAdminSession(result);
     passwordInput.value = "";
     twoFactorInput.value = "";
     await loadDashboard();
@@ -578,6 +913,7 @@ planForm.addEventListener("submit", async (event) => {
       name: planNameInput.value.trim(),
       durationSeconds: durationSeconds(planDurationValueInput.value, planDurationUnitSelect.value),
       priceKsh: Number(planPriceInput.value || 0),
+      category: planCategorySelect.value,
       rateLimit: composeRateLimit(planDownloadInput.value, planUploadInput.value),
       deviceLimit: Number(planDevicesInput.value || 1),
       enabled: planEnabledInput.checked
@@ -673,7 +1009,7 @@ bulkVoucherForm.addEventListener("submit", async (event) => {
 });
 
 refreshBtn.addEventListener("click", () => { void checkHealth(); if (state.sessionToken) void loadDashboard(); });
-logoutBtn.addEventListener("click", clearSession);
+logoutBtn.addEventListener("click", () => clearSession({ forgetTrusted: true }));
 planCancel.addEventListener("click", resetPlanForm);
 copyPortalBtn.addEventListener("click", async () => {
   try {
@@ -690,8 +1026,27 @@ document.addEventListener("click", (event) => {
   if (!(target instanceof HTMLElement)) return;
   const planId = target.dataset.editPlan;
   if (planId) editPlan(planId);
+  const action = target.dataset.accessAction;
+  if (action) void runAccessAction(action);
+  const row = target.closest("[data-entitlement-id]");
+  if (row instanceof HTMLElement && !target.closest("button, a, select, input")) void selectAccess(row.dataset.entitlementId || "");
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  const row = target.closest("[data-entitlement-id]");
+  if (row instanceof HTMLElement) void selectAccess(row.dataset.entitlementId || "");
 });
 document.querySelectorAll(".nav-item").forEach((button) => button.addEventListener("click", () => setPage(button.dataset.page)));
 
-void checkHealth();
-if (state.sessionToken) void loadDashboard();
+async function bootstrapAdmin() {
+  void checkHealth();
+  if (state.sessionToken) {
+    await loadDashboard();
+    if (state.sessionToken) return;
+  }
+  if (state.trustedDeviceToken) await restoreTrustedSession();
+}
+void bootstrapAdmin();

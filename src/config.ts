@@ -6,6 +6,11 @@ function readPositiveInt(name: string, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? Math.round(value) : fallback;
 }
 
+function readPositiveNumber(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 function readPositiveMs(name: string, fallback: number): number {
   const value = readPositiveInt(name, fallback);
   return Math.max(1000, value);
@@ -51,6 +56,28 @@ export const config = {
     enabled: readBoolean("CAPTYN_WIFI_RADIUS_SQL_ENABLED", true),
     pollIntervalMs: readPositiveMs("CAPTYN_WIFI_RADIUS_SQL_POLL_INTERVAL_MS", 5000),
     batchSize: readPositiveInt("CAPTYN_WIFI_RADIUS_SQL_BATCH_SIZE", 25)
+  },
+  routeros: {
+    enabled: readBoolean("CAPTYN_WIFI_ROUTEROS_ENABLED"),
+    host: process.env.CAPTYN_WIFI_ROUTEROS_HOST?.trim() || "",
+    port: readPositiveInt("CAPTYN_WIFI_ROUTEROS_PORT", 8728),
+    username: process.env.CAPTYN_WIFI_ROUTEROS_USERNAME?.trim() || "",
+    password: process.env.CAPTYN_WIFI_ROUTEROS_PASSWORD ?? "",
+    timeoutMs: readPositiveMs("CAPTYN_WIFI_ROUTEROS_TIMEOUT_MS", 5000)
+  },
+  governor: {
+    enabled: readBoolean("CAPTYN_WIFI_GOVERNOR_ENABLED"),
+    dryRun: readBoolean("CAPTYN_WIFI_GOVERNOR_DRY_RUN", true),
+    applyRadiusSql: readBoolean("CAPTYN_WIFI_GOVERNOR_APPLY_RADIUS_SQL"),
+    kickOnChange: readBoolean("CAPTYN_WIFI_GOVERNOR_KICK_ON_CHANGE"),
+    pollIntervalMs: readPositiveMs("CAPTYN_WIFI_GOVERNOR_POLL_INTERVAL_MS", 15000),
+    activeWindowSeconds: readPositiveInt("CAPTYN_WIFI_GOVERNOR_ACTIVE_WINDOW_SECONDS", 180),
+    wanDownloadMbps: readPositiveNumber("CAPTYN_WIFI_GOVERNOR_WAN_DOWNLOAD_MBPS", 140),
+    wanUploadMbps: readPositiveNumber("CAPTYN_WIFI_GOVERNOR_WAN_UPLOAD_MBPS", 40),
+    enterYellowMs: readPositiveMs("CAPTYN_WIFI_GOVERNOR_ENTER_YELLOW_MS", 60000),
+    enterRedMs: readPositiveMs("CAPTYN_WIFI_GOVERNOR_ENTER_RED_MS", 60000),
+    enterCriticalMs: readPositiveMs("CAPTYN_WIFI_GOVERNOR_ENTER_CRITICAL_MS", 30000),
+    recoverMs: readPositiveMs("CAPTYN_WIFI_GOVERNOR_RECOVER_MS", 180000)
   },
   mpesa: {
     enabled: readBoolean("CAPTYN_WIFI_MPESA_STK_ENABLED", readBoolean("MPESA_STK_ENABLED")),

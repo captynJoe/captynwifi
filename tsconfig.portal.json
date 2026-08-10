@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "outDir": "public/portal-build",
+    "rootDir": "src/portal",
+    "skipLibCheck": true,
+    "noEmitOnError": true,
+    "types": [],
+    "noImplicitAny": false,
+    "strictNullChecks": false
+  },
+  "include": [
+    "src/portal/**/*.ts"
+  ]
+}

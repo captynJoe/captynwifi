@@ -3,6 +3,7 @@ import type { Prisma, WifiPlan } from "@prisma/client";
 import { prisma } from "../prisma.js";
 import { config } from "../config.js";
 import { buildRadiusProjection } from "./radiusProjection.js";
+import { applyRadiusProjectionRows } from "./radiusSqlApply.js";
 
 const VOUCHER_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // no 0/O/1/I/L — avoids look-alike characters
 const MAX_CODE_ATTEMPTS = 5;
@@ -92,13 +93,20 @@ export async function issueVoucher(plan: WifiPlan, input: IssueVoucherInput): Pr
           deviceLimit: plan.deviceLimit
         });
 
+        // Apply radcheck/radreply synchronously instead of leaving the
+        // projection "pending" for the async worker to pick up (worst case
+        // CAPTYN_WIFI_RADIUS_SQL_POLL_INTERVAL_MS later) — a voucher is
+        // handed straight to a customer who may try it within seconds, so it
+        // needs to be redeemable the instant it's created.
+        await applyRadiusProjectionRows(tx, projection.username, projection.checkItems, projection.replyItems);
         await tx.wifiRadiusProjection.create({
           data: {
             entitlementId: created.id,
             username: projection.username,
             checkItems: projection.checkItems,
             replyItems: projection.replyItems,
-            status: "pending"
+            status: "applied",
+            appliedAt: startsAt
           }
         });
 

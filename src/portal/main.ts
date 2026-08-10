@@ -1,59 +1,136 @@
-const state = { plans: [], selectedPlanId: "", paymentId: "", pollTimer: null, hotspot: null, expiryTimer: null };
-const plansEl = document.getElementById("plans");
-const checkoutTitle = document.getElementById("checkout-title");
-const checkoutPrice = document.getElementById("checkout-price");
-const selectedSummary = document.getElementById("selected-summary");
-const planIdInput = document.getElementById("plan-id");
-const paymentForm = document.getElementById("payment-form");
-const phoneInput = document.getElementById("phone");
-const phoneField = phoneInput?.closest(".field");
-const payButton = document.getElementById("pay-button");
-const paymentStatus = document.getElementById("payment-status");
-const checkoutPanel = document.getElementById("checkout");
-const checkoutBackdrop = document.getElementById("checkout-backdrop");
-const checkoutCloseBtn = document.getElementById("checkout-close-btn");
-const haveCodeBtn = document.getElementById("have-code-btn");
-const access = document.getElementById("access");
-const accessHeading = document.getElementById("access-heading");
-const accessTimeLeft = document.getElementById("access-time-left");
-const accessLoginDetails = document.getElementById("access-login-details");
-const accessUsernameCard = document.getElementById("access-username-card");
-const accessPasswordCard = document.getElementById("access-password-card");
-const accessRecoveryCard = document.getElementById("access-recovery-card");
-const accessUsername = document.getElementById("access-username");
-const accessPassword = document.getElementById("access-password");
-const accessRecovery = document.getElementById("access-recovery");
-const accessExpires = document.getElementById("access-expires");
-const extendPeriodBtn = document.getElementById("extend-period-btn");
-const workspaceEl = document.querySelector(".workspace");
-const manualConnectFallback = document.getElementById("manual-connect-fallback");
-const manualConnectMessage = document.getElementById("manual-connect-message");
-const manualConnectOpenBtn = document.getElementById("manual-connect-open-btn");
-const manualConnectForm = document.getElementById("manual-connect-form");
-const errorText = document.getElementById("error");
-const paymentModal = document.getElementById("payment-modal");
-const paymentModalIcon = document.getElementById("payment-modal-icon");
-const paymentModalTitle = document.getElementById("payment-modal-title");
-const paymentModalMessage = document.getElementById("payment-modal-message");
-const paymentModalCancelBtn = document.getElementById("payment-modal-cancel-btn");
-const paymentModalRetryBtn = document.getElementById("payment-modal-retry-btn");
-const existingLoginToggle = document.getElementById("existing-login-toggle");
-const existingLoginForm = document.getElementById("existing-login-form");
-const existingUsernameInput = document.getElementById("existing-username");
-const existingPasswordInput = document.getElementById("existing-password");
-const existingLoginStatus = document.getElementById("existing-login-status");
-const voucherLoginToggle = document.getElementById("voucher-login-toggle");
-const voucherLoginForm = document.getElementById("voucher-login-form");
-const voucherCodeInput = document.getElementById("voucher-code-input");
-const voucherLoginStatus = document.getElementById("voucher-login-status");
-const receiptLoginToggle = document.getElementById("receipt-login-toggle");
-const receiptLoginForm = document.getElementById("receipt-login-form");
-const receiptCodeInput = document.getElementById("receipt-code-input");
-const receiptLoginStatus = document.getElementById("receipt-login-status");
-const themeToggleBtn = document.getElementById("theme-toggle-btn");
-const expiryBanner = document.getElementById("expiry-banner");
-const expiryCountdown = document.getElementById("expiry-countdown");
-const expiryRenewBtn = document.getElementById("expiry-renew-btn");
+interface CaptynThemeController {
+  current(): "dark" | "light";
+  toggle(): void;
+}
+
+interface Window {
+  captynTheme?: CaptynThemeController;
+}
+
+type StepName = "package" | "mpesa" | "access";
+type ConnectStatus = "" | "connecting" | "connected" | "failed";
+type ModalKind = "connecting" | "ok" | "bad";
+type NeedKey = "all" | "basic" | "everyday" | "fast" | "gulfstream";
+
+interface HotspotParams {
+  login: string;
+  orig: string;
+  mac: string;
+  ip: string;
+  error: string;
+}
+
+interface PortalSite {
+  id: string;
+  name: string;
+  plans: PortalPlanInput[];
+}
+
+interface PortalPlanInput {
+  id: string;
+  name: string;
+  priceKsh: number;
+  category?: "standard" | "limited";
+  durationSeconds: number;
+  rateLimit: string | null;
+  deviceLimit: number;
+}
+
+interface PortalPlan extends PortalPlanInput {
+  site: Omit<PortalSite, "plans">;
+}
+
+interface Entitlement {
+  username: string;
+  password: string;
+  expiresAt: string;
+}
+
+interface ConnectedPanelOptions {
+  heading?: string;
+  message?: string;
+  skipAutoConnect?: boolean;
+  topLevelConnect?: boolean;
+  recoveryReference?: string;
+  hideCredentials?: boolean;
+}
+
+interface PortalState {
+  plans: PortalPlan[];
+  selectedPlanId: string;
+  paymentId: string;
+  pollTimer: number | null;
+  hotspot: HotspotParams | null;
+  expiryTimer: number | null;
+  activeNeed: NeedKey;
+  paymentStartedAt?: number;
+}
+
+function requireElement<T extends HTMLElement>(id: string): T {
+  const element = document.getElementById(id);
+  if (!element) throw new Error(`Missing portal element #${id}`);
+  return element as T;
+}
+
+const state: PortalState = { plans: [], selectedPlanId: "", paymentId: "", pollTimer: null, hotspot: null, expiryTimer: null, activeNeed: "basic" };
+const plansEl = requireElement<HTMLDivElement>("plans");
+const checkoutTitle = requireElement<HTMLHeadingElement>("checkout-title");
+const checkoutPrice = requireElement<HTMLElement>("checkout-price");
+const selectedSummary = requireElement<HTMLDivElement>("selected-summary");
+const planIdInput = requireElement<HTMLInputElement>("plan-id");
+const paymentForm = requireElement<HTMLFormElement>("payment-form");
+const phoneInput = requireElement<HTMLInputElement>("phone");
+const phoneField = phoneInput.closest<HTMLElement>(".field");
+const payButton = requireElement<HTMLButtonElement>("pay-button");
+const paymentStatus = requireElement<HTMLParagraphElement>("payment-status");
+const checkoutPanel = requireElement<HTMLElement>("checkout");
+const checkoutBackdrop = requireElement<HTMLDivElement>("checkout-backdrop");
+const checkoutCloseBtn = requireElement<HTMLButtonElement>("checkout-close-btn");
+const haveCodeBtn = requireElement<HTMLButtonElement>("have-code-btn");
+const access = requireElement<HTMLElement>("access");
+const accessHeading = requireElement<HTMLHeadingElement>("access-heading");
+const accessTimeLeft = requireElement<HTMLParagraphElement>("access-time-left");
+const accessLoginDetails = requireElement<HTMLDetailsElement>("access-login-details");
+const accessUsernameCard = requireElement<HTMLElement>("access-username-card");
+const accessPasswordCard = requireElement<HTMLElement>("access-password-card");
+const accessRecoveryCard = requireElement<HTMLElement>("access-recovery-card");
+const accessUsername = requireElement<HTMLElement>("access-username");
+const accessPassword = requireElement<HTMLElement>("access-password");
+const accessRecovery = requireElement<HTMLElement>("access-recovery");
+const accessExpires = requireElement<HTMLElement>("access-expires");
+const extendPeriodBtn = requireElement<HTMLButtonElement>("extend-period-btn");
+const workspaceEl = document.querySelector<HTMLElement>(".workspace");
+const manualConnectFallback = requireElement<HTMLElement>("manual-connect-fallback");
+const manualConnectMessage = requireElement<HTMLParagraphElement>("manual-connect-message");
+const manualConnectOpenBtn = requireElement<HTMLAnchorElement>("manual-connect-open-btn");
+const manualConnectForm = requireElement<HTMLFormElement>("manual-connect-form");
+const errorText = requireElement<HTMLParagraphElement>("error");
+const paymentModal = requireElement<HTMLDivElement>("payment-modal");
+const paymentModalIcon = requireElement<HTMLDivElement>("payment-modal-icon");
+const paymentModalTitle = requireElement<HTMLHeadingElement>("payment-modal-title");
+const paymentModalMessage = requireElement<HTMLParagraphElement>("payment-modal-message");
+const paymentModalCancelBtn = requireElement<HTMLButtonElement>("payment-modal-cancel-btn");
+const paymentModalRetryBtn = requireElement<HTMLButtonElement>("payment-modal-retry-btn");
+const existingLoginToggle = requireElement<HTMLButtonElement>("existing-login-toggle");
+const existingLoginForm = requireElement<HTMLFormElement>("existing-login-form");
+const existingUsernameInput = requireElement<HTMLInputElement>("existing-username");
+const existingPasswordInput = requireElement<HTMLInputElement>("existing-password");
+const existingLoginStatus = requireElement<HTMLParagraphElement>("existing-login-status");
+const voucherLoginToggle = requireElement<HTMLButtonElement>("voucher-login-toggle");
+const voucherLoginForm = requireElement<HTMLFormElement>("voucher-login-form");
+const voucherCodeInput = requireElement<HTMLInputElement>("voucher-code-input");
+const voucherLoginStatus = requireElement<HTMLParagraphElement>("voucher-login-status");
+const receiptLoginToggle = requireElement<HTMLButtonElement>("receipt-login-toggle");
+const receiptLoginForm = requireElement<HTMLFormElement>("receipt-login-form");
+const receiptCodeInput = requireElement<HTMLInputElement>("receipt-code-input");
+const receiptLoginStatus = requireElement<HTMLParagraphElement>("receipt-login-status");
+const themeToggleBtn = requireElement<HTMLButtonElement>("theme-toggle-btn");
+const welcomeAccessBtn = requireElement<HTMLButtonElement>("welcome-access-btn");
+const settingsToggleBtn = requireElement<HTMLButtonElement>("settings-toggle-btn");
+const settingsMenu = requireElement<HTMLElement>("settings-menu");
+const expiryBanner = requireElement<HTMLElement>("expiry-banner");
+const expiryCountdown = requireElement<HTMLElement>("expiry-countdown");
+const expiryRenewBtn = requireElement<HTMLButtonElement>("expiry-renew-btn");
 
 function syncThemeToggleLabel() {
   if (themeToggleBtn && window.captynTheme) {
@@ -61,9 +138,37 @@ function syncThemeToggleLabel() {
   }
 }
 syncThemeToggleLabel();
+function setSettingsMenuOpen(open: boolean) {
+  settingsMenu.classList.toggle("hidden", !open);
+  settingsToggleBtn.setAttribute("aria-expanded", open ? "true" : "false");
+}
+settingsToggleBtn?.addEventListener("click", (event) => {
+  event.stopPropagation();
+  setSettingsMenuOpen(settingsMenu.classList.contains("hidden"));
+});
 themeToggleBtn?.addEventListener("click", () => {
   window.captynTheme.toggle();
   syncThemeToggleLabel();
+  setSettingsMenuOpen(false);
+});
+welcomeAccessBtn?.addEventListener("click", () => {
+  const plan = findPlanByName("CAPTYN Welcome");
+  setSettingsMenuOpen(false);
+  if (!plan) {
+    showError("Welcome access is still loading. Try again in a moment.");
+    return;
+  }
+  showError("");
+  selectPlan(plan.id);
+});
+document.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  if (target.closest(".settings-control")) return;
+  setSettingsMenuOpen(false);
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") setSettingsMenuOpen(false);
 });
 
 const basePath = window.location.pathname.startsWith("/wifi") ? "/wifi" : "";
@@ -84,39 +189,44 @@ function duration(seconds) {
 function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
 }
-function ratePartToMbps(value) {
-  const match = /^(\d+(?:\.\d+)?)([kKmM])?$/.exec(String(value || "").trim());
-  if (!match) return 0;
-  const amount = Number(match[1]);
-  if (!Number.isFinite(amount) || amount <= 0) return 0;
-  return (match[2] || "M").toLowerCase() === "k" ? amount / 1000 : amount;
-}
-function rateProfile(rateLimit) {
-  const match = /^(\d+(?:\.\d+)?[kKmM]?)\/(\d+(?:\.\d+)?[kKmM]?)$/i.exec(String(rateLimit || "").trim());
+function rateParts(rateLimit) {
+  const match = /^([\d.]+)M\/([\d.]+)M$/i.exec(String(rateLimit || "").trim());
   if (!match) return { upload: 0, download: 0 };
-  return { upload: ratePartToMbps(match[1]), download: ratePartToMbps(match[2]) };
+  return { upload: Number(match[1]) || 0, download: Number(match[2]) || 0 };
 }
 function friendlyRate(rateLimit) {
-  const rate = rateProfile(rateLimit);
-  if (!rate.upload && !rate.download) return rateLimit ? esc(rateLimit) : "Standard speed";
-  const format = (value) => Number.isInteger(value) ? String(value) : String(Number(value.toFixed(2)));
-  return `${format(rate.download)} Mbps down / ${format(rate.upload)} Mbps up`;
+  const { upload, download } = rateParts(rateLimit);
+  if (!download && !upload) return rateLimit ? esc(rateLimit) : "Standard speed";
+  return `↓ ${download} Mbps · ↑ ${upload} Mbps`;
 }
-function comparePlanFor(plan) {
-  const currentRate = rateProfile(plan?.rateLimit);
-  const currentPrice = Number(plan?.priceKsh || 0);
-  const currentDuration = Number(plan?.durationSeconds || 0);
-  const sameSitePlans = state.plans.filter((candidate) => candidate.site?.id === plan?.site?.id && candidate.id !== plan?.id);
-  const faster = sameSitePlans
-    .map((candidate) => ({ candidate, rate: rateProfile(candidate.rateLimit) }))
-    .filter(({ candidate, rate }) => rate.download > currentRate.download || (rate.download === currentRate.download && Number(candidate.durationSeconds || 0) > currentDuration))
-    .sort((a, b) => (a.rate.download - b.rate.download) || (Number(a.candidate.priceKsh || 0) - Number(b.candidate.priceKsh || 0)) || (Number(a.candidate.durationSeconds || 0) - Number(b.candidate.durationSeconds || 0)))[0]?.candidate;
-  if (!faster) return null;
-  const fasterRate = rateProfile(faster.rateLimit);
-  const priceDelta = Number(faster.priceKsh || 0) - currentPrice;
-  const speedDelta = fasterRate.download > currentRate.download ? `${Number((fasterRate.download - currentRate.download).toFixed(2))} Mbps faster` : duration(faster.durationSeconds);
-  return { plan: faster, detail: `${priceDelta > 0 ? `+${money(priceDelta)} for ` : ""}${speedDelta}` };
+function speedTierClass(plan: { rateLimit: string | null }) {
+  const { download } = rateParts(plan.rateLimit);
+  if (download <= 5) return "speed-starter";
+  if (download <= 12) return "speed-cruise";
+  if (download <= 20) return "speed-highspeed";
+  return "speed-gulfstream";
 }
+function normalizeMpesaPhoneInput(raw) {
+  const cleaned = String(raw || "").replace(/[^\d+]/g, "").replace(/^\++/, "+");
+  const digits = cleaned.startsWith("+") ? cleaned.slice(1) : cleaned;
+  let normalized = "";
+  if (/^254[17]\d{8}$/.test(digits)) normalized = digits;
+  else if (/^2540[17]\d{8}$/.test(digits)) normalized = "254" + digits.slice(4);
+  else if (/^0[17]\d{8}$/.test(digits)) normalized = "254" + digits.slice(1);
+  else if (/^[17]\d{8}$/.test(digits)) normalized = "254" + digits;
+  return normalized ? "+" + normalized : null;
+}
+function resetPhonePrefix() {
+  if (!phoneInput.value.trim()) phoneInput.value = "+254";
+}
+phoneInput.addEventListener("focus", resetPhonePrefix);
+phoneInput.addEventListener("blur", () => {
+  const normalized = normalizeMpesaPhoneInput(phoneInput.value);
+  if (normalized) phoneInput.value = normalized;
+  else resetPhonePrefix();
+});
+resetPhonePrefix();
+
 function readHotspotParams() {
   const search = new URLSearchParams(window.location.search);
   const login = search.get("hsLogin");
@@ -129,12 +239,19 @@ function readHotspotParams() {
     error: search.get("error") || ""
   };
 }
+function portalReturnUrl() {
+  const path = window.location.pathname.startsWith("/wifi") ? "/wifi/portal/" : "/portal/";
+  return new URL(path, window.location.origin).toString();
+}
+function hotspotRedirectDestination() {
+  return state.hotspot?.orig || portalReturnUrl();
+}
 function autoCompleteHotspotLogin(username, password, { topLevel = false } = {}) {
   const hotspot = state.hotspot;
   if (!hotspot?.login) return;
   const frameName = "hs-auto-login-frame";
   if (!topLevel) {
-    let iframe = document.querySelector(`iframe[name="${frameName}"]`);
+    let iframe = document.querySelector<HTMLIFrameElement>(`iframe[name=""]`);
     if (!iframe) {
       iframe = document.createElement("iframe");
       iframe.name = frameName;
@@ -147,7 +264,7 @@ function autoCompleteHotspotLogin(username, password, { topLevel = false } = {})
   form.action = hotspot.login;
   if (!topLevel) form.target = frameName;
   form.style.display = "none";
-  const fields = { username, password, dst: hotspot.orig || "" };
+  const fields = { username, password, dst: hotspotRedirectDestination(), popup: "false" };
   Object.entries(fields).forEach(([name, value]) => {
     if (!value) return;
     const input = document.createElement("input");
@@ -188,7 +305,11 @@ function setConnectState(statusEl, formEl, state, message) {
   statusEl.textContent = message || "";
   if (formEl) {
     const disable = state === "connecting";
-    Array.from(formEl.elements).forEach((el) => { el.disabled = disable; });
+    Array.from(formEl.elements).forEach((el) => {
+      if (el instanceof HTMLInputElement || el instanceof HTMLButtonElement || el instanceof HTMLSelectElement || el instanceof HTMLTextAreaElement) {
+        el.disabled = disable;
+      }
+    });
   }
 }
 function showPaymentModal(kind, title, message) {
@@ -318,32 +439,106 @@ function currentPlan() {
 function setStep(active) {
   const order = ["package", "mpesa", "access"];
   const activeIndex = order.indexOf(active);
-  document.querySelectorAll(".step").forEach((step) => {
+  document.querySelectorAll<HTMLElement>(".step").forEach((step) => {
     const index = order.indexOf(step.dataset.step || "");
     step.classList.toggle("active", index === activeIndex);
     step.classList.toggle("done", activeIndex > index);
   });
 }
+function planCategory(plan) {
+  return plan?.category === "limited" || Number(plan?.priceKsh || 0) === 0 ? "limited" : "standard";
+}
+function isWelcomePlan(plan) {
+  return String(plan.name || "").toLowerCase() === "captyn welcome";
+}
+function promotedBadge(plan) {
+  const name = String(plan.name || "").toLowerCase();
+  if (name === "cruise 4 hr") return "Recommended";
+  if (name === "cruise weekly") return "Best value";
+  if (name === "gulfstream hour") return "Top speed";
+  return "";
+}
 function planTone(plan) {
-  const seconds = Number(plan.durationSeconds || 0);
-  const price = Number(plan.priceKsh || 0);
-  if (price === 0) return { badge: "Free access", pitch: "Open browsing access for live testing and support." };
-  if (seconds <= 1800) return { badge: "Quick session", pitch: "Short, fast access for chats, updates, and light browsing." };
-  if (seconds <= 43200) return { badge: "Daily flow", pitch: "Steady access for work, socials, calls, and streaming." };
-  if (seconds <= 86400) return { badge: "Full day", pitch: "All-day access across your allowed devices." };
-  return { badge: "Extended", pitch: "Long-running access with managed speed controls." };
+  const name = String(plan.name || "").toLowerCase();
+  const badge = promotedBadge(plan);
+  if (isWelcomePlan(plan)) return { badge, pitch: "Free welcome access while support checks the live network." };
+  if (planCategory(plan) === "limited") return { badge, pitch: "Quick access for chats, updates, and light browsing." };
+  if (name.includes("gulfstream")) return { badge, pitch: "Top-speed access for heavy downloads, uploads, and urgent work." };
+  if (name.includes("highspeed")) return { badge, pitch: "Faster access for calls, uploads, and heavier browsing." };
+  if (name.includes("cruise")) return { badge, pitch: "Balanced access for browsing, TikTok, messaging and everyday use." };
+  if (name.includes("starter")) return { badge, pitch: "Low-cost access for simple browsing and messaging." };
+  if (name.includes("monthly")) return { badge, pitch: "Resident-friendly access for steady everyday use." };
+  return { badge, pitch: "Clear speed and time for everyday browsing." };
 }
 function planCard(plan) {
   const selected = plan.id === state.selectedPlanId;
   const tone = planTone(plan);
-  return `<button type="button" class="plan-card ${selected ? "selected" : ""}" data-plan-id="${esc(plan.id)}">
+  const badgeHtml = tone.badge ? '<span class="plan-badge">' + esc(tone.badge) + '</span>' : "";
+  return `<button type="button" class="plan-card ${selected ? "selected" : ""} ${planCategory(plan) === "limited" ? "limited" : "standard"} ${isWelcomePlan(plan) ? "welcome" : ""}" data-plan-id="${esc(plan.id)}">
     <span class="plan-top"><span><h3>${esc(plan.name)}</h3></span><span class="plan-duration">${duration(plan.durationSeconds)}</span></span>
-    <span class="plan-badge">${esc(tone.badge)}</span>
+    ${badgeHtml}
     <span><strong class="plan-price">${money(plan.priceKsh)}</strong></span>
     <span class="plan-caption">${esc(tone.pitch)}</span>
-    <span class="plan-meta"><span>${friendlyRate(plan.rateLimit)}</span><span>${esc(plan.deviceLimit)} device${Number(plan.deviceLimit) === 1 ? "" : "s"}</span></span>
-    <span class="plan-foot"><span>Instant activation</span><span>Voucher ready</span></span>
+    <span class="plan-meta"><span class="plan-speed ${speedTierClass(plan)}">${friendlyRate(plan.rateLimit)}</span><span>${esc(plan.deviceLimit)} device${Number(plan.deviceLimit) === 1 ? "" : "s"}</span></span>
+    <span class="plan-cta">Get ${duration(plan.durationSeconds)} →</span>
   </button>`;
+}
+const UPGRADE_SUGGESTIONS: Record<string, string> = {
+  "basic hour": "Starter 2 HR",
+  "starter 2 hr": "Basic 4 HR",
+  "basic 4 hr": "Basic 12 HR",
+  "basic 12 hr": "Basic Day",
+  "basic day": "Cruise 4 HR",
+  "flash 7": "Cruise 4 HR",
+  "cruise 4 hr": "Cruise Half Day",
+  "cruise half day": "Cruise Day",
+  "cruise day basic": "Cruise Day",
+  "cruise day": "Cruise Weekly",
+  "cruise weekly": "Cruise Monthly",
+  "cruise monthly": "Highspeed Monthly",
+  "highspeed hour": "Highspeed 6 HR",
+  "highspeed 6 hr": "Highspeed Day",
+  "highspeed day": "Highspeed Weekend",
+  "highspeed weekend": "Highspeed Weekly",
+  "highspeed weekly": "Highspeed Monthly",
+  "gulfstream hour": "Gulfstream 3 HR",
+  "gulfstream 3 hr": "Gulfstream 6 HR",
+  "gulfstream 6 hr": "Gulfstream Day"
+};
+function findPlanByName(name: string) {
+  const key = name.toLowerCase();
+  return state.plans.find((plan) => planName(plan) === key) || null;
+}
+function suggestedUpgrade(plan: PortalPlan) {
+  const mapped = UPGRADE_SUGGESTIONS[planName(plan)];
+  if (mapped) {
+    const target = findPlanByName(mapped);
+    if (target && target.id !== plan.id && Number(target.priceKsh || 0) > Number(plan.priceKsh || 0)) return target;
+  }
+  return state.plans.find((candidate) => Number(candidate.priceKsh || 0) > Number(plan.priceKsh || 0)) || null;
+}
+function upgradeReason(plan: PortalPlan, upgrade: PortalPlan) {
+  const currentRate = rateParts(plan.rateLimit);
+  const nextRate = rateParts(upgrade.rateLimit);
+  if (nextRate.download > currentRate.download) return `faster ↓ ${nextRate.download} Mbps`;
+  if (Number(upgrade.deviceLimit || 0) > Number(plan.deviceLimit || 0)) return `${upgrade.deviceLimit} devices`;
+  if (Number(upgrade.durationSeconds || 0) > Number(plan.durationSeconds || 0)) return `more time`;
+  return "a stronger option";
+}
+function upgradeCard(plan: PortalPlan) {
+  const upgrade = suggestedUpgrade(plan);
+  if (!upgrade) return "";
+  const extra = Number(upgrade.priceKsh || 0) - Number(plan.priceKsh || 0);
+  if (extra <= 0) return "";
+  const tier = speedTierForPlan(upgrade);
+  const viewTier = tier ? `<button type="button" class="upgrade-view" data-view-speed-key="${esc(tier.key)}">View ${esc(tier.range)}</button>` : "";
+  return `<div class="upgrade-card">
+    <button type="button" class="upgrade-main" data-plan-id="${esc(upgrade.id)}">
+      <span><em>Compare</em><strong>${esc(upgrade.name)}</strong></span>
+      <span>+${money(extra)} for ${esc(upgradeReason(plan, upgrade))}</span>
+    </button>
+    ${viewTier}
+  </div>`;
 }
 function renderSelectedPlan() {
   const plan = currentPlan();
@@ -364,20 +559,130 @@ function renderSelectedPlan() {
   checkoutPrice.textContent = money(plan.priceKsh);
   planIdInput.value = plan.id;
   payButton.disabled = false;
-  payButton.textContent = paymentActionLabel(plan);
+  payButton.textContent = Number(plan.priceKsh || 0) === 0 ? paymentActionLabel(plan) : `Pay ${money(plan.priceKsh)}`;
   phoneInput.required = !isFree;
   phoneField?.classList.toggle("hidden", isFree);
-  const comparison = comparePlanFor(plan);
-  selectedSummary.innerHTML = `<div class="summary-title">Selected package</div>
-    <div class="summary-meta compact"><span>${duration(plan.durationSeconds)}</span><span>${friendlyRate(plan.rateLimit)}</span><span>${esc(plan.deviceLimit)} device${Number(plan.deviceLimit) === 1 ? "" : "s"}</span></div>
-    ${comparison ? `<button type="button" class="upgrade-card" data-compare-plan-id="${esc(comparison.plan.id)}"><span><em>Compare</em><strong>${esc(comparison.plan.name)}</strong></span><span>${esc(comparison.detail)}</span></button>` : ""}`;
+  selectedSummary.innerHTML = `<div class="summary-meta compact"><span class="summary-pill summary-duration">${duration(plan.durationSeconds)}</span><span class="summary-pill summary-speed ${speedTierClass(plan)}">${friendlyRate(plan.rateLimit)}</span><span class="summary-pill summary-device">${esc(plan.deviceLimit)} device${Number(plan.deviceLimit) === 1 ? "" : "s"}</span></div>${upgradeCard(plan)}`;
+}
+function comparePlansByPrice(a: PortalPlan, b: PortalPlan) {
+  const priceDelta = Number(a?.priceKsh || 0) - Number(b?.priceKsh || 0);
+  if (priceDelta) return priceDelta;
+  const durationDelta = Number(a?.durationSeconds || 0) - Number(b?.durationSeconds || 0);
+  if (durationDelta) return durationDelta;
+  return String(a?.name || "").localeCompare(String(b?.name || ""));
+}
+
+const SPEED_TIERS: Array<{ key: NeedKey; label: string; range: string; title: string; description: string; min?: number; max?: number }> = [
+  { key: "all", label: "All", range: "All speeds", title: "All packages", description: "" },
+  { key: "basic", label: "Basic", range: "1-5 Mbps", title: "Basic", description: "", min: 1, max: 5 },
+  { key: "everyday", label: "Everyday", range: "6-12 Mbps", title: "Everyday", description: "", min: 6, max: 12 },
+  { key: "fast", label: "Fast", range: "13-20 Mbps", title: "Fast", description: "", min: 13, max: 20 },
+  { key: "gulfstream", label: "Gulfstream", range: "21+ Mbps", title: "Gulfstream", description: "", min: 21 }
+];
+const DEFAULT_PLAN_NAME = "Basic Hour";
+const SPEED_TIER_COUNTS_KEY = "captynWifiSpeedTierCounts";
+
+function isSupportOnlyPlan(plan: PortalPlan) {
+  const name = String(plan.name || "").trim().toLowerCase();
+  return name === "captyn welcome" || name.includes("welcome") || Number(plan.priceKsh || 0) === 0;
+}
+
+function customerPlans() {
+  return state.plans.filter((plan) => !isSupportOnlyPlan(plan));
+}
+
+function planName(plan: PortalPlan) {
+  return String(plan.name || "").toLowerCase();
+}
+function plansByName(names: string[]) {
+  const wanted = names.map((name) => name.toLowerCase());
+  return wanted.map((name) => state.plans.find((plan) => planName(plan) === name)).filter((plan): plan is PortalPlan => Boolean(plan));
+}
+function activeSpeedTierConfig() {
+  return SPEED_TIERS.find((tier) => tier.key === state.activeNeed) || SPEED_TIERS[0];
+}
+function isNeedKey(value: string): value is NeedKey {
+  return SPEED_TIERS.some((tier) => tier.key === value);
+}
+function speedTierForPlan(plan: PortalPlan) {
+  const { download } = rateParts(plan.rateLimit);
+  if (!download) return null;
+  return SPEED_TIERS.find((tier) => {
+    if (tier.key === "all") return false;
+    if (typeof tier.min === "number" && download < tier.min) return false;
+    if (typeof tier.max === "number" && download > tier.max) return false;
+    return true;
+  }) || null;
+}
+function readPreferredSpeedTier(): NeedKey {
+  try {
+    const counts = JSON.parse(localStorage.getItem(SPEED_TIER_COUNTS_KEY) || "{}");
+    const ranked = SPEED_TIERS
+      .filter((tier) => tier.key !== "all")
+      .map((tier) => ({ key: tier.key, count: Number(counts?.[tier.key] || 0) }))
+      .filter((entry) => entry.count > 0)
+      .sort((a, b) => b.count - a.count);
+    if (ranked[0] && isNeedKey(ranked[0].key)) return ranked[0].key;
+  } catch (_error) {}
+  return "basic";
+}
+function rememberPurchasedSpeedTier(plan: PortalPlan | null) {
+  if (!plan || isSupportOnlyPlan(plan)) return;
+  const tier = speedTierForPlan(plan);
+  if (!tier) return;
+  try {
+    const counts = JSON.parse(localStorage.getItem(SPEED_TIER_COUNTS_KEY) || "{}");
+    counts[tier.key] = Number(counts?.[tier.key] || 0) + 1;
+    localStorage.setItem(SPEED_TIER_COUNTS_KEY, JSON.stringify(counts));
+  } catch (_error) {}
+}
+function renderNeedTabs() {
+  return SPEED_TIERS.map((tier) => `<button type="button" class="speed-tab ${tier.key === state.activeNeed ? "active" : ""}" data-speed-key="${esc(tier.key)}"><span>${esc(tier.label)}</span><small>${esc(tier.range)}</small></button>`).join("");
+}
+function plansForSpeedTier(tier: ReturnType<typeof activeSpeedTierConfig>) {
+  const plans = customerPlans();
+  if (tier.key === "all") return plans;
+  return plans.filter((plan) => {
+    const { download } = rateParts(plan.rateLimit);
+    if (!download) return false;
+    if (typeof tier.min === "number" && download < tier.min) return false;
+    if (typeof tier.max === "number" && download > tier.max) return false;
+    return true;
+  });
+}
+function renderPlanGrid(plans: PortalPlan[]) {
+  return plans.length ? plans.map(planCard).join("") : '<div class="empty-state">No packages in this group yet.</div>';
+}
+function renderPackageBrowser() {
+  const visiblePlans = customerPlans();
+  if (!visiblePlans.length) {
+    plansEl.innerHTML = '<div class="empty-state">No WiFi packages are published yet.</div>';
+    renderSelectedPlan();
+    return;
+  }
+  const tier = activeSpeedTierConfig();
+  const focusedPlans = plansForSpeedTier(tier);
+  plansEl.innerHTML = `
+    <section class="speed-browser" aria-label="Browse packages by speed">
+      <div class="speed-rail" role="tablist" aria-label="Speed tiers">${renderNeedTabs()}</div>
+      <div class="intent-block focused-block speed-tier-block">
+        <div class="intent-head speed-tier-copy"><span>${esc(tier.range)}</span><h3>${esc(tier.title)}</h3></div>
+        <div class="intent-grid">${renderPlanGrid(focusedPlans)}</div>
+      </div>
+    </section>
+  `;
+  renderSelectedPlan();
 }
 function renderPlans(sites) {
-  state.plans = sites.flatMap((site) => site.plans.map((plan) => ({ ...plan, site })));
-  if (!state.selectedPlanId && state.plans[0]) state.selectedPlanId = state.plans[0].id;
-  if (state.selectedPlanId && !state.plans.some((plan) => plan.id === state.selectedPlanId)) state.selectedPlanId = state.plans[0]?.id || "";
-  plansEl.innerHTML = state.plans.length ? state.plans.map(planCard).join("") : '<div class="empty-state">No WiFi packages are published yet.</div>';
-  renderSelectedPlan();
+  state.plans = sites.flatMap((site) => site.plans.map((plan) => ({ ...plan, site }))).sort(comparePlansByPrice);
+  const visiblePlans = customerPlans();
+  if (!state.selectedPlanId && visiblePlans[0]) {
+    state.activeNeed = readPreferredSpeedTier();
+    const preferredPlans = plansForSpeedTier(activeSpeedTierConfig());
+    state.selectedPlanId = (state.activeNeed === "basic" ? findPlanByName(DEFAULT_PLAN_NAME)?.id : preferredPlans[0]?.id) || visiblePlans[0].id;
+  }
+  if (state.selectedPlanId && !state.plans.some((plan) => plan.id === state.selectedPlanId)) state.selectedPlanId = visiblePlans[0]?.id || "";
+  renderPackageBrowser();
 }
 async function loadPlans() {
   const response = await fetch(api("/sites"));
@@ -386,8 +691,11 @@ async function loadPlans() {
   renderPlans(payload.data || []);
 }
 function selectPlan(planId) {
-  if (!state.plans.some((plan) => plan.id === planId)) return;
+  const selected = state.plans.find((plan) => plan.id === planId);
+  if (!selected) return;
   state.selectedPlanId = planId;
+  const selectedTier = speedTierForPlan(selected);
+  if (selectedTier && !isSupportOnlyPlan(selected)) state.activeNeed = selectedTier.key;
   access.classList.add("hidden");
   resetPaymentAttempt();
   showError("");
@@ -404,9 +712,9 @@ function selectPlan(planId) {
 }
 function waitingMessage() {
   const elapsedMs = state.paymentStartedAt ? Date.now() - state.paymentStartedAt : 0;
-  if (elapsedMs < 12000) return "Check your phone for the M-PESA prompt and enter your PIN.";
-  if (elapsedMs < 30000) return "Still waiting for M-PESA... this can take up to a minute.";
-  return "Still waiting — if no prompt appeared, dial *334# to clear a stuck M-PESA session, then try again.";
+  if (elapsedMs < 12000) return "Enter your M-PESA PIN.";
+  if (elapsedMs < 30000) return "Still waiting...";
+  return "No prompt? Dial *334#, then try again.";
 }
 
 // Remembers the last confirmed access on this device/browser so revisiting
@@ -449,9 +757,9 @@ function showManualConnectFallback(username, password) {
   if (state.hotspot?.login && manualConnectForm) {
     if (manualConnectMessage) manualConnectMessage.textContent = "Your access is active, but this device couldn't confirm it automatically.";
     manualConnectForm.action = state.hotspot.login;
-    manualConnectForm.elements.username.value = username;
-    manualConnectForm.elements.password.value = password;
-    manualConnectForm.elements.dst.value = state.hotspot.orig || "";
+    (manualConnectForm.elements.namedItem("username") as HTMLInputElement).value = username;
+    (manualConnectForm.elements.namedItem("password") as HTMLInputElement).value = password;
+    (manualConnectForm.elements.namedItem("dst") as HTMLInputElement).value = hotspotRedirectDestination();
     manualConnectForm.classList.remove("hidden");
     manualConnectOpenBtn?.classList.add("hidden");
   } else {
@@ -475,7 +783,7 @@ function updateAccessCopy(heading) {
   if (heading) accessHeading.textContent = heading;
 }
 
-function showConnectedPanel(entitlement, { heading, skipAutoConnect, topLevelConnect, recoveryReference, hideCredentials } = {}) {
+function showConnectedPanel(entitlement: Entitlement, { heading, skipAutoConnect, topLevelConnect, recoveryReference, hideCredentials }: ConnectedPanelOptions = {}) {
   if (workspaceEl) workspaceEl.classList.add("hidden");
   hideManualConnectFallback();
   updateAccessCopy(heading || "Access active");
@@ -540,6 +848,7 @@ async function pollPayment() {
     clearInterval(state.pollTimer);
     state.pollTimer = null;
     hidePaymentModal();
+    rememberPurchasedSpeedTier(currentPlan());
     showConnectedPanel(payment.entitlement, {
       heading: payment.extended ? "Access extended" : "Access ready",
       message: payment.extended
@@ -571,8 +880,9 @@ paymentForm.addEventListener("submit", async (event) => {
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || !payload?.data?.entitlement) throw new Error(payload.error || "Unable to start free access.");
       payButton.disabled = false;
-      payButton.textContent = paymentActionLabel(plan);
+      payButton.textContent = Number(plan.priceKsh || 0) === 0 ? paymentActionLabel(plan) : `Pay ${money(plan.priceKsh)}`;
       setConnectState(paymentStatus, null, "", "");
+      rememberPurchasedSpeedTier(plan);
       showConnectedPanel(payload.data.entitlement, {
         heading: payload.data.extended ? "Free access extended" : "Free access ready",
         message: "Activating WiFi on this device now.",
@@ -584,21 +894,32 @@ paymentForm.addEventListener("submit", async (event) => {
       showError(error instanceof Error ? error.message : "Unable to start free access.");
       setConnectState(paymentStatus, null, "", "");
       payButton.disabled = false;
-      payButton.textContent = paymentActionLabel(plan);
+      payButton.textContent = Number(plan.priceKsh || 0) === 0 ? paymentActionLabel(plan) : `Pay ${money(plan.priceKsh)}`;
       setStep("package");
       return;
     }
   }
 
+  const normalizedPhone = normalizeMpesaPhoneInput(phoneInput.value);
+  if (!normalizedPhone) {
+    showError("Enter a valid M-PESA number starting with +2547, +2541, 07, 01, 7, or 1.");
+    payButton.disabled = false;
+    payButton.textContent = Number(plan.priceKsh || 0) === 0 ? paymentActionLabel(plan) : `Pay ${money(plan.priceKsh)}`;
+    phoneInput.focus();
+    setStep("package");
+    return;
+  }
+  phoneInput.value = normalizedPhone;
+
   payButton.textContent = "Sending prompt...";
-  setConnectState(paymentStatus, null, "connecting", "Sending the M-PESA prompt to your phone...");
-  showPaymentModal("connecting", "Sending prompt", "Sending the M-PESA prompt to your phone...");
+  setConnectState(paymentStatus, null, "connecting", "Sending prompt...");
+  showPaymentModal("connecting", "Sending prompt", "Sending prompt...");
   setStep("mpesa");
   try {
     const response = await fetch(api("/payments/mpesa/stk"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ planId: plan.id, phone: phoneInput.value.trim(), deviceMac: state.hotspot?.mac || undefined })
+      body: JSON.stringify({ planId: plan.id, phone: normalizedPhone, deviceMac: state.hotspot?.mac || undefined })
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || "Unable to start M-PESA payment.");
@@ -617,7 +938,7 @@ paymentForm.addEventListener("submit", async (event) => {
     setConnectState(paymentStatus, null, "", "");
     hidePaymentModal();
     payButton.disabled = false;
-    payButton.textContent = paymentActionLabel(plan);
+    payButton.textContent = Number(plan.priceKsh || 0) === 0 ? paymentActionLabel(plan) : `Pay ${money(plan.priceKsh)}`;
     setStep("package");
   }
 });
@@ -633,14 +954,30 @@ paymentModalRetryBtn.addEventListener("click", () => {
 plansEl.addEventListener("click", (event) => {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
+  const speedButton = target.closest("[data-speed-key]");
+  const speedKey = speedButton instanceof HTMLElement ? speedButton.dataset.speedKey || "" : "";
+  if (isNeedKey(speedKey)) {
+    state.activeNeed = speedKey;
+    renderPackageBrowser();
+    return;
+  }
   const card = target.closest("[data-plan-id]");
   if (card instanceof HTMLElement) selectPlan(card.dataset.planId || "");
 });
-selectedSummary?.addEventListener("click", (event) => {
+selectedSummary.addEventListener("click", (event) => {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
-  const compare = target.closest("[data-compare-plan-id]");
-  if (compare instanceof HTMLElement) selectPlan(compare.dataset.comparePlanId || "");
+  const speedButton = target.closest("[data-view-speed-key]");
+  const speedKey = speedButton instanceof HTMLElement ? speedButton.dataset.viewSpeedKey || "" : "";
+  if (isNeedKey(speedKey)) {
+    state.activeNeed = speedKey;
+    renderPackageBrowser();
+    closeCheckoutSheet();
+    plansEl.scrollIntoView({ behavior: "smooth", block: "start" });
+    return;
+  }
+  const compareCard = target.closest("[data-plan-id]");
+  if (compareCard instanceof HTMLElement) selectPlan(compareCard.dataset.planId || "");
 });
 document.addEventListener("click", async (event) => {
   const target = event.target;

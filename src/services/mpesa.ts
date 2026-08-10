@@ -21,10 +21,12 @@ let cachedAccessToken: { token: string; expiresAtMs: number } | null = null;
 
 export function formatDarajaMsisdn(input: string): string | null {
   if (!input) return null;
-  const cleaned = input.replace(/[^\d+]/g, "");
-  if (cleaned.startsWith("+254") && cleaned.length === 13) return cleaned.slice(1);
-  if (cleaned.startsWith("254") && cleaned.length === 12) return cleaned;
-  if (cleaned.startsWith("0") && cleaned.length === 10) return `254${cleaned.slice(1)}`;
+  const cleaned = input.replace(/[^\d+]/g, "").replace(/^\++/, "+");
+  const digits = cleaned.startsWith("+") ? cleaned.slice(1) : cleaned;
+  if (/^254[17]\d{8}$/.test(digits)) return digits;
+  if (/^2540[17]\d{8}$/.test(digits)) return `254${digits.slice(4)}`;
+  if (/^0[17]\d{8}$/.test(digits)) return `254${digits.slice(1)}`;
+  if (/^[17]\d{8}$/.test(digits)) return `254${digits}`;
   return null;
 }
 

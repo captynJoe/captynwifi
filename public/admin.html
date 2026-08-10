@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>CAPTYN WiFi Admin</title>
     <script src="theme.js?v=2026080402"></script>
-    <link rel="stylesheet" href="theme.css?v=2026080701" />
-    <link rel="stylesheet" href="admin.css?v=2026080701" />
+    <link rel="stylesheet" href="theme.css?v=2026080924" />
+    <link rel="stylesheet" href="admin.css?v=2026081001" />
   </head>
   <body>
     <header class="topbar">
@@ -49,9 +49,9 @@
       <section id="dashboard" class="dashboard hidden">
         <section class="command-strip">
           <div>
-            <p class="eyebrow">LIVE CUSTOMER VIEW</p>
-            <h1>Published rates appear on the client portal</h1>
-            <p class="supporting"><span id="published-count">0</span> enabled package<span id="published-plural">s</span> available at <strong>captyn.shop/wifi</strong>.</p>
+            <p class="eyebrow">WIFI OPERATIONS</p>
+            <h1>Control live customer access</h1>
+            <p class="supporting"><span id="published-count">0</span> enabled package<span id="published-plural">s</span> live at <strong>captyn.shop/wifi</strong>, with vouchers, RADIUS limits, and access actions managed here.</p>
           </div>
           <div class="command-actions">
             <button id="copy-portal-btn" class="secondary" type="button">Copy URL</button>
@@ -67,6 +67,7 @@
           <button class="nav-item" type="button" data-page="payments">Payments</button>
           <button class="nav-item" type="button" data-page="access">Access</button>
           <button class="nav-item" type="button" data-page="radius">RADIUS</button>
+          <button class="nav-item" type="button" data-page="governor">Governor</button>
           <button class="nav-item" type="button" data-page="accounting">Accounting</button>
         </nav>
 
@@ -82,7 +83,7 @@
 
         <section class="page-grid" data-page-panel="overview">
           <article class="surface span-7">
-            <div class="panel-head"><h2>Client Portal Preview</h2><span id="preview-count"></span></div>
+            <div class="panel-head"><h2>Live Package Preview</h2><span id="preview-count"></span></div>
             <div id="client-preview" class="client-preview"></div>
           </article>
           <article class="surface span-5">
@@ -118,6 +119,7 @@
               <label class="field" for="plan-duration-value"><span>Time</span><input id="plan-duration-value" name="durationValue" type="number" min="1" required placeholder="1" /></label>
               <label class="field" for="plan-duration-unit"><span>Unit</span><select id="plan-duration-unit" name="durationUnit"><option value="minutes">Minutes</option><option value="hours" selected>Hours</option><option value="days">Days</option></select><em class="field-hint">How long access lasts after the customer connects.</em></label>
               <label class="field" for="plan-price"><span>Price KSh</span><input id="plan-price" name="priceKsh" type="number" min="0" required placeholder="50" /></label>
+              <label class="field" for="plan-category"><span>Category</span><select id="plan-category" name="category"><option value="standard">Standard</option><option value="limited">Limited</option></select><em class="field-hint">Use Limited for free/basic packages with restricted access.</em></label>
               <label class="field" for="plan-download"><span>Download speed (Mbps)</span><input id="plan-download" name="downloadMbps" type="number" min="0" step="0.5" placeholder="10" /><em class="field-hint">How fast pages/videos load for the customer. Leave blank for no limit.</em></label>
               <label class="field" for="plan-upload"><span>Upload speed (Mbps)</span><input id="plan-upload" name="uploadMbps" type="number" min="0" step="0.5" placeholder="10" /><em class="field-hint">How fast the customer can send data (calls, uploads). Leave blank for no limit.</em></label>
               <label class="field" for="plan-devices"><span>Devices</span><input id="plan-devices" name="deviceLimit" type="number" min="1" value="1" required /><em class="field-hint">How many phones/laptops can use this login at once.</em></label>
@@ -137,12 +139,12 @@
 
         <section class="page-grid hidden" data-page-panel="packages">
           <article class="surface span-12">
-            <div class="panel-head"><h2>Published Packages</h2><span id="package-card-count"></span></div>
+            <div class="panel-head"><h2>Customer Packages</h2><span id="package-card-count"></span></div>
             <div id="package-cards" class="package-cards"></div>
           </article>
           <article class="surface span-12 table-panel">
             <div class="panel-head"><h2>All Packages</h2><span id="plans-count"></span></div>
-            <div class="table-wrap"><table><thead><tr><th>Name</th><th>Site</th><th>Duration</th><th>Price</th><th>Speed</th><th>Devices</th><th>Client Portal</th><th>Actions</th></tr></thead><tbody id="plans-body"></tbody></table></div>
+            <div class="table-wrap"><table><thead><tr><th>Name</th><th>Site</th><th>Duration</th><th>Price</th><th>Category</th><th>Speed</th><th>Devices</th><th>Client Portal</th><th>Actions</th></tr></thead><tbody id="plans-body"></tbody></table></div>
           </article>
         </section>
 
@@ -193,6 +195,13 @@
             <div class="panel-head"><h2>Customer Access</h2><span id="entitlements-count"></span></div>
             <div class="table-wrap"><table><thead><tr><th>Username</th><th>Site</th><th>Package</th><th>Status</th><th>Starts</th><th>Expires</th><th>Devices</th><th>RADIUS</th></tr></thead><tbody id="entitlements-body"></tbody></table></div>
           </article>
+          <article id="access-detail-panel" class="surface span-12 access-detail-panel hidden">
+            <div class="panel-head">
+              <h2 id="access-detail-title">Access detail</h2>
+              <span id="access-detail-status"></span>
+            </div>
+            <div id="access-detail-body" class="access-detail-body"></div>
+          </article>
         </section>
 
         <section class="page-grid hidden" data-page-panel="radius">
@@ -206,6 +215,26 @@
           </article>
         </section>
 
+
+        <section class="page-grid hidden" data-page-panel="governor">
+          <article class="surface span-12">
+            <div class="panel-head"><h2>Dynamic Governor</h2><span id="governor-generated">Dry run</span></div>
+            <div id="governor-summary" class="governor-summary"></div>
+          </article>
+          <article class="surface span-5">
+            <div class="panel-head"><h2>Safety Settings</h2><span id="governor-mode">Watching</span></div>
+            <div id="governor-settings" class="governor-settings"></div>
+          </article>
+          <article class="surface span-7 table-panel">
+            <div class="panel-head"><h2>State Totals</h2><span id="governor-states-count"></span></div>
+            <div class="table-wrap"><table><thead><tr><th>State</th><th>Events</th><th>Peak Active</th><th>Peak Demand</th><th>Peak Util</th><th>Last Seen</th></tr></thead><tbody id="governor-states-body"></tbody></table></div>
+          </article>
+          <article class="surface span-12 table-panel">
+            <div class="panel-head"><h2>Recent Decisions</h2><span id="governor-events-count"></span></div>
+            <div class="table-wrap"><table><thead><tr><th>Time</th><th>State</th><th>Active</th><th>Demand</th><th>Util</th><th>User</th><th>Rate</th><th>Reason</th></tr></thead><tbody id="governor-events-body"></tbody></table></div>
+          </article>
+        </section>
+
         <section class="page-grid hidden" data-page-panel="accounting">
           <article class="surface span-12 table-panel">
             <div class="panel-head"><h2>Accounting Sessions</h2><span id="accounting-count"></span></div>
@@ -215,6 +244,6 @@
       </section>
     </main>
 
-    <script src="admin.js?v=2026080701" defer data-cfasync="false"></script>
+    <script src="admin.js?v=2026081001" defer data-cfasync="false"></script>
   </body>
 </html>

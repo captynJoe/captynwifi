@@ -1,52 +1,7 @@
 import "dotenv/config";
-import type { Prisma } from "@prisma/client";
 import { config } from "../config.js";
 import { prisma } from "../prisma.js";
-
-type RadiusAttribute = {
-  attribute?: unknown;
-  op?: unknown;
-  value?: unknown;
-};
-
-function asRadiusAttributes(value: Prisma.JsonValue): RadiusAttribute[] {
-  return Array.isArray(value) ? (value as RadiusAttribute[]) : [];
-}
-
-function cleanText(value: unknown, fallback = "") {
-  const text = String(value ?? fallback).trim();
-  return text.slice(0, 253);
-}
-
-function cleanOperator(value: unknown, fallback: ":=" | "==") {
-  const text = String(value ?? fallback).trim();
-  return text === ":=" || text === "==" || text === "=" || text === "+=" ? text : fallback;
-}
-
-async function replaceRadiusRows(
-  tx: Prisma.TransactionClient,
-  table: "radcheck" | "radreply",
-  username: string,
-  items: RadiusAttribute[]
-) {
-  if (table === "radcheck") {
-    await tx.$executeRaw`DELETE FROM radcheck WHERE username = ${username}`;
-  } else {
-    await tx.$executeRaw`DELETE FROM radreply WHERE username = ${username}`;
-  }
-
-  for (const item of items) {
-    const attribute = cleanText(item.attribute, "");
-    const value = cleanText(item.value, "");
-    if (!attribute || !value) continue;
-    const op = cleanOperator(item.op, table === "radcheck" ? ":=" : ":=");
-    if (table === "radcheck") {
-      await tx.$executeRaw`INSERT INTO radcheck (username, attribute, op, value) VALUES (${username}, ${attribute}, ${op}, ${value})`;
-    } else {
-      await tx.$executeRaw`INSERT INTO radreply (username, attribute, op, value) VALUES (${username}, ${attribute}, ${op}, ${value})`;
-    }
-  }
-}
+import { applyRadiusProjectionRows } from "../services/radiusSqlApply.js";
 
 async function applyProjection(id: string) {
   await prisma.$transaction(async (tx) => {
@@ -68,8 +23,7 @@ async function applyProjection(id: string) {
       return;
     }
 
-    await replaceRadiusRows(tx, "radcheck", projection.username, asRadiusAttributes(projection.checkItems));
-    await replaceRadiusRows(tx, "radreply", projection.username, asRadiusAttributes(projection.replyItems));
+    await applyRadiusProjectionRows(tx, projection.username, projection.checkItems, projection.replyItems);
     await tx.wifiRadiusProjection.update({
       where: { id: projection.id },
       data: { status: "applied", lastError: null, appliedAt: now }

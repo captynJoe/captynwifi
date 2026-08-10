@@ -52,6 +52,7 @@ model WifiPlan {
   name              String
   durationSeconds   Int
   priceKsh          Int
+  category          String       @default("standard")
   rateLimit         String?
   deviceLimit       Int          @default(1)
   enabled           Boolean      @default(true)
@@ -63,6 +64,7 @@ model WifiPlan {
 
   @@unique([siteId, source, externalPackageId])
   @@index([siteId, enabled])
+  @@index([siteId, category, enabled])
 }
 
 model WifiPaymentIntent {
@@ -160,4 +162,24 @@ model WifiAccountingSession {
   @@index([username])
   @@index([nasIdentifier])
   @@index([lastInterimAt])
+}
+
+model WifiGovernorEvent {
+  id                 String   @id @default(uuid())
+  state              String
+  dryRun             Boolean  @default(true)
+  activeSessionCount Int      @default(0)
+  activeDemandMbps   Float    @default(0)
+  utilizationScore   Float    @default(0)
+  username           String?
+  entitlementId      String?
+  previousRateLimit  String?
+  targetRateLimit    String?
+  reason             String
+  raw                Json?
+  createdAt          DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([state, createdAt])
+  @@index([username, createdAt])
 }

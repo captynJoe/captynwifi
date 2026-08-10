@@ -54,6 +54,10 @@ export const adminLoginSchema = z.object({
   trustDevice: z.boolean().optional()
 });
 
+export const trustedSessionSchema = z.object({
+  trustedDeviceToken: z.string().min(1)
+});
+
 let adminDb: PrismaClient | null = null;
 
 function getAdminDb(): PrismaClient {
@@ -211,6 +215,38 @@ export function verifyAdminSessionToken(token: string | null | undefined): WifiA
   return payload;
 }
 
+function adminSessionResponse(user: AdminUserRow, trustedDeviceToken: ReturnType<typeof createTrustedDeviceToken> | null = null) {
+  const session = createAdminSession(user);
+  return {
+    sessionToken: session.token,
+    expiresAt: new Date(session.payload.exp * 1000).toISOString(),
+    trustedDeviceToken: trustedDeviceToken?.token ?? null,
+    trustedDeviceExpiresAt: trustedDeviceToken ? new Date(trustedDeviceToken.payload.exp * 1000).toISOString() : null,
+    user: {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: session.payload.role
+    }
+  };
+}
+
+export async function restoreCaptynAdminTrustedSession(input: z.infer<typeof trustedSessionSchema>) {
+  const trustedDevice = verifyTrustedDeviceToken(input.trustedDeviceToken);
+  if (!trustedDevice) throw new Error("Trusted device expired. Please sign in again.");
+
+  const user = await readAdminUser(trustedDevice.email);
+  if (!user || user.id !== trustedDevice.sub || normalizeEmail(user.email) !== normalizeEmail(trustedDevice.email)) {
+    throw new Error("Trusted device expired. Please sign in again.");
+  }
+  if (user.status !== "active") throw new Error("Your account is not active. Please contact support.");
+  if (!user.isAdmin) throw new Error("Access denied. Admin privileges required.");
+  if (!user.emailVerified) throw new Error("Admin account email must be verified before sign-in.");
+  if (!user.twoFactorEnabled) throw new Error("ADMIN_MFA_SETUP_REQUIRED");
+
+  return adminSessionResponse(user, createTrustedDeviceToken(user));
+}
+
 async function readAdminUser(email: string) {
   const db = getAdminDb();
   const rows = await db.$queryRaw<AdminUserRow[]>`
@@ -311,18 +347,6 @@ export async function authenticateCaptynAdmin(input: z.infer<typeof adminLoginSc
     await resetMfaFailures(user.id, remainingBackupCodes);
   }
 
-  const session = createAdminSession(user);
   const trustedDevice = input.trustDevice || trustedDeviceAccepted ? createTrustedDeviceToken(user) : null;
-  return {
-    sessionToken: session.token,
-    expiresAt: new Date(session.payload.exp * 1000).toISOString(),
-    trustedDeviceToken: trustedDevice?.token ?? null,
-    trustedDeviceExpiresAt: trustedDevice ? new Date(trustedDevice.payload.exp * 1000).toISOString() : null,
-    user: {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: session.payload.role
-    }
-  };
+  return adminSessionResponse(user, trustedDevice);
 }
