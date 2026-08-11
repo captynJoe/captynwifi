@@ -50,7 +50,7 @@ interface ConnectedPanelOptions {
   heading?: string;
   message?: string;
   skipAutoConnect?: boolean;
-  topLevelConnect?: boolean;
+  freshGrant?: boolean;
   recoveryReference?: string;
   hideCredentials?: boolean;
 }
@@ -293,7 +293,7 @@ function autoCompleteHotspotLogin(username, password, { topLevel = false } = {})
 // false "connected" reading for a device that's only got walled-garden
 // access, not real internet. 1.1.1.1 is a raw IP (skips DNS-based walled
 // garden rules entirely) and isn't a domain hotspots special-case allow.
-function checkInternetReachable(timeoutMs) {
+function checkInternetReachable(timeoutMs: number): Promise<boolean> {
   return new Promise((resolve) => {
     const controller = new AbortController();
     const timer = setTimeout(() => { controller.abort(); resolve(false); }, timeoutMs);
@@ -302,9 +302,9 @@ function checkInternetReachable(timeoutMs) {
       .catch(() => { clearTimeout(timer); resolve(false); });
   });
 }
-async function waitForConnection(maxAttempts, intervalMs) {
+async function waitForConnection(maxAttempts, intervalMs, checkTimeoutMs = 1500) {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    if (await checkInternetReachable(3000)) return true;
+    if (await checkInternetReachable(checkTimeoutMs)) return true;
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
   return false;
@@ -398,21 +398,33 @@ function rememberDeviceForEntitlement(username, password) {
     body: JSON.stringify({ username, password, deviceMac: mac })
   }).catch(() => {});
 }
-async function attemptAutoConnect(username, password, statusEl, formEl) {
-  setConnectState(statusEl, formEl, "connecting", "Checking your connection...");
+async function attemptAutoConnect(username, password, statusEl, formEl, { freshGrant = false } = {}) {
   // Every caller of this (a fresh purchase, a returning device on reload, a
   // remembered-access page revisit) used to submit a hotspot login attempt
   // unconditionally. For a device that's already online -- which is common
   // on reload/revisit -- that's a wasted login POST, and worse, it can
   // collide with a session MikroTik already considers active and come back
   // as "already authorizing, retry later" instead of just recognizing the
-  // device is fine. Checking first avoids submitting anything in that case.
-  const alreadyOnline = await checkInternetReachable(1500);
-  if (!alreadyOnline) {
+  // device is fine. Checking first avoids submitting anything in that case
+  // -- but skip it for a genuinely fresh purchase/free-access grant, since
+  // the device is essentially guaranteed not to be online yet and the
+  // check would just be ~1.5s of pure added latency before we even try.
+  let alreadyOnline = false;
+  if (freshGrant) {
     setConnectState(statusEl, formEl, "connecting", "Connecting you to WiFi...");
     autoCompleteHotspotLogin(username, password);
+  } else {
+    setConnectState(statusEl, formEl, "connecting", "Checking your connection...");
+    alreadyOnline = await checkInternetReachable(1500);
+    if (!alreadyOnline) {
+      setConnectState(statusEl, formEl, "connecting", "Connecting you to WiFi...");
+      autoCompleteHotspotLogin(username, password);
+    }
   }
-  const ok = alreadyOnline || (await waitForConnection(4, 2000));
+  // Poll frequently rather than in a few long waits, so a connection that
+  // succeeds quickly (the common case) is *noticed* quickly instead of
+  // sitting in a multi-second gap between checks.
+  const ok = alreadyOnline || (await waitForConnection(6, 700, 1200));
   if (ok) {
     rememberDeviceForEntitlement(username, password);
     let expiresAt = null;
@@ -800,7 +812,7 @@ function updateAccessCopy(heading) {
   if (heading) accessHeading.textContent = heading;
 }
 
-function showConnectedPanel(entitlement: Entitlement, { heading, skipAutoConnect, topLevelConnect, recoveryReference, hideCredentials }: ConnectedPanelOptions = {}) {
+function showConnectedPanel(entitlement: Entitlement, { heading, skipAutoConnect, freshGrant, recoveryReference, hideCredentials }: ConnectedPanelOptions = {}) {
   if (workspaceEl) workspaceEl.classList.add("hidden");
   hideManualConnectFallback();
   updateAccessCopy(heading || "Access active");
@@ -822,12 +834,15 @@ function showConnectedPanel(entitlement: Entitlement, { heading, skipAutoConnect
   saveRememberedAccess(entitlement);
   if (skipAutoConnect) return;
   if (state.hotspot?.login) {
-    setConnectState(paymentStatus, null, "connecting", "Activating WiFi on this device...");
-    if (topLevelConnect) {
-      setTimeout(() => autoCompleteHotspotLogin(entitlement.username, entitlement.password, { topLevel: true }), 700);
-    } else {
-      void attemptAutoConnect(entitlement.username, entitlement.password, paymentStatus, null);
-    }
+    // Used to do a real top-level navigation away to MikroTik and back for
+    // a fresh grant (payment/free-access/voucher), on the theory that the
+    // hidden-iframe path needed a visible browser tab to survive Chrome's
+    // "not secure" form warning. That's no longer true now that the login
+    // itself is a plain GET (see autoCompleteHotspotLogin) rather than a
+    // <form> submission, so it's not subject to that warning either way --
+    // and the hidden path is much faster to land on, since it never leaves
+    // this already-loaded page for a full navigate-away-and-back round trip.
+    void attemptAutoConnect(entitlement.username, entitlement.password, paymentStatus, null, { freshGrant: Boolean(freshGrant) });
   } else {
     updateAccessCopy("Access active");
     setConnectState(paymentStatus, null, "failed", "This device still needs to complete WiFi sign-in before internet is available.");
@@ -873,7 +888,7 @@ async function pollPayment() {
         : "Payment complete. Activating WiFi on this device now.",
       recoveryReference: payment.receiptNumber || payment.providerReference || payment.sourceReference,
       hideCredentials: true,
-      topLevelConnect: true
+      freshGrant: true
     });
   }
 }
@@ -904,7 +919,7 @@ paymentForm.addEventListener("submit", async (event) => {
         heading: payload.data.extended ? "Free access extended" : "Free access ready",
         message: "Activating WiFi on this device now.",
         hideCredentials: Boolean(state.hotspot?.login),
-        topLevelConnect: true
+        freshGrant: true
       });
       return;
     } catch (error) {
@@ -1069,7 +1084,7 @@ voucherLoginForm?.addEventListener("submit", async (event) => {
       {
         heading: "Voucher accepted",
         message: "Activating WiFi on this device now.",
-        topLevelConnect: true
+        freshGrant: true
       }
     );
   } catch (error) {
