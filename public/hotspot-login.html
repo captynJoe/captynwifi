@@ -5,16 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CAPTYN WiFi</title>
 <!--
-  Confirmed on a Galaxy A12 and A26: manually opening this same URL in a
-  normal browser tab works fine, but Android's built-in "Sign in to
-  network" popup shows a permanently blank page for it. That popup is a
-  restricted WebView that on some devices blocks *automatic* navigation
-  away from the first page it loads (JS redirect or meta-refresh alike)
-  as an anti-phishing measure, but still allows navigation from a real
-  tap. So a visible, tappable link is the primary path here; the
-  meta-refresh/JS below are just a convenience for the (more common)
-  WebViews that do allow auto-redirects, and are delayed slightly so the
-  button has time to render first instead of racing it.
+  Confirmed on a Galaxy A12: manually opening this same URL in a normal
+  browser tab works fine, but Android's built-in "Sign in to network"
+  popup shows a permanently blank page for it, with the address bar
+  stuck on "data:text/html," -- meaning that WebView never successfully
+  loads this page at all (a network-level failure, not a JS/redirect
+  issue -- other real devices' captive-portal WebViews load this same
+  page fine on this same router, so root cause is still unconfirmed).
+  The visible, tappable link below is still worth keeping regardless,
+  since it gives any WebView that blocks *automatic* navigation (JS or
+  meta-refresh alike) a way through via a real tap.
 -->
 <meta http-equiv="refresh" content="2;url=https://captyn.shop/wifi/?mac=$(mac)&amp;ip=$(ip)&amp;hsLogin=$(link-login-only)&amp;hsOrig=$(link-orig-esc)&amp;error=$(error)">
 <style>
