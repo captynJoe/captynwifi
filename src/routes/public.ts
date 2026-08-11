@@ -264,11 +264,19 @@ async function activateFreePlan(plan: WifiPlan, deviceMac: string | null) {
   const sourceRef = sourceReference();
 
   return prisma.$transaction(async (tx) => {
+    // Free plans (e.g. "CAPTYN Welcome") used to be re-claimable indefinitely
+    // while already active -- each claim just tacked its duration onto the
+    // existing entitlement's expiry, for free, forever. This blocks that: a
+    // device with currently-active free access can't claim more until it
+    // actually expires. Checked inside the transaction (not in the route
+    // handler) so two near-simultaneous claims from the same device -- e.g.
+    // a retried request -- can't both slip through before either commits.
     const existingActive = await tx.wifiEntitlement.findFirst({
-      where: { username, status: "active", expiresAt: { gt: startsAt } },
-      include: { projection: true },
-      orderBy: { expiresAt: "desc" }
+      where: { username, status: "active", expiresAt: { gt: startsAt } }
     });
+    if (existingActive) {
+      return { blocked: true as const, existingActive };
+    }
 
     const intent = await tx.wifiPaymentIntent.create({
       data: {
@@ -284,50 +292,6 @@ async function activateFreePlan(plan: WifiPlan, deviceMac: string | null) {
         confirmedAt: startsAt
       }
     });
-
-    if (existingActive) {
-      const expiresAt = new Date(existingActive.expiresAt.getTime() + plan.durationSeconds * 1000);
-      const entitlement = await tx.wifiEntitlement.update({
-        where: { id: existingActive.id },
-        data: { expiresAt, deviceMac: existingActive.deviceMac ?? deviceMac }
-      });
-      const projection = buildRadiusProjection({
-        entitlementId: entitlement.id,
-        phone: username,
-        username: entitlement.username,
-        password: entitlement.cleartextSecret,
-        deviceMac: entitlement.deviceMac,
-        expiresAt,
-        durationSeconds: Math.max(60, Math.round((expiresAt.getTime() - startsAt.getTime()) / 1000)),
-        rateLimit: entitlement.rateLimit,
-        deviceLimit: entitlement.deviceLimit
-      });
-
-      await applyRadiusProjectionRows(tx, projection.username, projection.checkItems, projection.replyItems);
-      const radiusProjection = existingActive.projection
-        ? await tx.wifiRadiusProjection.update({
-            where: { id: existingActive.projection.id },
-            data: {
-              checkItems: projection.checkItems,
-              replyItems: projection.replyItems,
-              status: "applied",
-              appliedAt: startsAt,
-              lastError: null
-            }
-          })
-        : await tx.wifiRadiusProjection.create({
-            data: {
-              entitlementId: entitlement.id,
-              username: projection.username,
-              checkItems: projection.checkItems,
-              replyItems: projection.replyItems,
-              status: "applied",
-              appliedAt: startsAt
-            }
-          });
-
-      return { intent, entitlement, projection: radiusProjection, extended: true };
-    }
 
     const expiresAt = new Date(startsAt.getTime() + plan.durationSeconds * 1000);
     const password = createRadiusSecret();
@@ -373,7 +337,7 @@ async function activateFreePlan(plan: WifiPlan, deviceMac: string | null) {
       }
     });
 
-    return { intent, entitlement, projection: radiusProjection, extended: false };
+    return { blocked: false as const, intent, entitlement, projection: radiusProjection, extended: false };
   });
 }
 
@@ -408,6 +372,12 @@ publicRouter.post("/access/free", async (req, res, next) => {
     if (plan.priceKsh !== 0) return res.status(400).json({ error: "This package requires payment." });
 
     const activated = await activateFreePlan(plan, normalizeDeviceMac(parsed.deviceMac));
+    if (activated.blocked) {
+      return res.status(400).json({
+        error: "This device already has active free WiFi access. It needs to expire before you can claim it again.",
+        entitlement: toJsonSafe(publicEntitlement(activated.existingActive))
+      });
+    }
     return res.status(201).json({
       data: toJsonSafe({
         id: activated.intent.id,

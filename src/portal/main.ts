@@ -910,7 +910,24 @@ paymentForm.addEventListener("submit", async (event) => {
         body: JSON.stringify({ planId: plan.id, deviceMac: state.hotspot?.mac || undefined })
       });
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok || !payload?.data?.entitlement) throw new Error(payload.error || "Unable to start free access.");
+      if (!response.ok) {
+        // Free access already active on this device -- the API rejects the
+        // re-claim but still hands back the existing entitlement, so show
+        // the customer their current access instead of a dead-end error.
+        if (response.status === 400 && payload?.entitlement) {
+          payButton.disabled = false;
+          payButton.textContent = paymentActionLabel(plan);
+          setConnectState(paymentStatus, null, "", "");
+          showConnectedPanel(payload.entitlement, {
+            heading: "Free access already active",
+            message: "This device already has active free access — reconnecting you now.",
+            hideCredentials: Boolean(state.hotspot?.login)
+          });
+          return;
+        }
+        throw new Error(payload.error || "Unable to start free access.");
+      }
+      if (!payload?.data?.entitlement) throw new Error("Unable to start free access.");
       payButton.disabled = false;
       payButton.textContent = Number(plan.priceKsh || 0) === 0 ? paymentActionLabel(plan) : `Pay ${money(plan.priceKsh)}`;
       setConnectState(paymentStatus, null, "", "");
