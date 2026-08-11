@@ -192,8 +192,19 @@ function portalReturnUrl() {
     const path = window.location.pathname.startsWith("/wifi") ? "/wifi/portal/" : "/portal/";
     return new URL(path, window.location.origin).toString();
 }
-function hotspotRedirectDestination() {
-    return state.hotspot?.orig || portalReturnUrl();
+// For the hidden auto-connect attempt, redirecting to the OS's own original
+// probe URL (msftconnecttest.com, connectivitycheck.gstatic.com, etc.) once
+// login succeeds helps that OS notice it now has real internet and clear
+// its own "no internet" warning -- and it's invisible to the user either
+// way, since it happens inside a hidden iframe. But for the *visible*
+// top-level path (the manual "Tap to connect" fallback), landing the
+// user's whole tab on one of those near-blank probe pages instead of back
+// on our own "you're connected" screen is a bad landing, so that path
+// always prefers our own portal regardless of what triggered the redirect.
+function hotspotRedirectDestination({ preferOrig = true } = {}) {
+    if (preferOrig && state.hotspot?.orig)
+        return state.hotspot.orig;
+    return portalReturnUrl();
 }
 // Chrome (and other browsers) block *form* submissions from an HTTPS page
 // to a plain-HTTP action with a full-page "not secure" interstitial --
@@ -208,7 +219,7 @@ function autoCompleteHotspotLogin(username, password, { topLevel = false } = {})
     const hotspot = state.hotspot;
     if (!hotspot?.login)
         return;
-    const params = new URLSearchParams({ username, password, dst: hotspotRedirectDestination(), popup: "false" });
+    const params = new URLSearchParams({ username, password, dst: hotspotRedirectDestination({ preferOrig: !topLevel }), popup: "false" });
     const separator = hotspot.login.includes("?") ? "&" : "?";
     const url = hotspot.login + separator + params.toString();
     if (topLevel) {
@@ -346,9 +357,20 @@ function rememberDeviceForEntitlement(username, password) {
     }).catch(() => { });
 }
 async function attemptAutoConnect(username, password, statusEl, formEl) {
-    setConnectState(statusEl, formEl, "connecting", "Connecting you to WiFi...");
-    autoCompleteHotspotLogin(username, password);
-    const ok = await waitForConnection(4, 2000);
+    setConnectState(statusEl, formEl, "connecting", "Checking your connection...");
+    // Every caller of this (a fresh purchase, a returning device on reload, a
+    // remembered-access page revisit) used to submit a hotspot login attempt
+    // unconditionally. For a device that's already online -- which is common
+    // on reload/revisit -- that's a wasted login POST, and worse, it can
+    // collide with a session MikroTik already considers active and come back
+    // as "already authorizing, retry later" instead of just recognizing the
+    // device is fine. Checking first avoids submitting anything in that case.
+    const alreadyOnline = await checkInternetReachable(1500);
+    if (!alreadyOnline) {
+        setConnectState(statusEl, formEl, "connecting", "Connecting you to WiFi...");
+        autoCompleteHotspotLogin(username, password);
+    }
+    const ok = alreadyOnline || (await waitForConnection(4, 2000));
     if (ok) {
         rememberDeviceForEntitlement(username, password);
         let expiresAt = null;
@@ -371,7 +393,7 @@ async function attemptAutoConnect(username, password, statusEl, formEl) {
     }
     else {
         updateAccessCopy("Access active");
-        setConnectState(statusEl, formEl, "failed", "Couldn't confirm the connection. Tap Connect below, then check Windows again.");
+        setConnectState(statusEl, formEl, "failed", "Couldn't confirm the connection automatically. Tap Connect below to finish.");
         showManualConnectFallback(username, password);
     }
 }
@@ -742,10 +764,10 @@ function clearRememberedAccess() {
     }
     catch (_error) { }
 }
-// Real, visible, user-initiated top-level form submission — shown when the
-// background auto-connect (hidden iframe POST) can't be confirmed, so the
-// customer always has a way to finish connecting themselves regardless of
-// why the automatic attempt failed (blocked, timed out, etc.).
+// Real, visible, user-initiated navigation — shown when the background
+// auto-connect (hidden iframe) can't be confirmed, so the customer always
+// has a way to finish connecting themselves regardless of why the
+// automatic attempt failed (blocked, timed out, etc.).
 function showManualConnectFallback(username, password) {
     if (!manualConnectFallback)
         return;
@@ -758,7 +780,7 @@ function showManualConnectFallback(username, password) {
     }
     else {
         if (manualConnectMessage) {
-            manualConnectMessage.textContent = "Your package is active. Open the WiFi login page from Windows Action needed, then this portal can activate the router session.";
+            manualConnectMessage.textContent = "Your package is active. Tap below to open your device's WiFi sign-in page, then this portal can activate the connection.";
         }
         manualConnectForm?.classList.add("hidden");
         manualConnectOpenBtn?.classList.remove("hidden");
@@ -812,7 +834,7 @@ function showConnectedPanel(entitlement, { heading, skipAutoConnect, topLevelCon
     }
     else {
         updateAccessCopy("Access active");
-        setConnectState(paymentStatus, null, "failed", "Windows still needs captive-portal login before internet is available.");
+        setConnectState(paymentStatus, null, "failed", "This device still needs to complete WiFi sign-in before internet is available.");
         showManualConnectFallback(entitlement.username, entitlement.password);
     }
 }
