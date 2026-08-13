@@ -106,6 +106,7 @@
   font-family: var(--font-display); font-size: 25px; font-weight: 800;
 }
 .access-time-left .time-left-label { display: block; font-family: var(--font-sans, inherit); font-size: 10.5px; font-weight: 850; text-transform: uppercase; letter-spacing: .06em; opacity: .75; margin-bottom: 3px; }
+.access-time-left .time-left-devices { display: block; font-family: var(--font-sans, inherit); font-size: 11px; font-weight: 700; opacity: .8; margin-top: 4px; }
 .login-details { margin: 0 20px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); overflow: hidden; }
 .login-details summary { min-height: 42px; display: flex; align-items: center; padding: 0 14px; cursor: pointer; color: var(--muted); font-size: 12.5px; font-weight: 800; }
 .login-details summary::marker { color: var(--brand-blue); }
@@ -159,6 +160,9 @@
 }
 .manual-connect p { margin: 0 0 12px; color: var(--muted); font-weight: 600; }
 .manual-connect form button, .manual-connect a.primary { width: 100%; min-height: 42px; display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+.access-panel .manual-connect { margin: 0 20px 16px; padding: 0; border: 0; box-shadow: none; background: transparent; }
+.access-panel .manual-connect p { margin-bottom: 10px; font-size: 13px; }
+.access-panel .manual-connect form button { min-height: 48px; border-radius: 12px; font-weight: 850; }
 .expiry-banner #expiry-countdown { font-family: var(--font-mono); color: #ffd166; }
 .expiry-banner button { min-height: 36px; padding: 0 14px; font-size: 12.5px; white-space: nowrap; }
 .expiry-banner.expired { background: var(--red); }

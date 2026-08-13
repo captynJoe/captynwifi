@@ -43,13 +43,20 @@ export function buildRadiusProjection(input: BuildEntitlementInput) {
 
   const checkItems: RadiusAttribute[] = [
     { attribute: "User-Name", op: ":=", value: username },
-    { attribute: "Cleartext-Password", op: ":=", value: password }
+    { attribute: "Cleartext-Password", op: ":=", value: password },
+    // The actual device-count enforcement -- this used to only be set as
+    // Port-Limit in the reply items below, a PPP multilink attribute that
+    // MikroTik hotspot ignores entirely, so it never limited anything.
+    // Simultaneous-Use is the real RADIUS check attribute: FreeRADIUS's
+    // "session" virtual server section queries radacct for this username's
+    // still-open sessions (AcctStopTime IS NULL) and rejects a new login
+    // once this many devices are already active.
+    { attribute: "Simultaneous-Use", op: ":=", value: input.deviceLimit }
   ];
 
   const replyItems: RadiusAttribute[] = [
     { attribute: "Session-Timeout", op: ":=", value: sessionTimeout },
     { attribute: "Idle-Timeout", op: ":=", value: 900 },
-    { attribute: "Port-Limit", op: ":=", value: input.deviceLimit },
     { attribute: "Acct-Interim-Interval", op: ":=", value: interim },
     { attribute: "WISPr-Session-Terminate-Time", op: ":=", value: input.expiresAt.toISOString() },
     { attribute: "Class", op: ":=", value: `entitlement:${input.entitlementId}` }

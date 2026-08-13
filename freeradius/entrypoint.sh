@@ -15,4 +15,12 @@ sed   -e "s|__DB_PASSWORD__|${DB_PASSWORD}|g"   /etc/raddb/templates/sql.templat
 # log line instead of inferred from silence.
 sed -i 's/^\tauth = no$/\tauth = yes/' /etc/raddb/radiusd.conf
 
+# Device-limit enforcement (Simultaneous-Use, set per-entitlement in
+# radiusProjection.ts) is a no-op unless the "session" virtual server
+# section actually queries for it -- stock config has that call commented
+# out. simul_count_query/simul_verify_query are already active by default
+# in mods-config/sql/main/postgresql/queries.conf, and the nasreload table
+# they join against exists in the schema, so uncommenting this is enough.
+sed -i '/^session {$/,/^}$/ s/^#\tsql$/\tsql/' /etc/raddb/sites-available/default
+
 exec /docker-entrypoint.sh "$@"

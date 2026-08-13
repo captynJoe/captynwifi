@@ -5,7 +5,7 @@ function requireElement(id) {
         throw new Error(`Missing portal element #${id}`);
     return element;
 }
-const state = { plans: [], selectedPlanId: "", paymentId: "", pollTimer: null, hotspot: null, expiryTimer: null, activeNeed: "basic" };
+const state = { plans: [], selectedPlanId: "", paymentId: "", pollTimer: null, hotspot: null, expiryTimer: null, activeNeed: "all" };
 const plansEl = requireElement("plans");
 const checkoutTitle = requireElement("checkout-title");
 const checkoutPrice = requireElement("checkout-price");
@@ -311,12 +311,15 @@ function formatTimeLeft(remainingMs) {
         return `${minutes} minutes left`;
     return "Less than a minute left";
 }
-function updateAccessTimeLeft(remainingMs) {
+function updateAccessTimeLeft(remainingMs, deviceLimit) {
     if (!accessTimeLeft)
         return;
-    accessTimeLeft.innerHTML = `<span class="time-left-label">Time left</span>${esc(formatTimeLeft(remainingMs))}`;
+    const deviceBadge = Number(deviceLimit) > 0
+        ? `<span class="time-left-devices">${esc(String(deviceLimit))} device${Number(deviceLimit) === 1 ? "" : "s"}</span>`
+        : "";
+    accessTimeLeft.innerHTML = `<span class="time-left-label">Time left</span>${esc(formatTimeLeft(remainingMs))}${deviceBadge}`;
 }
-function startExpiryWatch(expiresAt) {
+function startExpiryWatch(expiresAt, deviceLimit) {
     const target = new Date(expiresAt).getTime();
     if (!Number.isFinite(target))
         return;
@@ -325,7 +328,7 @@ function startExpiryWatch(expiresAt) {
     const WARN_MS = 2 * 60 * 1000;
     function tick() {
         const remainingMs = target - Date.now();
-        updateAccessTimeLeft(remainingMs);
+        updateAccessTimeLeft(remainingMs, deviceLimit);
         if (remainingMs <= 0) {
             expiryBanner.classList.remove("hidden");
             expiryBanner.classList.add("expired");
@@ -357,57 +360,58 @@ function rememberDeviceForEntitlement(username, password) {
     }).catch(() => { });
 }
 async function attemptAutoConnect(username, password, statusEl, formEl, { freshGrant = false } = {}) {
-    // Every caller of this (a fresh purchase, a returning device on reload, a
-    // remembered-access page revisit) used to submit a hotspot login attempt
-    // unconditionally. For a device that's already online -- which is common
-    // on reload/revisit -- that's a wasted login POST, and worse, it can
-    // collide with a session MikroTik already considers active and come back
-    // as "already authorizing, retry later" instead of just recognizing the
-    // device is fine. Checking first avoids submitting anything in that case
-    // -- but skip it for a genuinely fresh purchase/free-access grant, since
-    // the device is essentially guaranteed not to be online yet and the
-    // check would just be ~1.5s of pure added latency before we even try.
     let alreadyOnline = false;
     if (freshGrant) {
-        setConnectState(statusEl, formEl, "connecting", "Connecting you to WiFi...");
+        setConnectState(statusEl, formEl, "connecting", "Package active. Authenticating this device...");
         autoCompleteHotspotLogin(username, password);
+        showManualConnectFallback(username, password, {
+            placement: manualConnectPlacement(),
+            message: "Connecting automatically. If your device still says Sign in required, tap to connect now.",
+            buttonLabel: "Tap to connect now"
+        });
     }
     else {
-        setConnectState(statusEl, formEl, "connecting", "Checking your connection...");
-        alreadyOnline = await checkInternetReachable(1500);
+        setConnectState(statusEl, formEl, "connecting", "Checking this device...");
+        alreadyOnline = await checkInternetReachable(900);
         if (!alreadyOnline) {
-            setConnectState(statusEl, formEl, "connecting", "Connecting you to WiFi...");
+            setConnectState(statusEl, formEl, "connecting", "Reconnecting this device...");
             autoCompleteHotspotLogin(username, password);
+            showManualConnectFallback(username, password, {
+                placement: manualConnectPlacement(),
+                message: "Reconnecting automatically. If the WiFi screen still says Action needed, tap to connect.",
+                buttonLabel: "Tap to connect"
+            });
         }
     }
-    // Poll frequently rather than in a few long waits, so a connection that
-    // succeeds quickly (the common case) is *noticed* quickly instead of
-    // sitting in a multi-second gap between checks.
-    const ok = alreadyOnline || (await waitForConnection(6, 700, 1200));
+    const ok = alreadyOnline || (await waitForConnection(8, 450, 900));
     if (ok) {
+        hideManualConnectFallback();
         rememberDeviceForEntitlement(username, password);
         let expiresAt = null;
+        let deviceLimit;
         try {
             const response = await fetch(api(`/entitlements/${encodeURIComponent(username)}/status`));
-            if (response.ok)
-                expiresAt = (await response.json())?.data?.expiresAt || null;
+            const data = response.ok ? (await response.json())?.data : null;
+            expiresAt = data?.expiresAt || null;
+            deviceLimit = data?.deviceLimit;
         }
         catch (_error) { }
         if (expiresAt) {
-            // Route every successful connect (voucher, receipt, existing-login,
-            // payment) through the same connected-status panel instead of leaving
-            // it as a small inline message — skipAutoConnect avoids looping back
-            // into another connect attempt, since we just finished one.
-            showConnectedPanel({ username, password, expiresAt }, { heading: "You're connected", message: "You're all set — go ahead and browse, stream, and download.", skipAutoConnect: true });
+            showConnectedPanel({ username, password, expiresAt, deviceLimit }, { heading: "You're connected", message: "You're all set. You can browse now.", skipAutoConnect: true });
         }
         else {
+            hideManualConnectFallback();
             setConnectState(statusEl, formEl, "connected", "You're connected. You can close this page.");
         }
     }
     else {
         updateAccessCopy("Access active");
-        setConnectState(statusEl, formEl, "failed", "Couldn't confirm the connection automatically. Tap Connect below to finish.");
-        showManualConnectFallback(username, password);
+        setConnectState(statusEl, formEl, "failed", "Automatic confirmation is taking longer than expected. Tap Connect to finish.");
+        showManualConnectFallback(username, password, {
+            placement: manualConnectPlacement(),
+            message: "Your access is active. Tap Connect to complete WiFi sign-in on this device.",
+            buttonLabel: "Tap to connect"
+        });
     }
 }
 const MOBILE_SHEET_QUERY = window.matchMedia("(max-width: 980px)");
@@ -636,7 +640,7 @@ function readPreferredSpeedTier() {
             return ranked[0].key;
     }
     catch (_error) { }
-    return "basic";
+    return "all";
 }
 function rememberPurchasedSpeedTier(plan) {
     if (!plan || isSupportOnlyPlan(plan))
@@ -749,7 +753,7 @@ function waitingMessage() {
 const REMEMBERED_ACCESS_KEY = "captynWifiAccess";
 function saveRememberedAccess(entitlement) {
     try {
-        localStorage.setItem(REMEMBERED_ACCESS_KEY, JSON.stringify({ username: entitlement.username, password: entitlement.password, expiresAt: entitlement.expiresAt }));
+        localStorage.setItem(REMEMBERED_ACCESS_KEY, JSON.stringify({ username: entitlement.username, password: entitlement.password, expiresAt: entitlement.expiresAt, deviceLimit: entitlement.deviceLimit }));
     }
     catch (_error) { }
 }
@@ -781,19 +785,35 @@ function clearRememberedAccess() {
 // auto-connect (hidden iframe) can't be confirmed, so the customer always
 // has a way to finish connecting themselves regardless of why the
 // automatic attempt failed (blocked, timed out, etc.).
-function showManualConnectFallback(username, password) {
+function placeManualConnectFallback(placement = "default") {
+    if (placement === "access" && !access.classList.contains("hidden")) {
+        access.insertBefore(manualConnectFallback, extendPeriodBtn);
+        return;
+    }
+    const portalApp = document.querySelector(".portal-app");
+    if (portalApp && manualConnectFallback.parentElement !== portalApp) {
+        portalApp.insertBefore(manualConnectFallback, errorText);
+    }
+}
+function manualConnectPlacement() {
+    return access.classList.contains("hidden") ? "default" : "access";
+}
+function showManualConnectFallback(username, password, options = {}) {
     if (!manualConnectFallback)
         return;
+    placeManualConnectFallback(options.placement);
     if (state.hotspot?.login && manualConnectForm) {
-        if (manualConnectMessage)
-            manualConnectMessage.textContent = "Your access is active, but this device couldn't confirm it automatically.";
+        if (manualConnectMessage) {
+            manualConnectMessage.textContent = options.message || "Your access is active. Tap below if this device does not connect automatically.";
+        }
+        manualConnectSubmitBtn.textContent = options.buttonLabel || "Tap to connect";
         pendingManualConnect = { username, password };
         manualConnectForm.classList.remove("hidden");
         manualConnectOpenBtn?.classList.add("hidden");
     }
     else {
         if (manualConnectMessage) {
-            manualConnectMessage.textContent = "Your package is active. Tap below to open your device's WiFi sign-in page, then this portal can activate the connection.";
+            manualConnectMessage.textContent = options.message || "Your package is active. Tap below to open your device's WiFi sign-in page, then this portal can activate the connection.";
         }
         manualConnectForm?.classList.add("hidden");
         manualConnectOpenBtn?.classList.remove("hidden");
@@ -832,7 +852,7 @@ function showConnectedPanel(entitlement, { heading, skipAutoConnect, freshGrant,
     setStep("access");
     closeCheckoutSheet();
     access.scrollIntoView({ behavior: "smooth", block: "start" });
-    startExpiryWatch(entitlement.expiresAt);
+    startExpiryWatch(entitlement.expiresAt, entitlement.deviceLimit);
     saveRememberedAccess(entitlement);
     if (skipAutoConnect)
         return;
@@ -990,8 +1010,8 @@ paymentForm.addEventListener("submit", async (event) => {
         payButton.disabled = true;
         if (state.pollTimer)
             clearInterval(state.pollTimer);
-        state.pollTimer = setInterval(pollPayment, 4000);
-        setTimeout(pollPayment, 1500);
+        state.pollTimer = setInterval(pollPayment, 2500);
+        setTimeout(pollPayment, 1000);
     }
     catch (error) {
         showError(error instanceof Error ? error.message : "Unable to start payment.");
@@ -1115,7 +1135,7 @@ voucherLoginForm?.addEventListener("submit", async (event) => {
         if (!response.ok || payload?.data?.status !== "active") {
             throw new Error(payload.error || "That voucher is expired or was not found.");
         }
-        showConnectedPanel({ username: code, password: code, expiresAt: payload.data.expiresAt }, {
+        showConnectedPanel({ username: code, password: code, expiresAt: payload.data.expiresAt, deviceLimit: payload.data.deviceLimit }, {
             heading: "Voucher accepted",
             message: "Activating WiFi on this device now.",
             freshGrant: true

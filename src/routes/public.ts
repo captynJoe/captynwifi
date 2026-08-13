@@ -516,7 +516,7 @@ publicRouter.get("/entitlements/:username/status", async (req, res, next) => {
     if (!username) return res.status(400).json({ error: "Username required" });
     const entitlement = await findCurrentEntitlementForUsername(username);
     if (!entitlement) return res.status(404).json({ error: "Not found" });
-    return res.json({ data: toJsonSafe({ status: entitlement.status, expiresAt: entitlement.expiresAt }) });
+    return res.json({ data: toJsonSafe({ status: entitlement.status, expiresAt: entitlement.expiresAt, deviceLimit: entitlement.deviceLimit }) });
   } catch (error) {
     return next(error);
   }

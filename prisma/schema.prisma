@@ -183,3 +183,24 @@ model WifiGovernorEvent {
   @@index([state, createdAt])
   @@index([username, createdAt])
 }
+
+
+model WifiServiceHeartbeat {
+  service    String   @id
+  lastSeenAt DateTime
+  updatedAt  DateTime @default(now()) @updatedAt
+}
+
+model WifiOutageCredit {
+  id                   String   @id @default(uuid())
+  service              String
+  outageStartedAt      DateTime
+  outageEndedAt        DateTime
+  creditedSeconds      Int
+  affectedEntitlements Int      @default(0)
+  createdAt            DateTime @default(now())
+
+  @@unique([service, outageStartedAt, outageEndedAt])
+  @@index([service, createdAt])
+  @@index([outageStartedAt, outageEndedAt])
+}

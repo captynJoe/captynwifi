@@ -2,6 +2,7 @@ import "dotenv/config";
 import { config } from "../config.js";
 import { prisma } from "../prisma.js";
 import { applyRadiusProjectionRows } from "../services/radiusSqlApply.js";
+import { applyOutageCredit, touchOutageHeartbeat } from "../services/outageCredit.js";
 
 async function applyProjection(id: string) {
   await prisma.$transaction(async (tx) => {
@@ -86,6 +87,7 @@ async function applyPendingBatch() {
 async function tick() {
   await expireEntitlements();
   const applied = await applyPendingBatch();
+  await touchOutageHeartbeat(prisma);
   if (applied > 0) console.log(`Applied ${applied} RADIUS projection(s)`);
 }
 
@@ -96,6 +98,13 @@ async function main() {
   }
 
   console.log("CAPTYN WiFi RADIUS SQL worker running");
+  const credit = await applyOutageCredit(prisma);
+  if (credit.credited) {
+    console.log(
+      `Credited ${credit.affectedEntitlements} active WiFi entitlement(s) for ${credit.creditedSeconds}s of CAPTYN-side downtime`
+    );
+  }
+
   for (;;) {
     try {
       await tick();

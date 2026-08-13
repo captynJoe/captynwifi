@@ -242,6 +242,7 @@ export async function restoreCaptynAdminTrustedSession(input: z.infer<typeof tru
   if (user.status !== "active") throw new Error("Your account is not active. Please contact support.");
   if (!user.isAdmin) throw new Error("Access denied. Admin privileges required.");
   if (!user.emailVerified) throw new Error("Admin account email must be verified before sign-in.");
+  if (config.adminPasswordOnlyLogin) return adminSessionResponse(user);
   if (!user.twoFactorEnabled) throw new Error("ADMIN_MFA_SETUP_REQUIRED");
 
   return adminSessionResponse(user, createTrustedDeviceToken(user));
@@ -310,6 +311,7 @@ export async function authenticateCaptynAdmin(input: z.infer<typeof adminLoginSc
   if (!validPassword) throw new Error("Invalid email or password");
   if (!user.isAdmin) throw new Error("Access denied. Admin privileges required.");
   if (!user.emailVerified) throw new Error("Admin account email must be verified before sign-in.");
+  if (config.adminPasswordOnlyLogin) return adminSessionResponse(user);
   if (!user.twoFactorEnabled) throw new Error("ADMIN_MFA_SETUP_REQUIRED");
   if (!user.twoFactorSecret) throw new Error("Two-factor authentication is not configured. Contact support.");
 

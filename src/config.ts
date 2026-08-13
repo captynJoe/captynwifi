@@ -49,6 +49,7 @@ export const config = {
   adminSessionSecret: readSessionSecret(),
   adminSessionMaxAgeSeconds: readPositiveInt("CAPTYN_WIFI_ADMIN_SESSION_MAX_AGE_SECONDS", 60 * 60 * 12),
   adminTrustedDeviceMaxAgeSeconds: readPositiveInt("CAPTYN_WIFI_ADMIN_TRUSTED_DEVICE_MAX_AGE_SECONDS", 60 * 60 * 24 * 30),
+  adminPasswordOnlyLogin: readBoolean("CAPTYN_WIFI_ADMIN_PASSWORD_ONLY_LOGIN"),
   totpEncryptionKey: process.env.TOTP_ENCRYPTION_KEY ?? "",
   defaultRadiusRealm: process.env.DEFAULT_RADIUS_REALM ?? "captyn-wifi",
   defaultAcctInterimSeconds: readPositiveInt("DEFAULT_ACCT_INTERIM_INTERVAL_SECONDS", 120),
@@ -56,6 +57,13 @@ export const config = {
     enabled: readBoolean("CAPTYN_WIFI_RADIUS_SQL_ENABLED", true),
     pollIntervalMs: readPositiveMs("CAPTYN_WIFI_RADIUS_SQL_POLL_INTERVAL_MS", 5000),
     batchSize: readPositiveInt("CAPTYN_WIFI_RADIUS_SQL_BATCH_SIZE", 25)
+  },
+  outageCredit: {
+    enabled: readBoolean("CAPTYN_WIFI_OUTAGE_CREDIT_ENABLED", true),
+    serviceName: process.env.CAPTYN_WIFI_OUTAGE_CREDIT_SERVICE?.trim() || "captyn-wifi-radius-worker",
+    graceSeconds: readPositiveInt("CAPTYN_WIFI_OUTAGE_CREDIT_GRACE_SECONDS", 180),
+    maxCreditSeconds: readPositiveInt("CAPTYN_WIFI_OUTAGE_CREDIT_MAX_SECONDS", 60 * 60 * 24),
+    batchSize: readPositiveInt("CAPTYN_WIFI_OUTAGE_CREDIT_BATCH_SIZE", 500)
   },
   routeros: {
     enabled: readBoolean("CAPTYN_WIFI_ROUTEROS_ENABLED"),
