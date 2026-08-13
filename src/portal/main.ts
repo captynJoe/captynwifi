@@ -367,7 +367,7 @@ function formatTimeLeft(remainingMs) {
 function updateAccessTimeLeft(remainingMs, deviceLimit?: number) {
   if (!accessTimeLeft) return;
   const deviceBadge = Number(deviceLimit) > 0
-    ? `<span class="time-left-devices">${esc(String(deviceLimit))} device${Number(deviceLimit) === 1 ? "" : "s"}</span>`
+    ? `<span class="time-left-devices">&middot; ${esc(String(deviceLimit))} device${Number(deviceLimit) === 1 ? "" : "s"}</span>`
     : "";
   accessTimeLeft.innerHTML = `<span class="time-left-label">Time left</span>${esc(formatTimeLeft(remainingMs))}${deviceBadge}`;
 }

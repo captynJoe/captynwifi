@@ -106,7 +106,7 @@
   font-family: var(--font-display); font-size: 25px; font-weight: 800;
 }
 .access-time-left .time-left-label { display: block; font-family: var(--font-sans, inherit); font-size: 10.5px; font-weight: 850; text-transform: uppercase; letter-spacing: .06em; opacity: .75; margin-bottom: 3px; }
-.access-time-left .time-left-devices { display: block; font-family: var(--font-sans, inherit); font-size: 11px; font-weight: 700; opacity: .8; margin-top: 4px; }
+.access-time-left .time-left-devices { display: inline; font-size: .56em; font-weight: 700; opacity: .85; margin-left: 8px; white-space: nowrap; }
 .login-details { margin: 0 20px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); overflow: hidden; }
 .login-details summary { min-height: 42px; display: flex; align-items: center; padding: 0 14px; cursor: pointer; color: var(--muted); font-size: 12.5px; font-weight: 800; }
 .login-details summary::marker { color: var(--brand-blue); }
