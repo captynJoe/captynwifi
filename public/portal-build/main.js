@@ -481,11 +481,17 @@ function planCard(plan) {
     const tone = planTone(plan);
     const badgeHtml = tone.badge ? '<span class="plan-badge">' + esc(tone.badge) + '</span>' : "";
     return `<button type="button" class="plan-card ${selected ? "selected" : ""} ${planCategory(plan) === "limited" ? "limited" : "standard"} ${isWelcomePlan(plan) ? "welcome" : ""}" data-plan-id="${esc(plan.id)}">
-    <span class="plan-top"><span><h3>${esc(plan.name)}</h3></span><span class="plan-duration">${duration(plan.durationSeconds)}</span></span>
+    <span class="plan-top">
+      <span><h3>${esc(plan.name)}</h3></span>
+      <span class="plan-top-badges">
+        <span class="plan-duration">${duration(plan.durationSeconds)}</span>
+        <span class="plan-devices">${esc(plan.deviceLimit)} device${Number(plan.deviceLimit) === 1 ? "" : "s"}</span>
+      </span>
+    </span>
     ${badgeHtml}
     <span><strong class="plan-price">${money(plan.priceKsh)}</strong></span>
     <span class="plan-caption">${esc(tone.pitch)}</span>
-    <span class="plan-meta"><span class="plan-speed ${speedTierClass(plan)}">${friendlyRate(plan.rateLimit)}</span><span>${esc(plan.deviceLimit)} device${Number(plan.deviceLimit) === 1 ? "" : "s"}</span></span>
+    <span class="plan-meta"><span class="plan-speed ${speedTierClass(plan)}">${friendlyRate(plan.rateLimit)}</span></span>
     <span class="plan-cta">Get ${duration(plan.durationSeconds)} →</span>
   </button>`;
 }
