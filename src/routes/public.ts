@@ -371,7 +371,19 @@ publicRouter.post("/access/free", async (req, res, next) => {
     if (!plan) return res.status(404).json({ error: "WiFi package not found or disabled." });
     if (plan.priceKsh !== 0) return res.status(400).json({ error: "This package requires payment." });
 
-    const activated = await activateFreePlan(plan, normalizeDeviceMac(parsed.deviceMac));
+    // Without a device MAC, freeAccessUsername() falls back to a random,
+    // untethered "free-<random>" username -- completely bypassing per-device
+    // tracking, including the one-time-ever check in activateFreePlan. That's
+    // reachable by anyone who hits this endpoint without the mac= param the
+    // real hotspot redirect carries -- which, since captyn.shop is a public
+    // domain, isn't even limited to people on the WiFi. Free access only
+    // makes sense tied to a real device, so require one.
+    const deviceMac = normalizeDeviceMac(parsed.deviceMac);
+    if (!deviceMac) {
+      return res.status(400).json({ error: "Free access needs to come from the CAPTYN WiFi sign-in page so it can be tied to your device. Reconnect to the WiFi network and try again from there." });
+    }
+
+    const activated = await activateFreePlan(plan, deviceMac);
     if (activated.blocked) {
       return res.status(400).json({
         error: "This device already has active free WiFi access. It needs to expire before you can claim it again.",
