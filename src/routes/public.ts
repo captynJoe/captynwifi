@@ -264,18 +264,18 @@ async function activateFreePlan(plan: WifiPlan, deviceMac: string | null) {
   const sourceRef = sourceReference();
 
   return prisma.$transaction(async (tx) => {
-    // Free plans (e.g. "CAPTYN Welcome") used to be re-claimable indefinitely
-    // while already active -- each claim just tacked its duration onto the
-    // existing entitlement's expiry, for free, forever. This blocks that: a
-    // device with currently-active free access can't claim more until it
-    // actually expires. Checked inside the transaction (not in the route
-    // handler) so two near-simultaneous claims from the same device -- e.g.
-    // a retried request -- can't both slip through before either commits.
-    const existingActive = await tx.wifiEntitlement.findFirst({
-      where: { username, status: "active", expiresAt: { gt: startsAt } }
+    // "CAPTYN Welcome" is meant to be a one-time-ever welcome offer per
+    // device, not a daily freebie -- so this blocks on *any* prior claim
+    // for this device, active or long expired, not just a currently-active
+    // one. Checked inside the transaction (not in the route handler) so two
+    // near-simultaneous claims from the same device -- e.g. a retried
+    // request -- can't both slip through before either commits.
+    const priorFreeClaim = await tx.wifiEntitlement.findFirst({
+      where: { username },
+      orderBy: { expiresAt: "desc" }
     });
-    if (existingActive) {
-      return { blocked: true as const, existingActive };
+    if (priorFreeClaim) {
+      return { blocked: true as const, existingActive: priorFreeClaim };
     }
 
     const intent = await tx.wifiPaymentIntent.create({

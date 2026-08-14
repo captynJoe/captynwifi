@@ -155,6 +155,15 @@
 .payment-modal-icon.spin { animation: spin .8s linear infinite; }
 .payment-modal-icon.ok { border: none; background: var(--green); box-shadow: 0 0 0 8px var(--green-soft); }
 .payment-modal-icon.bad { border: none; background: var(--red); box-shadow: 0 0 0 8px var(--red-soft); }
+.payment-modal-icon.laugh-cry {
+  width: auto; height: auto; border: none; background: none;
+  font-size: 44px; line-height: 1; letter-spacing: 2px;
+  animation: laugh-cry-wobble 1.1s ease-in-out infinite;
+}
+@keyframes laugh-cry-wobble {
+  0%, 100% { transform: rotate(-6deg) translateY(0); }
+  50% { transform: rotate(6deg) translateY(-5px); }
+}
 .payment-modal-card h2 { font-family: var(--font-display); font-size: 20px; font-weight: 800; margin: 0; }
 .payment-modal-message { margin: 0; color: var(--muted); font-weight: 600; line-height: 1.5; }
 .payment-modal-cancel, .payment-modal-retry { width: 100%; }

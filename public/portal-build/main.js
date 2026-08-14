@@ -273,11 +273,14 @@ function setConnectState(statusEl, formEl, state, message) {
 }
 function showPaymentModal(kind, title, message) {
     paymentModal.classList.remove("hidden");
-    paymentModalIcon.className = `payment-modal-icon ${kind === "connecting" ? "spin" : kind === "ok" ? "ok" : "bad"}`;
+    const iconClass = kind === "connecting" ? "spin" : kind === "ok" ? "ok" : kind === "welcome-used" ? "laugh-cry" : "bad";
+    paymentModalIcon.className = `payment-modal-icon ${iconClass}`;
+    paymentModalIcon.textContent = kind === "welcome-used" ? "\u{1F923}\u{1F62D}" : "";
     paymentModalTitle.textContent = title;
     paymentModalMessage.textContent = message || "";
     paymentModalCancelBtn.classList.toggle("hidden", kind !== "connecting");
-    paymentModalRetryBtn.classList.toggle("hidden", kind !== "bad");
+    paymentModalRetryBtn.classList.toggle("hidden", kind !== "bad" && kind !== "welcome-used");
+    paymentModalRetryBtn.textContent = kind === "welcome-used" ? "Browse packages →" : "Try Again";
 }
 function hidePaymentModal() {
     paymentModal.classList.add("hidden");
@@ -945,18 +948,27 @@ paymentForm.addEventListener("submit", async (event) => {
             });
             const payload = await response.json().catch(() => ({}));
             if (!response.ok) {
-                // Free access already active on this device -- the API rejects the
-                // re-claim but still hands back the existing entitlement, so show
-                // the customer their current access instead of a dead-end error.
+                // "CAPTYN Welcome" only blocks on a prior claim (see activateFreePlan),
+                // active or long expired -- the API hands back whichever entitlement
+                // triggered the block either way, so tell those two cases apart here:
+                // still active means reconnect them to what they already have; a
+                // long-expired one means they already used their one-time welcome
+                // offer and this is a dead end, not something to reconnect to.
                 if (response.status === 400 && payload?.entitlement) {
                     payButton.disabled = false;
                     payButton.textContent = paymentActionLabel(plan);
                     setConnectState(paymentStatus, null, "", "");
-                    showConnectedPanel(payload.entitlement, {
-                        heading: "Free access already active",
-                        message: "This device already has active free access — reconnecting you now.",
-                        hideCredentials: Boolean(state.hotspot?.login)
-                    });
+                    const stillActive = new Date(payload.entitlement.expiresAt).getTime() > Date.now();
+                    if (stillActive) {
+                        showConnectedPanel(payload.entitlement, {
+                            heading: "Free access already active",
+                            message: "This device already has active free access — reconnecting you now.",
+                            hideCredentials: Boolean(state.hotspot?.login)
+                        });
+                    }
+                    else {
+                        showPaymentModal("welcome-used", "Nah bro \u{1F602}\u{1F62D}", "Someone already used your welcome access on this device. It's a one-time thing — grab one of the packages below instead.");
+                    }
                     return;
                 }
                 throw new Error(payload.error || "Unable to start free access.");
