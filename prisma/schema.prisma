@@ -184,6 +184,25 @@ model WifiGovernorEvent {
   @@index([username, createdAt])
 }
 
+model WifiDynamicPlanEvent {
+  id                   String   @id @default(uuid())
+  siteId               String
+  state                String
+  dryRun               Boolean  @default(true)
+  avgUtilizationScore  Float    @default(0)
+  sampleCount          Int      @default(0)
+  windowStartsAt       DateTime
+  windowEndsAt         DateTime
+  planId               String?
+  durationSeconds      Int?
+  priceKsh             Int?
+  rateLimit            String?
+  published            Boolean  @default(false)
+  createdAt            DateTime @default(now())
+
+  @@index([siteId, createdAt])
+}
+
 
 model WifiServiceHeartbeat {
   service    String   @id

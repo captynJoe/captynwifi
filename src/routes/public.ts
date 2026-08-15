@@ -10,6 +10,12 @@ import { applyRadiusProjectionRows } from "../services/radiusSqlApply.js";
 
 export const publicRouter = Router();
 
+// "captyn_housing"-sourced plans exist only to record housing-forwarded
+// resident payments, and stay out of this list. "captyn_dynamic" plans are
+// the traffic-priced rotating offer from DynamicPlanEngine -- purchasable
+// like any admin-curated plan, just machine-managed.
+const PUBLICLY_PURCHASABLE_SOURCES = ["captyn_admin", "captyn_dynamic"];
+
 const stkRequestSchema = z.object({
   planId: z.string().min(1),
   phone: z.string().min(7),
@@ -347,10 +353,7 @@ publicRouter.get("/sites", async (_req, res, next) => {
       orderBy: { name: "asc" },
       include: {
         plans: {
-          // "captyn_housing"-sourced plans exist only to record housing-forwarded
-          // resident payments; they're not meant to be independently purchasable
-          // through the walk-in portal at their (often discounted) resident price.
-          where: { enabled: true, source: "captyn_admin" },
+          where: { enabled: true, source: { in: PUBLICLY_PURCHASABLE_SOURCES } },
           orderBy: [{ priceKsh: "asc" }, { durationSeconds: "asc" }, { name: "asc" }]
         }
       }
@@ -541,7 +544,7 @@ publicRouter.post("/payments/mpesa/stk", async (req, res, next) => {
     if (!phone) return res.status(400).json({ error: "Enter a valid Safaricom phone number." });
 
     const plan = await prisma.wifiPlan.findFirst({
-      where: { id: parsed.planId, enabled: true, source: "captyn_admin" },
+      where: { id: parsed.planId, enabled: true, source: { in: PUBLICLY_PURCHASABLE_SOURCES } },
       include: { site: true }
     });
     if (!plan) return res.status(404).json({ error: "WiFi package not found or disabled." });

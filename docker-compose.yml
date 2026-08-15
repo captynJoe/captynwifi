@@ -65,6 +65,8 @@ services:
     environment:
       CAPTYN_WIFI_GOVERNOR_ENABLED: ${CAPTYN_WIFI_GOVERNOR_ENABLED:-true}
       CAPTYN_WIFI_GOVERNOR_DRY_RUN: ${CAPTYN_WIFI_GOVERNOR_DRY_RUN:-true}
+      CAPTYN_WIFI_DYNAMIC_PLAN_ENABLED: ${CAPTYN_WIFI_DYNAMIC_PLAN_ENABLED:-false}
+      CAPTYN_WIFI_DYNAMIC_PLAN_DRY_RUN: ${CAPTYN_WIFI_DYNAMIC_PLAN_DRY_RUN:-true}
     volumes:
       - .:/app
       - wifi_governor_node_modules:/app/node_modules

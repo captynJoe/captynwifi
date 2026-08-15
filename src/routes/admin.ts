@@ -886,6 +886,30 @@ adminRouter.get("/governor-status", async (_req, res, next) => {
   }
 });
 
+adminRouter.get("/dynamic-plan-status", async (_req, res, next) => {
+  try {
+    const [latest, recentEvents, dynamicPlans] = await Promise.all([
+      prisma.wifiDynamicPlanEvent.findFirst({ orderBy: { createdAt: "desc" } }),
+      prisma.wifiDynamicPlanEvent.findMany({ orderBy: { createdAt: "desc" }, take: 60 }),
+      prisma.wifiPlan.findMany({ where: { source: "captyn_dynamic" }, include: { site: true } })
+    ]);
+
+    return sendData(res, {
+      generatedAt: new Date(),
+      config: {
+        enabled: config.dynamicPlan.enabled,
+        dryRun: config.dynamicPlan.dryRun,
+        rotationMs: config.dynamicPlan.rotationMs
+      },
+      latest,
+      dynamicPlans,
+      recentEvents
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 adminRouter.get("/accounting-sessions", async (_req, res, next) => {
   try {
     const rows = await prisma.$queryRaw<Array<{

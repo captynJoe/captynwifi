@@ -87,6 +87,12 @@ export const config = {
     enterCriticalMs: readPositiveMs("CAPTYN_WIFI_GOVERNOR_ENTER_CRITICAL_MS", 30000),
     recoverMs: readPositiveMs("CAPTYN_WIFI_GOVERNOR_RECOVER_MS", 180000)
   },
+  dynamicPlan: {
+    enabled: readBoolean("CAPTYN_WIFI_DYNAMIC_PLAN_ENABLED"),
+    dryRun: readBoolean("CAPTYN_WIFI_DYNAMIC_PLAN_DRY_RUN", true),
+    rotationMs: readPositiveMs("CAPTYN_WIFI_DYNAMIC_PLAN_ROTATION_MS", 60 * 60 * 1000),
+    externalPackageId: "dynamic-offer"
+  },
   mpesa: {
     enabled: readBoolean("CAPTYN_WIFI_MPESA_STK_ENABLED", readBoolean("MPESA_STK_ENABLED")),
     environment: readMpesaValue("MPESA_ENVIRONMENT").toLowerCase() === "sandbox" ? "sandbox" : "production",

@@ -177,7 +177,7 @@ export class WifiDynamicGovernor {
   private candidateState: PressureState = "GREEN";
   private candidateSince = Date.now();
 
-  async tick() {
+  async tick(): Promise<{ utilizationScore: number }> {
     const samples = await readActiveAccountingRows();
     const throughput = this.calculateThroughput(samples);
     const totals = throughput.reduce(
@@ -217,6 +217,8 @@ export class WifiDynamicGovernor {
     console.log(
       `[WifiGovernor] state=${nextState} active=${samples.length} down=${activeDemandMbps.toFixed(2)}Mbps util=${utilizationScore.toFixed(2)} dryRun=${config.governor.dryRun}`
     );
+
+    return { utilizationScore };
   }
 
   private calculateThroughput(samples: AccountingSample[]): ThroughputSample[] {
