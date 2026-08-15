@@ -503,7 +503,7 @@ function promotedBadge(plan) {
   const name = String(plan.name || "").toLowerCase();
   if (name === "cruise 4 hr") return "Recommended";
   if (name === "cruise weekly") return "Best value";
-  if (name === "gulfstream hour") return "Top speed";
+  if (name === "gulfstream 3 hr") return "Top speed";
   return "";
 }
 function planTone(plan) {
@@ -511,9 +511,12 @@ function planTone(plan) {
   const badge = promotedBadge(plan);
   if (isWelcomePlan(plan)) return { badge, pitch: "Free welcome access while support checks the live network." };
   if (planCategory(plan) === "limited") return { badge, pitch: "Quick access for chats, updates, and light browsing." };
+  if (name.includes("epl")) return { badge, pitch: "Built for match day — smooth HD streaming, no buffering." };
+  if (name.includes("highspeed") && name.includes("monthly")) return { badge, pitch: "Our fastest tier, all month long — built for heavy daily use across multiple devices." };
   if (name.includes("gulfstream")) return { badge, pitch: "Top-speed access for heavy downloads, uploads, and urgent work." };
   if (name.includes("highspeed")) return { badge, pitch: "Faster access for calls, uploads, and heavier browsing." };
   if (name.includes("cruise")) return { badge, pitch: "Balanced access for browsing, TikTok, messaging and everyday use." };
+  if (name.endsWith(" go")) return { badge, pitch: "Quick, flexible access for getting things done on the go." };
   if (name.includes("starter")) return { badge, pitch: "Low-cost access for simple browsing and messaging." };
   if (name.includes("monthly")) return { badge, pitch: "Resident-friendly access for steady everyday use." };
   return { badge, pitch: "Clear speed and time for everyday browsing." };
@@ -891,6 +894,12 @@ function showConnectedPanel(entitlement: Entitlement, { heading, skipAutoConnect
 extendPeriodBtn?.addEventListener("click", () => {
   if (workspaceEl) workspaceEl.classList.remove("hidden");
   resetPaymentAttempt();
+  // Always land on "all" here rather than whatever tier happens to still be
+  // selected from earlier in the session (e.g. the tier they originally
+  // bought) -- someone adding time wants to see everything available, not
+  // get funneled back into just one speed tier.
+  state.activeNeed = "all";
+  renderPackageBrowser();
   plansEl.scrollIntoView({ behavior: "smooth", block: "start" });
 });
 
