@@ -455,6 +455,21 @@ function planCategory(plan) {
 function isWelcomePlan(plan) {
     return String(plan.name || "").toLowerCase() === "captyn welcome";
 }
+// The stored plan name (e.g. "Gulfstream 3 HR") is a fixed baseline label,
+// but with dynamic pricing its actual speed/duration moves with traffic --
+// keeping that name on screen means the title itself can claim a tier the
+// plan isn't currently in. Displayed title is regenerated from the plan's
+// live speed tier + duration instead. Only non-speed-tiered plans (free
+// access, occasion-based like EPL match day) keep their original name,
+// since those aren't claiming anything about current speed.
+function displayPlanName(plan) {
+    if (isWelcomePlan(plan) || planCategory(plan) === "limited")
+        return plan.name;
+    if (String(plan.name || "").toLowerCase().includes("epl"))
+        return plan.name;
+    const tier = speedTierForPlan(plan);
+    return `${tier ? tier.label : "Standard"} · ${duration(plan.durationSeconds)}`;
+}
 function promotedBadge(plan) {
     const name = String(plan.name || "").toLowerCase();
     if (name === "cruise 4 hr")
@@ -504,7 +519,7 @@ function planCard(plan) {
     const badgeHtml = tone.badge ? '<span class="plan-badge">' + esc(tone.badge) + '</span>' : "";
     return `<button type="button" class="plan-card ${selected ? "selected" : ""} ${planCategory(plan) === "limited" ? "limited" : "standard"} ${isWelcomePlan(plan) ? "welcome" : ""}" data-plan-id="${esc(plan.id)}">
     <span class="plan-top">
-      <span><h3>${esc(plan.name)}</h3></span>
+      <span><h3>${esc(displayPlanName(plan))}</h3></span>
       <span class="plan-top-badges">
         <span class="plan-duration">${duration(plan.durationSeconds)}</span>
         <span class="plan-devices">${esc(plan.deviceLimit)} device${Number(plan.deviceLimit) === 1 ? "" : "s"}</span>
@@ -574,7 +589,7 @@ function upgradeCard(plan) {
     const viewTier = tier ? `<button type="button" class="upgrade-view" data-view-speed-key="${esc(tier.key)}">View ${esc(tier.range)}</button>` : "";
     return `<div class="upgrade-card">
     <button type="button" class="upgrade-main" data-plan-id="${esc(upgrade.id)}">
-      <span><em>Compare</em><strong>${esc(upgrade.name)}</strong></span>
+      <span><em>Compare</em><strong>${esc(displayPlanName(upgrade))}</strong></span>
       <span>+${money(extra)} for ${esc(upgradeReason(plan, upgrade))}</span>
     </button>
     ${viewTier}
@@ -595,7 +610,7 @@ function renderSelectedPlan() {
         return;
     }
     const isFree = Number(plan.priceKsh || 0) === 0;
-    checkoutTitle.textContent = plan.name;
+    checkoutTitle.textContent = displayPlanName(plan);
     checkoutPrice.textContent = money(plan.priceKsh);
     planIdInput.value = plan.id;
     payButton.disabled = false;
