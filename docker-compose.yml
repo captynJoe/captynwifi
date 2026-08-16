@@ -10,6 +10,10 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set}
     volumes:
       - wifi_postgres_data:/var/lib/postgresql/data
+    cpus: ${CAPTYN_WIFI_DB_CPUS:-0.25}
+    mem_limit: ${CAPTYN_WIFI_DB_MEM_LIMIT:-512m}
+    memswap_limit: ${CAPTYN_WIFI_DB_MEMSWAP_LIMIT:-768m}
+    mem_reservation: ${CAPTYN_WIFI_DB_MEM_RESERVATION:-128m}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U captyn_wifi -d captyn_wifi"]
       interval: 10s
@@ -31,6 +35,10 @@ services:
       wifi_db:
         condition: service_healthy
     restart: unless-stopped
+    cpus: ${CAPTYN_WIFI_API_CPUS:-0.35}
+    mem_limit: ${CAPTYN_WIFI_API_MEM_LIMIT:-384m}
+    memswap_limit: ${CAPTYN_WIFI_API_MEMSWAP_LIMIT:-512m}
+    mem_reservation: ${CAPTYN_WIFI_API_MEM_RESERVATION:-192m}
     labels:
       autoheal: "true"
     healthcheck:
@@ -52,6 +60,10 @@ services:
     depends_on:
       wifi_db:
         condition: service_healthy
+    cpus: ${CAPTYN_WIFI_RADIUS_WORKER_CPUS:-0.25}
+    mem_limit: ${CAPTYN_WIFI_RADIUS_WORKER_MEM_LIMIT:-256m}
+    memswap_limit: ${CAPTYN_WIFI_RADIUS_WORKER_MEMSWAP_LIMIT:-384m}
+    mem_reservation: ${CAPTYN_WIFI_RADIUS_WORKER_MEM_RESERVATION:-128m}
     restart: unless-stopped
 
   wifi_governor:
@@ -90,6 +102,10 @@ services:
       wifi_db:
         condition: service_healthy
     restart: unless-stopped
+    cpus: ${CAPTYN_WIFI_FREERADIUS_CPUS:-0.20}
+    mem_limit: ${CAPTYN_WIFI_FREERADIUS_MEM_LIMIT:-128m}
+    memswap_limit: ${CAPTYN_WIFI_FREERADIUS_MEMSWAP_LIMIT:-192m}
+    mem_reservation: ${CAPTYN_WIFI_FREERADIUS_MEM_RESERVATION:-64m}
     labels:
       autoheal: "true"
     healthcheck:
