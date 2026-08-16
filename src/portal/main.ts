@@ -507,8 +507,24 @@ function promotedBadge(plan) {
   const name = String(plan.name || "").toLowerCase();
   if (name === "cruise 4 hr") return "Recommended";
   if (name === "cruise weekly") return "Best value";
-  if (name === "gulfstream 3 hr") return "Top speed";
+  // "Top speed" reflects the plan's *current* dynamic speed tier, not a
+  // fixed name -- whichever plans are actually fastest right now earn it,
+  // not whichever plan happened to be fastest at its baseline price.
+  if (speedTierForPlan(plan)?.key === "gulfstream") return "Top speed";
   return "";
+}
+// Pitch copy keyed off the plan's current speed tier (same bucketing the
+// speed tabs use) instead of its name -- a plan's rateLimit moves with
+// traffic now, so a name-based pitch ("Top-speed access...") can end up
+// describing a plan that's actually been throttled into a slower tier, or
+// vice versa. Only non-speed claims (occasion, price tier) stay name-based.
+function speedTierPitch(plan) {
+  const tierKey = speedTierForPlan(plan)?.key;
+  if (tierKey === "gulfstream") return "Top-speed access for heavy downloads, uploads, and urgent work.";
+  if (tierKey === "fast") return "Faster access for calls, uploads, and heavier browsing.";
+  if (tierKey === "everyday") return "Balanced access for browsing, TikTok, messaging and everyday use.";
+  if (tierKey === "basic") return "Quick access for chats, updates, and light browsing.";
+  return "Clear speed and time for everyday browsing.";
 }
 function planTone(plan) {
   const name = String(plan.name || "").toLowerCase();
@@ -516,14 +532,8 @@ function planTone(plan) {
   if (isWelcomePlan(plan)) return { badge, pitch: "Free welcome access while support checks the live network." };
   if (planCategory(plan) === "limited") return { badge, pitch: "Quick access for chats, updates, and light browsing." };
   if (name.includes("epl")) return { badge, pitch: "Built for match day — smooth HD streaming, no buffering." };
-  if (name.includes("highspeed") && name.includes("monthly")) return { badge, pitch: "Our fastest tier, all month long — built for heavy daily use across multiple devices." };
-  if (name.includes("gulfstream")) return { badge, pitch: "Top-speed access for heavy downloads, uploads, and urgent work." };
-  if (name.includes("highspeed")) return { badge, pitch: "Faster access for calls, uploads, and heavier browsing." };
-  if (name.includes("cruise")) return { badge, pitch: "Balanced access for browsing, TikTok, messaging and everyday use." };
-  if (name.endsWith(" go")) return { badge, pitch: "Quick, flexible access for getting things done on the go." };
-  if (name.includes("starter")) return { badge, pitch: "Low-cost access for simple browsing and messaging." };
-  if (name.includes("monthly")) return { badge, pitch: "Resident-friendly access for steady everyday use." };
-  return { badge, pitch: "Clear speed and time for everyday browsing." };
+  if (name.includes("monthly")) return { badge, pitch: `${speedTierPitch(plan)} Billed for the full month.` };
+  return { badge, pitch: speedTierPitch(plan) };
 }
 function planCard(plan) {
   const selected = plan.id === state.selectedPlanId;
