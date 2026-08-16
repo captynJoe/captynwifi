@@ -455,13 +455,31 @@ function planCategory(plan) {
 function isWelcomePlan(plan) {
     return String(plan.name || "").toLowerCase() === "captyn welcome";
 }
+// A plan's family (mirrors classifyFamily() in dynamicPlanEngine.ts server-
+// side, kept in sync by hand since the backend and this browser bundle
+// don't share a module) is its fixed product identity -- Everyday/Fast/
+// Gulfstream/Flash each own one value axis the governor is allowed to
+// flex, so the family a plan belongs to doesn't change just because
+// traffic pushed its current speed into a different Mbps range this hour.
+function classifyFamily(name) {
+    const n = String(name || "").toLowerCase();
+    if (n.includes("gulfstream"))
+        return "gulfstream";
+    if (n.includes("highspeed"))
+        return "fast";
+    if (n.includes("epl"))
+        return "occasion";
+    if (n.includes("flash"))
+        return "flash";
+    return "everyday";
+}
 // The stored plan name (e.g. "Gulfstream 3 HR") is a fixed baseline label,
 // but with dynamic pricing its actual speed/duration moves with traffic --
 // keeping that name on screen means the title itself can claim a tier the
 // plan isn't currently in. Displayed title is regenerated from the plan's
-// live speed tier + duration instead. Only non-speed-tiered plans (free
-// access, occasion-based like EPL match day) keep their original name,
-// since those aren't claiming anything about current speed.
+// family + duration instead. Only non-speed-tiered plans (free access,
+// occasion-based like EPL match day) keep their original name, since those
+// aren't claiming anything about current speed.
 function displayPlanName(plan) {
     if (isWelcomePlan(plan) || planCategory(plan) === "limited")
         return plan.name;
@@ -496,8 +514,8 @@ function speedTierPitch(plan) {
         return "Faster access for calls, uploads, and heavier browsing.";
     if (tierKey === "everyday")
         return "Balanced access for browsing, TikTok, messaging and everyday use.";
-    if (tierKey === "basic")
-        return "Quick access for chats, updates, and light browsing.";
+    if (tierKey === "flash")
+        return "Quick, affordable access for short sessions.";
     return "Clear speed and time for everyday browsing.";
 }
 function planTone(plan) {
@@ -628,12 +646,15 @@ function comparePlansByPrice(a, b) {
         return durationDelta;
     return String(a?.name || "").localeCompare(String(b?.name || ""));
 }
+// Tabs group by product family, not live Mbps -- a family is a fixed
+// identity (see classifyFamily), so a tab only goes empty if the catalog
+// genuinely has no plans of that family, not because traffic shifted.
 const SPEED_TIERS = [
-    { key: "all", label: "All", range: "All speeds", title: "All packages", description: "" },
-    { key: "basic", label: "Basic", range: "1-5 Mbps", title: "Basic", description: "", min: 1, max: 5 },
-    { key: "everyday", label: "Everyday", range: "6-12 Mbps", title: "Everyday", description: "", min: 6, max: 12 },
-    { key: "fast", label: "Fast", range: "13-20 Mbps", title: "Fast", description: "", min: 13, max: 20 },
-    { key: "gulfstream", label: "Gulfstream", range: "21+ Mbps", title: "Gulfstream", description: "", min: 21 }
+    { key: "all", label: "All", range: "All packages", title: "All packages", description: "" },
+    { key: "flash", label: "Flash", range: "Cheap & quick", title: "Flash", description: "" },
+    { key: "everyday", label: "Everyday", range: "Balanced", title: "Everyday", description: "" },
+    { key: "fast", label: "Fast", range: "High speed", title: "Fast", description: "" },
+    { key: "gulfstream", label: "Gulfstream", range: "Top speed", title: "Gulfstream", description: "" }
 ];
 function isSupportOnlyPlan(plan) {
     const name = String(plan.name || "").trim().toLowerCase();
@@ -655,34 +676,19 @@ function activeSpeedTierConfig() {
 function isNeedKey(value) {
     return SPEED_TIERS.some((tier) => tier.key === value);
 }
+// "occasion" plans (EPL match-day) don't get their own tab -- fold into
+// Everyday for grouping purposes; displayPlanName still shows their real
+// name, this only affects which tab they're browsable under.
 function speedTierForPlan(plan) {
-    const { download } = rateParts(plan.rateLimit);
-    if (!download)
-        return null;
-    return SPEED_TIERS.find((tier) => {
-        if (tier.key === "all")
-            return false;
-        if (typeof tier.min === "number" && download < tier.min)
-            return false;
-        if (typeof tier.max === "number" && download > tier.max)
-            return false;
-        return true;
-    }) || null;
+    const family = classifyFamily(plan.name);
+    const key = family === "occasion" ? "everyday" : family;
+    return SPEED_TIERS.find((tier) => tier.key === key) || null;
 }
 function plansForSpeedTier(tier) {
     const plans = customerPlans();
     if (tier.key === "all")
         return plans;
-    return plans.filter((plan) => {
-        const { download } = rateParts(plan.rateLimit);
-        if (!download)
-            return false;
-        if (typeof tier.min === "number" && download < tier.min)
-            return false;
-        if (typeof tier.max === "number" && download > tier.max)
-            return false;
-        return true;
-    });
+    return plans.filter((plan) => speedTierForPlan(plan)?.key === tier.key);
 }
 function visibleSpeedTiers() {
     // Every plan's speed moves together with traffic now, so a tab that's

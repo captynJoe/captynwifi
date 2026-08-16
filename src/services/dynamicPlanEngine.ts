@@ -108,9 +108,60 @@ function dampen(multiplier: number, intensity: number): number {
   return 1 + intensity * (multiplier - 1);
 }
 
+// Every plan has a family, inferred from its name (no admin field -- kept
+// automatic on purpose). Each family owns exactly one primary value axis;
+// every other axis is locked at baseline. Without this, a single QUIET
+// rotation could discount the price, extend the duration, *and* boost the
+// speed of the same short plan all at once -- three unrelated gifts
+// stacked on one purchase instead of one coherent offer. Only matters for
+// FULL/STRONG duration buckets (<=24h); MILD/SMALL/MINIMAL buckets ignore
+// family entirely and keep the existing duration-only decay, which already
+// lands close to "speed-biased, price-muted" naturally as duration grows.
+export type Family = "everyday" | "fast" | "gulfstream" | "flash" | "occasion";
+
+export function classifyFamily(name: string): Family {
+  const n = name.toLowerCase();
+  if (n.includes("gulfstream")) return "gulfstream";
+  if (n.includes("highspeed")) return "fast";
+  if (n.includes("epl")) return "occasion"; // match-day plans: no dynamic movement at all
+  if (n.includes("flash")) return "flash";
+  return "everyday"; // Cruise/Basic/Go/8 Balls/Standard/etc. -- the default
+}
+
+// FULL-bucket (<=8h) ceiling intensity per family/tier. STRONG bucket
+// (8-24h) further dampens this by BUCKET_INTENSITY.STRONG, same as the
+// rest of the duration-decay system.
+function familyAxisIntensity(family: Family, tier: Tier): { price: number; rate: number; duration: number } {
+  switch (family) {
+    case "flash":
+      return { price: 1, rate: 0.15, duration: 0 };
+    case "fast":
+      return { price: 0.1, rate: 1, duration: 0 };
+    case "gulfstream":
+      return { price: 0, rate: 1.3, duration: 0 };
+    case "occasion":
+      return { price: 0, rate: 0, duration: 0 };
+    case "everyday":
+    default:
+      if (tier === "QUIET") return { price: 0, rate: 0, duration: 1 };
+      if (tier === "YELLOW" || tier === "RED" || tier === "CRITICAL") return { price: 1, rate: 0, duration: 0 };
+      return { price: 0, rate: 0, duration: 0 }; // GREEN: no movement either way
+  }
+}
+
 export function scaleBaselinePlan(baseline: BaselinePlan, tier: Tier): ScaledSpec {
   const multiplier = TIER_MULTIPLIERS[tier];
-  const intensity = BUCKET_INTENSITY[durationBucketFor(baseline.durationSeconds)];
+  const bucket = durationBucketFor(baseline.durationSeconds);
+
+  let intensity: { price: number; rate: number; duration: number };
+  if (bucket === "FULL" || bucket === "STRONG") {
+    const primary = familyAxisIntensity(classifyFamily(baseline.name), tier);
+    const damp = BUCKET_INTENSITY[bucket];
+    intensity = { price: primary.price * damp.price, rate: primary.rate * damp.rate, duration: primary.duration * damp.duration };
+  } else {
+    intensity = BUCKET_INTENSITY[bucket];
+  }
+
   const durationMultiplier =
     baseline.durationSeconds >= DURATION_SCALE_MAX_BASELINE_SECONDS ? 1 : dampen(multiplier.duration, intensity.duration);
   return {
