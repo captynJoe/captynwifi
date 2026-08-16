@@ -2,7 +2,7 @@ import "dotenv/config";
 import { config } from "../config.js";
 import { prisma } from "../prisma.js";
 import { applyRadiusProjectionRows } from "../services/radiusSqlApply.js";
-import { applyOutageCredit, touchOutageHeartbeat } from "../services/outageCredit.js";
+import { applyOutageCredit, evaluateAccountingOutage, touchOutageHeartbeat } from "../services/outageCredit.js";
 
 async function applyProjection(id: string) {
   await prisma.$transaction(async (tx) => {
@@ -88,6 +88,14 @@ async function tick() {
   await expireEntitlements();
   const applied = await applyPendingBatch();
   await touchOutageHeartbeat(prisma);
+
+  const accountingCredit = await evaluateAccountingOutage(prisma);
+  if (accountingCredit.credited) {
+    console.log(
+      `Credited ${accountingCredit.affectedEntitlements} active WiFi entitlement(s) for ${accountingCredit.creditedSeconds}s of silent RADIUS accounting (network path likely down)`
+    );
+  }
+
   if (applied > 0) console.log(`Applied ${applied} RADIUS projection(s)`);
 }
 

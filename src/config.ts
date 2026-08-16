@@ -62,6 +62,7 @@ export const config = {
     enabled: readBoolean("CAPTYN_WIFI_OUTAGE_CREDIT_ENABLED", true),
     serviceName: process.env.CAPTYN_WIFI_OUTAGE_CREDIT_SERVICE?.trim() || "captyn-wifi-radius-worker",
     graceSeconds: readPositiveInt("CAPTYN_WIFI_OUTAGE_CREDIT_GRACE_SECONDS", 180),
+    accountingGraceSeconds: readPositiveInt("CAPTYN_WIFI_OUTAGE_CREDIT_ACCOUNTING_GRACE_SECONDS", 600),
     maxCreditSeconds: readPositiveInt("CAPTYN_WIFI_OUTAGE_CREDIT_MAX_SECONDS", 60 * 60 * 24),
     batchSize: readPositiveInt("CAPTYN_WIFI_OUTAGE_CREDIT_BATCH_SIZE", 500)
   },
