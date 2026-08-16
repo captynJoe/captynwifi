@@ -7,11 +7,26 @@ type HeartbeatRow = { lastSeenAt: Date };
 
 type CreditInsertRow = { id: string };
 
-type CreditSummary = {
-  credited: boolean;
+type PauseSummary = {
+  paused: boolean;
+  pausedCount: number;
   outageSeconds: number;
-  creditedSeconds: number;
-  affectedEntitlements: number;
+};
+
+type ResumeSummary = {
+  resumed: number;
+  totalCreditedSeconds: number;
+};
+
+type EntitlementForCredit = {
+  id: string;
+  customerPhone: string;
+  username: string;
+  cleartextSecret: string;
+  deviceMac: string | null;
+  expiresAt: Date;
+  rateLimit: string | null;
+  deviceLimit: number;
 };
 
 export const ACCOUNTING_OUTAGE_SERVICE = "captyn-wifi-radius-accounting";
@@ -20,6 +35,10 @@ export type AccountingOutageDecision =
   | { type: "advance"; checkpoint: Date }
   | { type: "healthy" }
   | { type: "credit"; creditedSeconds: number; outageStartedAt: Date; nextCheckpoint: Date };
+
+export type ResumeDecision =
+  | { type: "still-paused" }
+  | { type: "resume"; creditedSeconds: number; reconnectedAt: Date };
 
 function secondsBetween(start: Date, end: Date) {
   return Math.max(0, Math.floor((end.getTime() - start.getTime()) / 1000));
@@ -48,6 +67,32 @@ export function decideAccountingOutageAction(
   return { type: "credit", creditedSeconds: staleSeconds, outageStartedAt: checkpoint, nextCheckpoint: now };
 }
 
+// Pure decision function for the per-entitlement resume sweep. `reconnectedAt`
+// is that specific username's own next radacct session start after it was
+// paused -- not any fleet-wide signal. A customer who never reconnects is
+// force-released after maxCreditSeconds so they don't block expiry forever.
+export function decideResumeAction(
+  pausedAt: Date,
+  reconnectedAt: Date | null,
+  now: Date,
+  maxCreditSeconds: number
+): ResumeDecision {
+  if (reconnectedAt) {
+    return {
+      type: "resume",
+      creditedSeconds: Math.min(secondsBetween(pausedAt, reconnectedAt), maxCreditSeconds),
+      reconnectedAt
+    };
+  }
+
+  const elapsed = secondsBetween(pausedAt, now);
+  if (elapsed > maxCreditSeconds) {
+    return { type: "resume", creditedSeconds: maxCreditSeconds, reconnectedAt: now };
+  }
+
+  return { type: "still-paused" };
+}
+
 async function upsertHeartbeat(tx: Prisma.TransactionClient, service: string, now: Date) {
   await tx.$executeRaw`
     INSERT INTO "WifiServiceHeartbeat" ("service", "lastSeenAt", "updatedAt")
@@ -57,16 +102,12 @@ async function upsertHeartbeat(tx: Prisma.TransactionClient, service: string, no
   `;
 }
 
-async function creditEntitlement(tx: Prisma.TransactionClient, entitlement: {
-  id: string;
-  customerPhone: string;
-  username: string;
-  cleartextSecret: string;
-  deviceMac: string | null;
-  expiresAt: Date;
-  rateLimit: string | null;
-  deviceLimit: number;
-}, creditedSeconds: number, now: Date) {
+async function creditEntitlement(
+  tx: Prisma.TransactionClient,
+  entitlement: EntitlementForCredit,
+  creditedSeconds: number,
+  now: Date
+) {
   const expiresAt = new Date(entitlement.expiresAt.getTime() + creditedSeconds * 1000);
   const durationSeconds = Math.max(60, secondsBetween(now, expiresAt));
 
@@ -111,13 +152,30 @@ async function creditEntitlement(tx: Prisma.TransactionClient, entitlement: {
   });
 }
 
-export async function applyOutageCredit(prisma: PrismaClient): Promise<CreditSummary> {
+// Marks every currently-active, not-already-paused entitlement as paused as
+// of `outageStartedAt`. Entitlements already paused are left untouched so the
+// original outage start time is preserved even if a detector re-fires while
+// the same outage is still ongoing. Doesn't touch RADIUS state -- that only
+// changes once the entitlement actually resumes (see resumePausedEntitlements).
+async function pauseActiveEntitlements(tx: Prisma.TransactionClient, outageStartedAt: Date, cause: string): Promise<number> {
+  const result = await tx.wifiEntitlement.updateMany({
+    where: { status: "active", outagePausedAt: null, expiresAt: { gt: outageStartedAt } },
+    data: { outagePausedAt: outageStartedAt, outagePauseCause: cause }
+  });
+  return result.count;
+}
+
+// Lane A: self-heartbeat, checked once at worker startup. A running loop's
+// own heartbeat can't go stale while the loop is running, so this only ever
+// catches the worker process itself having been down (crash/restart/VPS
+// down) between the last time it ran and now.
+export async function applyOutageCredit(prisma: PrismaClient): Promise<PauseSummary> {
   const now = new Date();
   const service = config.outageCredit.serviceName;
 
   if (!config.outageCredit.enabled) {
     await prisma.$transaction((tx) => upsertHeartbeat(tx, service, now));
-    return { credited: false, outageSeconds: 0, creditedSeconds: 0, affectedEntitlements: 0 };
+    return { paused: false, pausedCount: 0, outageSeconds: 0 };
   }
 
   return prisma.$transaction(async (tx) => {
@@ -128,63 +186,19 @@ export async function applyOutageCredit(prisma: PrismaClient): Promise<CreditSum
     const lastSeenAt = heartbeatRows[0]?.lastSeenAt ?? null;
     if (!lastSeenAt) {
       await upsertHeartbeat(tx, service, now);
-      return { credited: false, outageSeconds: 0, creditedSeconds: 0, affectedEntitlements: 0 };
+      return { paused: false, pausedCount: 0, outageSeconds: 0 };
     }
 
     const outageSeconds = secondsBetween(lastSeenAt, now);
     if (outageSeconds <= config.outageCredit.graceSeconds) {
       await upsertHeartbeat(tx, service, now);
-      return { credited: false, outageSeconds, creditedSeconds: 0, affectedEntitlements: 0 };
+      return { paused: false, pausedCount: 0, outageSeconds };
     }
 
-    const creditedSeconds = Math.min(outageSeconds, config.outageCredit.maxCreditSeconds);
-    const outageEndedAt = new Date(lastSeenAt.getTime() + creditedSeconds * 1000);
-    const inserted = await tx.$queryRaw<CreditInsertRow[]>`
-      INSERT INTO "WifiOutageCredit" ("service", "outageStartedAt", "outageEndedAt", "creditedSeconds", "affectedEntitlements")
-      VALUES (${service}, ${lastSeenAt}, ${outageEndedAt}, ${creditedSeconds}, 0)
-      ON CONFLICT ("service", "outageStartedAt", "outageEndedAt") DO NOTHING
-      RETURNING "id"
-    `;
-
-    if (!inserted[0]?.id) {
-      await upsertHeartbeat(tx, service, now);
-      return { credited: false, outageSeconds, creditedSeconds: 0, affectedEntitlements: 0 };
-    }
-
-    const entitlements = await tx.wifiEntitlement.findMany({
-      where: {
-        status: "active",
-        expiresAt: { gt: lastSeenAt },
-        startsAt: { lt: now }
-      },
-      orderBy: { expiresAt: "asc" },
-      take: config.outageCredit.batchSize,
-      select: {
-        id: true,
-        customerPhone: true,
-        username: true,
-        cleartextSecret: true,
-        deviceMac: true,
-        expiresAt: true,
-        rateLimit: true,
-        deviceLimit: true
-      }
-    });
-
-    let affectedEntitlements = 0;
-    for (const entitlement of entitlements) {
-      await creditEntitlement(tx, entitlement, creditedSeconds, now);
-      affectedEntitlements += 1;
-    }
-
-    await tx.$executeRaw`
-      UPDATE "WifiOutageCredit"
-      SET "affectedEntitlements" = ${affectedEntitlements}
-      WHERE "id" = ${inserted[0].id}
-    `;
+    const pausedCount = await pauseActiveEntitlements(tx, lastSeenAt, service);
     await upsertHeartbeat(tx, service, now);
 
-    return { credited: true, outageSeconds, creditedSeconds, affectedEntitlements };
+    return { paused: pausedCount > 0, pausedCount, outageSeconds };
   });
 }
 
@@ -210,27 +224,28 @@ async function lastRadiusAccountingActivity(tx: Prisma.TransactionClient): Promi
   return rows[0]?.last ?? null;
 }
 
-// Second, independent outage-detection lane. The self-heartbeat lane above
-// can only ever catch the worker process itself crashing/restarting -- it
-// can't see a live process whose actual path to customers is broken (e.g.
-// the WireGuard tunnel to the MikroTik silently pointing at a dead port).
-// This lane watches real RADIUS accounting activity instead, so it can
-// credit mid-outage rather than waiting for the next restart.
-export async function evaluateAccountingOutage(prisma: PrismaClient): Promise<CreditSummary> {
+// Lane B: fleet-wide RADIUS accounting silence, checked every tick. The
+// self-heartbeat lane above can only ever catch the worker process itself
+// crashing/restarting -- it can't see a live process whose actual path to
+// customers is broken (e.g. the WireGuard tunnel to the MikroTik silently
+// pointing at a dead port). This lane watches real RADIUS accounting
+// activity instead, so it can flag an outage mid-incident rather than
+// waiting for the next restart.
+export async function evaluateAccountingOutage(prisma: PrismaClient): Promise<PauseSummary> {
   if (!config.outageCredit.enabled) {
-    return { credited: false, outageSeconds: 0, creditedSeconds: 0, affectedEntitlements: 0 };
+    return { paused: false, pausedCount: 0, outageSeconds: 0 };
   }
 
   return prisma.$transaction(async (tx) => {
     const now = new Date();
 
     if (!(await hasInterimDueActiveEntitlements(tx))) {
-      return { credited: false, outageSeconds: 0, creditedSeconds: 0, affectedEntitlements: 0 };
+      return { paused: false, pausedCount: 0, outageSeconds: 0 };
     }
 
     const lastActivity = await lastRadiusAccountingActivity(tx);
     if (!lastActivity) {
-      return { credited: false, outageSeconds: 0, creditedSeconds: 0, affectedEntitlements: 0 };
+      return { paused: false, pausedCount: 0, outageSeconds: 0 };
     }
 
     const checkpointRows = await tx.$queryRaw<HeartbeatRow[]>`
@@ -242,36 +257,30 @@ export async function evaluateAccountingOutage(prisma: PrismaClient): Promise<Cr
 
     if (decision.type === "advance") {
       await upsertHeartbeat(tx, ACCOUNTING_OUTAGE_SERVICE, decision.checkpoint);
-      return { credited: false, outageSeconds: 0, creditedSeconds: 0, affectedEntitlements: 0 };
+      return { paused: false, pausedCount: 0, outageSeconds: 0 };
     }
 
     if (decision.type === "healthy") {
-      return { credited: false, outageSeconds: secondsBetween(checkpoint, now), creditedSeconds: 0, affectedEntitlements: 0 };
+      return { paused: false, pausedCount: 0, outageSeconds: secondsBetween(checkpoint, now) };
     }
 
-    const outageEndedAt = decision.nextCheckpoint;
-    const inserted = await tx.$queryRaw<CreditInsertRow[]>`
-      INSERT INTO "WifiOutageCredit" ("service", "outageStartedAt", "outageEndedAt", "creditedSeconds", "affectedEntitlements")
-      VALUES (${ACCOUNTING_OUTAGE_SERVICE}, ${decision.outageStartedAt}, ${outageEndedAt}, ${decision.creditedSeconds}, 0)
-      ON CONFLICT ("service", "outageStartedAt", "outageEndedAt") DO NOTHING
-      RETURNING "id"
-    `;
+    const pausedCount = await pauseActiveEntitlements(tx, decision.outageStartedAt, ACCOUNTING_OUTAGE_SERVICE);
+    await upsertHeartbeat(tx, ACCOUNTING_OUTAGE_SERVICE, decision.nextCheckpoint);
 
-    if (!inserted[0]?.id) {
-      // Already recorded this exact window (e.g. a concurrent tick beat us to
-      // it) -- still advance the checkpoint so we don't re-evaluate the same
-      // stale window forever.
-      await upsertHeartbeat(tx, ACCOUNTING_OUTAGE_SERVICE, outageEndedAt);
-      return { credited: false, outageSeconds: decision.creditedSeconds, creditedSeconds: 0, affectedEntitlements: 0 };
-    }
+    return { paused: pausedCount > 0, pausedCount, outageSeconds: decision.creditedSeconds };
+  });
+}
 
-    const entitlements = await tx.wifiEntitlement.findMany({
-      where: {
-        status: "active",
-        expiresAt: { gt: decision.outageStartedAt },
-        startsAt: { lt: now }
-      },
-      orderBy: { expiresAt: "asc" },
+// Per-device resume sweep, independent of which lane triggered the pause and
+// independent of whether the outage itself has "ended" fleet-wide -- a
+// straggler whose device hasn't personally reconnected yet stays paused even
+// after everyone else is back online.
+export async function resumePausedEntitlements(prisma: PrismaClient): Promise<ResumeSummary> {
+  return prisma.$transaction(async (tx) => {
+    const now = new Date();
+
+    const paused = await tx.wifiEntitlement.findMany({
+      where: { outagePausedAt: { not: null } },
       take: config.outageCredit.batchSize,
       select: {
         id: true,
@@ -281,23 +290,50 @@ export async function evaluateAccountingOutage(prisma: PrismaClient): Promise<Cr
         deviceMac: true,
         expiresAt: true,
         rateLimit: true,
-        deviceLimit: true
+        deviceLimit: true,
+        outagePausedAt: true,
+        outagePauseCause: true
       }
     });
 
-    let affectedEntitlements = 0;
-    for (const entitlement of entitlements) {
-      await creditEntitlement(tx, entitlement, decision.creditedSeconds, now);
-      affectedEntitlements += 1;
+    let resumed = 0;
+    let totalCreditedSeconds = 0;
+
+    for (const entitlement of paused) {
+      const pausedAt = entitlement.outagePausedAt;
+      if (!pausedAt) continue;
+
+      const reconnectRows = await tx.$queryRaw<{ acctstarttime: Date }[]>`
+        SELECT acctstarttime FROM radacct
+        WHERE username = ${entitlement.username} AND acctstarttime > ${pausedAt}
+        ORDER BY acctstarttime ASC
+        LIMIT 1
+      `;
+      const reconnectedAt = reconnectRows[0]?.acctstarttime ?? null;
+
+      const decision = decideResumeAction(pausedAt, reconnectedAt, now, config.outageCredit.maxCreditSeconds);
+      if (decision.type === "still-paused") continue;
+
+      if (decision.creditedSeconds > 0) {
+        const inserted = await tx.$queryRaw<CreditInsertRow[]>`
+          INSERT INTO "WifiOutageCredit" ("service", "outageStartedAt", "outageEndedAt", "creditedSeconds", "affectedEntitlements", "entitlementId")
+          VALUES (${entitlement.outagePauseCause ?? "unknown"}, ${pausedAt}, ${decision.reconnectedAt}, ${decision.creditedSeconds}, 1, ${entitlement.id})
+          ON CONFLICT ("service", "outageStartedAt", "outageEndedAt") DO NOTHING
+          RETURNING "id"
+        `;
+        if (inserted[0]?.id) {
+          await creditEntitlement(tx, entitlement, decision.creditedSeconds, now);
+          totalCreditedSeconds += decision.creditedSeconds;
+        }
+      }
+
+      await tx.wifiEntitlement.update({
+        where: { id: entitlement.id },
+        data: { outagePausedAt: null, outagePauseCause: null }
+      });
+      resumed += 1;
     }
 
-    await tx.$executeRaw`
-      UPDATE "WifiOutageCredit"
-      SET "affectedEntitlements" = ${affectedEntitlements}
-      WHERE "id" = ${inserted[0].id}
-    `;
-    await upsertHeartbeat(tx, ACCOUNTING_OUTAGE_SERVICE, outageEndedAt);
-
-    return { credited: true, outageSeconds: decision.creditedSeconds, creditedSeconds: decision.creditedSeconds, affectedEntitlements };
+    return { resumed, totalCreditedSeconds };
   });
 }

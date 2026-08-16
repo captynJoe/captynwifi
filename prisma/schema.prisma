@@ -109,6 +109,8 @@ model WifiEntitlement {
   deviceLimit      Int                   @default(1)
   rateLimit        String?
   acctInterimSeconds Int                 @default(120)
+  outagePausedAt   DateTime?
+  outagePauseCause String?
   createdAt        DateTime              @default(now())
   updatedAt        DateTime              @updatedAt
   site             WifiSite              @relation(fields: [siteId], references: [id], onDelete: Cascade)
@@ -119,6 +121,7 @@ model WifiEntitlement {
   @@index([siteId, status, expiresAt])
   @@index([username])
   @@index([deviceMac, status, expiresAt])
+  @@index([outagePausedAt])
 }
 
 model WifiRadiusProjection {
@@ -217,9 +220,11 @@ model WifiOutageCredit {
   outageEndedAt        DateTime
   creditedSeconds      Int
   affectedEntitlements Int      @default(0)
+  entitlementId        String?
   createdAt            DateTime @default(now())
 
   @@unique([service, outageStartedAt, outageEndedAt])
   @@index([service, createdAt])
   @@index([outageStartedAt, outageEndedAt])
+  @@index([entitlementId])
 }

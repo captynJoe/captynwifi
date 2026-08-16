@@ -2,7 +2,7 @@ import "dotenv/config";
 import { config } from "../config.js";
 import { prisma } from "../prisma.js";
 import { applyRadiusProjectionRows } from "../services/radiusSqlApply.js";
-import { applyOutageCredit, evaluateAccountingOutage, touchOutageHeartbeat } from "../services/outageCredit.js";
+import { applyOutageCredit, evaluateAccountingOutage, resumePausedEntitlements, touchOutageHeartbeat } from "../services/outageCredit.js";
 
 async function applyProjection(id: string) {
   await prisma.$transaction(async (tx) => {
@@ -35,7 +35,11 @@ async function applyProjection(id: string) {
 async function expireEntitlements() {
   const now = new Date();
   const expired = await prisma.wifiEntitlement.findMany({
-    where: { status: "active", expiresAt: { lte: now } },
+    // Paused entitlements are excluded -- they keep their RADIUS credentials
+    // until the resume sweep processes them, even if expiresAt has already
+    // passed real time. See resumePausedEntitlements for the force-release
+    // safety valve if a customer never reconnects.
+    where: { status: "active", expiresAt: { lte: now }, outagePausedAt: null },
     select: { id: true, username: true, projection: { select: { id: true, status: true } } },
     take: config.radiusSql.batchSize
   });
@@ -89,11 +93,14 @@ async function tick() {
   const applied = await applyPendingBatch();
   await touchOutageHeartbeat(prisma);
 
-  const accountingCredit = await evaluateAccountingOutage(prisma);
-  if (accountingCredit.credited) {
-    console.log(
-      `Credited ${accountingCredit.affectedEntitlements} active WiFi entitlement(s) for ${accountingCredit.creditedSeconds}s of silent RADIUS accounting (network path likely down)`
-    );
+  const accounting = await evaluateAccountingOutage(prisma);
+  if (accounting.paused) {
+    console.log(`Paused ${accounting.pausedCount} active WiFi entitlement(s): RADIUS accounting has been silent fleet-wide (network path likely down)`);
+  }
+
+  const resumed = await resumePausedEntitlements(prisma);
+  if (resumed.resumed > 0) {
+    console.log(`Resumed ${resumed.resumed} entitlement(s) on reconnect, credited ${resumed.totalCreditedSeconds}s total`);
   }
 
   if (applied > 0) console.log(`Applied ${applied} RADIUS projection(s)`);
@@ -106,11 +113,9 @@ async function main() {
   }
 
   console.log("CAPTYN WiFi RADIUS SQL worker running");
-  const credit = await applyOutageCredit(prisma);
-  if (credit.credited) {
-    console.log(
-      `Credited ${credit.affectedEntitlements} active WiFi entitlement(s) for ${credit.creditedSeconds}s of CAPTYN-side downtime`
-    );
+  const startupCheck = await applyOutageCredit(prisma);
+  if (startupCheck.paused) {
+    console.log(`Paused ${startupCheck.pausedCount} active WiFi entitlement(s): worker was down for ${startupCheck.outageSeconds}s`);
   }
 
   for (;;) {

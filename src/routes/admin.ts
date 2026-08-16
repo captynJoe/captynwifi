@@ -912,7 +912,7 @@ adminRouter.get("/dynamic-plan-status", async (_req, res, next) => {
 
 adminRouter.get("/outage-credits", async (_req, res, next) => {
   try {
-    const [recentCredits, heartbeats] = await Promise.all([
+    const [recentCredits, heartbeats, currentlyPaused] = await Promise.all([
       prisma.$queryRaw<Array<{
         id: string;
         service: string;
@@ -920,16 +920,22 @@ adminRouter.get("/outage-credits", async (_req, res, next) => {
         outageEndedAt: Date;
         creditedSeconds: number;
         affectedEntitlements: number;
+        entitlementId: string | null;
         createdAt: Date;
       }>>(Prisma.sql`
-        select id, service, "outageStartedAt", "outageEndedAt", "creditedSeconds", "affectedEntitlements", "createdAt"
+        select id, service, "outageStartedAt", "outageEndedAt", "creditedSeconds", "affectedEntitlements", "entitlementId", "createdAt"
         from "WifiOutageCredit"
         order by "createdAt" desc
         limit 60
       `),
       prisma.$queryRaw<Array<{ service: string; lastSeenAt: Date; updatedAt: Date }>>(Prisma.sql`
         select service, "lastSeenAt", "updatedAt" from "WifiServiceHeartbeat" order by service asc
-      `)
+      `),
+      prisma.wifiEntitlement.findMany({
+        where: { outagePausedAt: { not: null } },
+        orderBy: { outagePausedAt: "asc" },
+        select: { id: true, username: true, customerPhone: true, outagePausedAt: true, outagePauseCause: true, expiresAt: true }
+      })
     ]);
 
     return sendData(res, {
@@ -941,6 +947,7 @@ adminRouter.get("/outage-credits", async (_req, res, next) => {
         maxCreditSeconds: config.outageCredit.maxCreditSeconds
       },
       heartbeats,
+      currentlyPaused,
       recentCredits
     });
   } catch (error) {
