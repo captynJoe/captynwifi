@@ -121,7 +121,12 @@ function duration(seconds) {
         return `${value / 86400} day${value / 86400 === 1 ? "" : "s"}`;
     if (value % 3600 === 0)
         return `${value / 3600} hour${value / 3600 === 1 ? "" : "s"}`;
-    return `${Math.round(value / 60)} minutes`;
+    const totalMinutes = Math.round(value / 60);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    if (hours === 0)
+        return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+    return `${hours}h ${minutes}m`;
 }
 function esc(value) {
     return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
@@ -607,8 +612,6 @@ const SPEED_TIERS = [
     { key: "fast", label: "Fast", range: "13-20 Mbps", title: "Fast", description: "", min: 13, max: 20 },
     { key: "gulfstream", label: "Gulfstream", range: "21+ Mbps", title: "Gulfstream", description: "", min: 21 }
 ];
-const DEFAULT_PLAN_NAME = "Basic Hour";
-const SPEED_TIER_COUNTS_KEY = "captynWifiSpeedTierCounts";
 function isSupportOnlyPlan(plan) {
     const name = String(plan.name || "").trim().toLowerCase();
     return name === "captyn welcome" || name.includes("welcome") || Number(plan.priceKsh || 0) === 0;
@@ -642,33 +645,6 @@ function speedTierForPlan(plan) {
             return false;
         return true;
     }) || null;
-}
-function readPreferredSpeedTier() {
-    try {
-        const counts = JSON.parse(localStorage.getItem(SPEED_TIER_COUNTS_KEY) || "{}");
-        const ranked = SPEED_TIERS
-            .filter((tier) => tier.key !== "all")
-            .map((tier) => ({ key: tier.key, count: Number(counts?.[tier.key] || 0) }))
-            .filter((entry) => entry.count > 0)
-            .sort((a, b) => b.count - a.count);
-        if (ranked[0] && isNeedKey(ranked[0].key))
-            return ranked[0].key;
-    }
-    catch (_error) { }
-    return "all";
-}
-function rememberPurchasedSpeedTier(plan) {
-    if (!plan || isSupportOnlyPlan(plan))
-        return;
-    const tier = speedTierForPlan(plan);
-    if (!tier)
-        return;
-    try {
-        const counts = JSON.parse(localStorage.getItem(SPEED_TIER_COUNTS_KEY) || "{}");
-        counts[tier.key] = Number(counts?.[tier.key] || 0) + 1;
-        localStorage.setItem(SPEED_TIER_COUNTS_KEY, JSON.stringify(counts));
-    }
-    catch (_error) { }
 }
 function renderNeedTabs() {
     return SPEED_TIERS.map((tier) => `<button type="button" class="speed-tab ${tier.key === state.activeNeed ? "active" : ""}" data-speed-key="${esc(tier.key)}"><span>${esc(tier.label)}</span><small>${esc(tier.range)}</small></button>`).join("");
@@ -715,9 +691,8 @@ function renderPlans(sites) {
     state.plans = sites.flatMap((site) => site.plans.map((plan) => ({ ...plan, site }))).sort(comparePlansByPrice);
     const visiblePlans = customerPlans();
     if (!state.selectedPlanId && visiblePlans[0]) {
-        state.activeNeed = readPreferredSpeedTier();
-        const preferredPlans = plansForSpeedTier(activeSpeedTierConfig());
-        state.selectedPlanId = (state.activeNeed === "basic" ? findPlanByName(DEFAULT_PLAN_NAME)?.id : preferredPlans[0]?.id) || visiblePlans[0].id;
+        state.activeNeed = "all";
+        state.selectedPlanId = visiblePlans[0].id;
     }
     if (state.selectedPlanId && !state.plans.some((plan) => plan.id === state.selectedPlanId))
         state.selectedPlanId = visiblePlans[0]?.id || "";
@@ -926,7 +901,6 @@ async function pollPayment() {
         clearInterval(state.pollTimer);
         state.pollTimer = null;
         hidePaymentModal();
-        rememberPurchasedSpeedTier(currentPlan());
         showConnectedPanel(payment.entitlement, {
             heading: payment.extended ? "Access extended" : "Access ready",
             message: payment.extended
@@ -990,7 +964,6 @@ paymentForm.addEventListener("submit", async (event) => {
             payButton.disabled = false;
             payButton.textContent = Number(plan.priceKsh || 0) === 0 ? paymentActionLabel(plan) : `Pay ${money(plan.priceKsh)}`;
             setConnectState(paymentStatus, null, "", "");
-            rememberPurchasedSpeedTier(plan);
             showConnectedPanel(payload.data.entitlement, {
                 heading: payload.data.extended ? "Free access extended" : "Free access ready",
                 message: "Activating WiFi on this device now.",

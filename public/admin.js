@@ -141,7 +141,11 @@ function shortDuration(seconds) {
   if (!Number.isFinite(value) || value <= 0) return "-";
   if (value % 86400 === 0) return `${value / 86400}d`;
   if (value % 3600 === 0) return `${value / 3600}h`;
-  return `${Math.round(value / 60)}m`;
+  const totalMinutes = Math.round(value / 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours === 0) return `${minutes}m`;
+  return `${hours}h ${minutes}m`;
 }
 function durationSeconds(value, unit) {
   const amount = Number(value || 0);
