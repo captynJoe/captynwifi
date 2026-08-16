@@ -988,7 +988,7 @@ paymentForm.addEventListener("submit", async (event) => {
           } else {
             showPaymentModal(
               "welcome-used",
-              "Nah bro \u{1F602}\u{1F62D}",
+              "Nah bro \u{1F62D}",
               "Someone already used your welcome access on this device. It's a one-time thing — grab one of the packages below instead."
             );
           }
