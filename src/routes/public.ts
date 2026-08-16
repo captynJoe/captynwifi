@@ -353,7 +353,16 @@ publicRouter.get("/sites", async (_req, res, next) => {
       orderBy: { name: "asc" },
       include: {
         plans: {
-          where: { enabled: true, source: { in: PUBLICLY_PURCHASABLE_SOURCES } },
+          // Once a paid captyn_admin plan has a captyn_dynamic mirror, the
+          // mirror is what's shown -- the baseline becomes a reference rate
+          // card edited via the admin Packages UI, not a static price
+          // customers buy directly. Free/promotional captyn_admin plans
+          // (priceKsh 0, e.g. CAPTYN Welcome) are never mirrored and keep
+          // showing as-is.
+          where: {
+            enabled: true,
+            OR: [{ source: "captyn_dynamic" }, { source: "captyn_admin", priceKsh: 0 }]
+          },
           orderBy: [{ priceKsh: "asc" }, { durationSeconds: "asc" }, { name: "asc" }]
         }
       }
