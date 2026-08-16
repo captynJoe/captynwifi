@@ -59,14 +59,44 @@ test("CRITICAL tier is unpublished regardless of the scaled numbers", () => {
   assert.equal(spec.enabled, false);
 });
 
-test("day-plus baselines keep a fixed duration but still flex price and speed", () => {
+test("day-plus baselines keep a fixed duration regardless of tier", () => {
   const monthly = { ...baseline, name: "Monthly Standard", durationSeconds: 2592000, priceKsh: 600, rateLimit: "8M/12M" };
   for (const tier of ["QUIET", "GREEN", "YELLOW", "RED"] as const) {
     const spec = scaleBaselinePlan(monthly, tier);
     assert.equal(spec.durationSeconds, 2592000, `${tier} duration should stay fixed at 30 days`);
   }
-  assert.ok(scaleBaselinePlan(monthly, "QUIET").priceKsh < 600);
-  assert.ok(scaleBaselinePlan(monthly, "RED").priceKsh > 600);
+});
+
+test("monthly-scale plans get nearly-fixed pricing, not the full hourly discount/surge", () => {
+  // Idle bandwidth tonight doesn't mean the network will still be quiet
+  // when a 30-day customer is still using their plan next week -- monthly
+  // commitments shouldn't be discounted (or surge-priced) like a walk-up
+  // hourly purchase would be.
+  const monthly = { ...baseline, name: "Cruise Month", durationSeconds: 2592000, priceKsh: 500, rateLimit: "5M/7M" };
+  assert.equal(scaleBaselinePlan(monthly, "QUIET").priceKsh, 500);
+  assert.equal(scaleBaselinePlan(monthly, "RED").priceKsh, 500);
+  // Speed still gets a small perk/penalty -- "nearly fixed", not literally frozen.
+  assert.ok(scaleBaselinePlan(monthly, "QUIET").rateLimit !== "5M/7M");
+});
+
+test("weekly plans get a small discount, not the full hourly-tier swing", () => {
+  const weekly = { ...baseline, name: "Cruise Weekly", durationSeconds: 604800, priceKsh: 250, rateLimit: "7M/12M" };
+  const quietPrice = scaleBaselinePlan(weekly, "QUIET").priceKsh;
+  assert.ok(quietPrice < 250, "should still get some discount");
+  assert.ok(quietPrice >= 225, "but nowhere near the full ~30% hourly-tier discount (would be 175)");
+});
+
+test("multi-day plans get a milder swing than hourly plans, scaled proportionally by commitment length", () => {
+  const weekend = { ...baseline, name: "Highspeed Weekend", durationSeconds: 259200, priceKsh: 120, rateLimit: "8M/15M" };
+  const hourly = { ...baseline, durationSeconds: 3600, priceKsh: 120, rateLimit: "8M/15M" };
+  const weekendDiscount = 120 - scaleBaselinePlan(weekend, "QUIET").priceKsh;
+  const hourlyDiscount = 120 - scaleBaselinePlan(hourly, "QUIET").priceKsh;
+  assert.ok(weekendDiscount > 0 && weekendDiscount < hourlyDiscount, "milder than the full hourly discount, but not zero");
+});
+
+test("walk-up (<=8h) plans still get the full existing dynamic swing, unchanged", () => {
+  const flash = { ...baseline, name: "Flash", durationSeconds: 1800, priceKsh: 5, rateLimit: "6M/6M" };
+  assert.equal(scaleBaselinePlan(flash, "QUIET").priceKsh, 4);
 });
 
 test("sub-day baselines still flex duration as before", () => {

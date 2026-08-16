@@ -75,14 +75,49 @@ function scaleRateLimit(rateLimit: string | null, multiplier: number): string | 
 // Only price/speed flex for these; only sub-day plans flex duration too.
 const DURATION_SCALE_MAX_BASELINE_SECONDS = 86400;
 
+// Idle bandwidth is perishable -- unsold Mbps this evening can't be sold
+// tomorrow, so an hourly walk-up customer should feel the full swing of
+// current conditions. A 30-day customer is reserving a month of future
+// capacity that today's quiet network says nothing about; discounting (or
+// surging) their price by the same 30-35% as an hourly plan sells that
+// future capacity too cheaply (or breaks the predictability long-term
+// customers are actually paying for). Intensity scales how much of a
+// tier's full price/rate/duration swing actually applies, tapering toward
+// zero as the baseline commitment length grows. Duration bonuses are
+// already frozen entirely above 24h (see DURATION_SCALE_MAX_BASELINE_SECONDS);
+// intensity only tapers duration *within* the sub-24h range, toward that cutoff.
+type DurationBucket = "FULL" | "STRONG" | "MILD" | "SMALL" | "MINIMAL";
+
+function durationBucketFor(baselineDurationSeconds: number): DurationBucket {
+  if (baselineDurationSeconds <= 8 * 3600) return "FULL"; // walk-up: up to 8h
+  if (baselineDurationSeconds <= 86400) return "STRONG"; // 8-24h
+  if (baselineDurationSeconds <= 3 * 86400) return "MILD"; // 2-3 days
+  if (baselineDurationSeconds <= 7 * 86400) return "SMALL"; // up to a week
+  return "MINIMAL"; // monthly-scale commitments
+}
+
+const BUCKET_INTENSITY: Record<DurationBucket, { price: number; rate: number; duration: number }> = {
+  FULL: { price: 1, rate: 1, duration: 1 },
+  STRONG: { price: 0.6, rate: 0.6, duration: 0.5 },
+  MILD: { price: 0.3, rate: 0.35, duration: 0 },
+  SMALL: { price: 0.15, rate: 0.3, duration: 0 },
+  MINIMAL: { price: 0, rate: 0.2, duration: 0 }
+};
+
+function dampen(multiplier: number, intensity: number): number {
+  return 1 + intensity * (multiplier - 1);
+}
+
 export function scaleBaselinePlan(baseline: BaselinePlan, tier: Tier): ScaledSpec {
   const multiplier = TIER_MULTIPLIERS[tier];
-  const durationMultiplier = baseline.durationSeconds >= DURATION_SCALE_MAX_BASELINE_SECONDS ? 1 : multiplier.duration;
+  const intensity = BUCKET_INTENSITY[durationBucketFor(baseline.durationSeconds)];
+  const durationMultiplier =
+    baseline.durationSeconds >= DURATION_SCALE_MAX_BASELINE_SECONDS ? 1 : dampen(multiplier.duration, intensity.duration);
   return {
     name: baseline.name,
     durationSeconds: scaleDuration(baseline.durationSeconds, durationMultiplier),
-    priceKsh: scalePrice(baseline.priceKsh, multiplier.price),
-    rateLimit: scaleRateLimit(baseline.rateLimit, multiplier.rate),
+    priceKsh: scalePrice(baseline.priceKsh, dampen(multiplier.price, intensity.price)),
+    rateLimit: scaleRateLimit(baseline.rateLimit, dampen(multiplier.rate, intensity.rate)),
     category: baseline.category,
     deviceLimit: baseline.deviceLimit,
     enabled: multiplier.published
