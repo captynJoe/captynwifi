@@ -94,7 +94,22 @@ export class DynamicPlanEngine {
 
   async maybeRotate() {
     const now = Date.now();
-    if (now - this.windowStartedAt < config.dynamicPlan.rotationMs) return;
+    const windowElapsed = now - this.windowStartedAt >= config.dynamicPlan.rotationMs;
+
+    if (!windowElapsed) {
+      if (this.samples.length === 0) return;
+      // Dry run never writes mirrors, so "no mirrors yet" is permanently
+      // true there and not a meaningful bootstrap signal -- always wait out
+      // the full window in dry run.
+      if (config.dynamicPlan.dryRun) return;
+
+      // Bootstrap: on first-ever activation, or any wifi_governor restart
+      // before the first rotation completed, don't leave the storefront's
+      // paid plans hidden (see public.ts's /sites listing) for up to a full
+      // rotation window -- rotate immediately once real samples exist.
+      const hasMirrors = await prisma.wifiPlan.findFirst({ where: { source: DYNAMIC_PLAN_SOURCE }, select: { id: true } });
+      if (hasMirrors) return;
+    }
 
     const windowStartsAt = new Date(this.windowStartedAt);
     const windowEndsAt = new Date(now);
