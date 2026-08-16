@@ -68,6 +68,8 @@
           <button class="nav-item" type="button" data-page="access">Access</button>
           <button class="nav-item" type="button" data-page="radius">RADIUS</button>
           <button class="nav-item" type="button" data-page="governor">Governor</button>
+          <button class="nav-item" type="button" data-page="dynamic-plan">Dynamic Plan</button>
+          <button class="nav-item" type="button" data-page="outage-credits">Outage Credits</button>
           <button class="nav-item" type="button" data-page="accounting">Accounting</button>
         </nav>
 
@@ -232,6 +234,44 @@
           <article class="surface span-12 table-panel">
             <div class="panel-head"><h2>Recent Decisions</h2><span id="governor-events-count"></span></div>
             <div class="table-wrap"><table><thead><tr><th>Time</th><th>State</th><th>Active</th><th>Demand</th><th>Util</th><th>User</th><th>Rate</th><th>Reason</th></tr></thead><tbody id="governor-events-body"></tbody></table></div>
+          </article>
+        </section>
+
+        <section class="page-grid hidden" data-page-panel="dynamic-plan">
+          <article class="surface span-12">
+            <div class="panel-head"><h2>Dynamic Plan Engine</h2><span id="dynamic-plan-generated">Checking</span></div>
+            <div id="dynamic-plan-summary" class="governor-summary"></div>
+          </article>
+          <article class="surface span-5">
+            <div class="panel-head"><h2>Safety Settings</h2><span id="dynamic-plan-mode">Watching</span></div>
+            <div id="dynamic-plan-settings" class="governor-settings"></div>
+          </article>
+          <article class="surface span-7 table-panel">
+            <div class="panel-head"><h2>Live Dynamic Packages</h2><span id="dynamic-plan-live-count"></span></div>
+            <div class="table-wrap"><table><thead><tr><th>Site</th><th>Name</th><th>Duration</th><th>Price</th><th>Rate</th><th>Published</th></tr></thead><tbody id="dynamic-plan-live-body"></tbody></table></div>
+          </article>
+          <article class="surface span-12 table-panel">
+            <div class="panel-head"><h2>Recent Rotations</h2><span id="dynamic-plan-events-count"></span></div>
+            <div class="table-wrap"><table><thead><tr><th>Time</th><th>Tier</th><th>Avg Util</th><th>Samples</th><th>Duration</th><th>Price</th><th>Rate</th><th>Published</th></tr></thead><tbody id="dynamic-plan-events-body"></tbody></table></div>
+          </article>
+        </section>
+
+        <section class="page-grid hidden" data-page-panel="outage-credits">
+          <article class="surface span-12">
+            <div class="panel-head"><h2>Outage Protection</h2><span id="outage-credits-generated">Checking</span></div>
+            <div id="outage-credits-summary" class="governor-summary"></div>
+          </article>
+          <article class="surface span-5">
+            <div class="panel-head"><h2>Safety Settings</h2><span id="outage-credits-mode">Watching</span></div>
+            <div id="outage-credits-settings" class="governor-settings"></div>
+          </article>
+          <article class="surface span-7 table-panel">
+            <div class="panel-head"><h2>Currently Paused</h2><span id="outage-paused-count"></span></div>
+            <div class="table-wrap"><table><thead><tr><th>Customer</th><th>Phone</th><th>Cause</th><th>Paused Since</th><th>Expires</th></tr></thead><tbody id="outage-paused-body"></tbody></table></div>
+          </article>
+          <article class="surface span-12 table-panel">
+            <div class="panel-head"><h2>Recent Credits</h2><span id="outage-credits-count"></span></div>
+            <div class="table-wrap"><table><thead><tr><th>Time</th><th>Cause</th><th>Paused At</th><th>Reconnected At</th><th>Credited</th><th>Entitlement</th></tr></thead><tbody id="outage-credits-body"></tbody></table></div>
           </article>
         </section>
 

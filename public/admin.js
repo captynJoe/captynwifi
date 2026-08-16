@@ -95,7 +95,9 @@ const endpoints = {
   projections: adminApi("/radius-projections"),
   accounting: adminApi("/accounting-sessions"),
   networkStatus: adminApi("/network-status"),
-  governorStatus: adminApi("/governor-status")
+  governorStatus: adminApi("/governor-status"),
+  dynamicPlanStatus: adminApi("/dynamic-plan-status"),
+  outageCredits: adminApi("/outage-credits")
 };
 
 const voucherForm = document.getElementById("voucher-form");
@@ -621,6 +623,111 @@ function renderGovernorStatus() {
   ], 8);
 }
 
+function durationMinutes(ms) {
+  return governorNumber(Number(ms || 0) / 60000, 0);
+}
+
+function renderDynamicPlanStatus() {
+  const data = state.cache.dynamicPlanStatus || {};
+  const latest = data.latest || {};
+  const config = data.config || {};
+  const currentState = latest.state || "NO DATA";
+  const mode = config.dryRun ? "Dry run" : "Live";
+  const generated = document.getElementById("dynamic-plan-generated");
+  if (generated) generated.textContent = data.generatedAt ? `Checked ${fmtDate(data.generatedAt)}` : mode;
+  const modeLabel = document.getElementById("dynamic-plan-mode");
+  if (modeLabel) modeLabel.textContent = mode;
+
+  const summary = document.getElementById("dynamic-plan-summary");
+  if (summary) {
+    summary.innerHTML = `
+      <div class="governor-card state-card ${governorStateClass(currentState)}"><span>Current tier</span><strong>${escapeHtml(currentState)}</strong><em>${fmtDate(latest.createdAt)}</em></div>
+      <div class="governor-card"><span>Avg utilization</span><strong>${governorNumber(Number(latest.avgUtilizationScore || 0) * 100, 1)}%</strong><em>${escapeHtml(latest.sampleCount || 0)} samples</em></div>
+      <div class="governor-card"><span>Last package</span><strong>${latest.priceKsh != null ? fmtMoney(latest.priceKsh) : "-"}</strong><em>${latest.rateLimit ? escapeHtml(latest.rateLimit) : "-"}</em></div>
+      <div class="governor-card"><span>Published</span><strong>${latest.published ? "Yes" : "No"}</strong><em>${latest.durationSeconds ? shortDuration(latest.durationSeconds) : "-"}</em></div>
+    `;
+  }
+
+  const settings = document.getElementById("dynamic-plan-settings");
+  if (settings) {
+    settings.innerHTML = `
+      <div class="governor-setting"><span>Enabled</span>${status(config.enabled ? "enabled" : "disabled")}</div>
+      <div class="governor-setting"><span>Dry run</span>${status(config.dryRun ? "on" : "off")}</div>
+      <div class="governor-setting"><span>Rotation</span><strong>${durationMinutes(config.rotationMs)} min</strong></div>
+    `;
+  }
+
+  renderRows("dynamic-plan-live", data.dynamicPlans || [], (item) => [
+    escapeHtml(item.site?.name),
+    escapeHtml(item.name),
+    shortDuration(item.durationSeconds),
+    fmtMoney(item.priceKsh),
+    friendlyRate(item.rateLimit),
+    item.enabled ? status("published") : status("disabled")
+  ], 6);
+
+  renderRows("dynamic-plan-events", data.recentEvents || [], (item) => [
+    fmtDate(item.createdAt),
+    status(item.state),
+    `${governorNumber(Number(item.avgUtilizationScore || 0) * 100, 1)}%`,
+    escapeHtml(item.sampleCount || 0),
+    item.durationSeconds ? shortDuration(item.durationSeconds) : "-",
+    item.priceKsh != null ? fmtMoney(item.priceKsh) : "-",
+    item.rateLimit ? friendlyRate(item.rateLimit) : "-",
+    item.published ? status("published") : status("disabled")
+  ], 8);
+}
+
+function renderOutageCredits() {
+  const data = state.cache.outageCredits || {};
+  const config = data.config || {};
+  const paused = data.currentlyPaused || [];
+  const credits = data.recentCredits || [];
+  const generated = document.getElementById("outage-credits-generated");
+  if (generated) generated.textContent = data.generatedAt ? `Checked ${fmtDate(data.generatedAt)}` : "";
+  const modeLabel = document.getElementById("outage-credits-mode");
+  if (modeLabel) modeLabel.textContent = config.enabled ? "Watching" : "Off";
+
+  const last24h = credits.filter((item) => Date.now() - new Date(item.createdAt).getTime() < 24 * 60 * 60 * 1000);
+  const totalCreditedSeconds24h = last24h.reduce((sum, item) => sum + Number(item.creditedSeconds || 0), 0);
+
+  const summary = document.getElementById("outage-credits-summary");
+  if (summary) {
+    summary.innerHTML = `
+      <div class="governor-card ${paused.length ? "state-card red" : ""}"><span>Currently paused</span><strong>${paused.length}</strong><em>waiting to reconnect</em></div>
+      <div class="governor-card"><span>Credits (24h)</span><strong>${last24h.length}</strong><em>${durationMinutes(totalCreditedSeconds24h * 1000)} min credited</em></div>
+      <div class="governor-card"><span>Grace (self)</span><strong>${governorNumber(config.graceSeconds, 0)}s</strong><em>worker-down detection</em></div>
+      <div class="governor-card"><span>Grace (network)</span><strong>${governorNumber(config.accountingGraceSeconds, 0)}s</strong><em>silent-RADIUS detection</em></div>
+    `;
+  }
+
+  const settings = document.getElementById("outage-credits-settings");
+  if (settings) {
+    settings.innerHTML = `
+      <div class="governor-setting"><span>Enabled</span>${status(config.enabled ? "enabled" : "disabled")}</div>
+      <div class="governor-setting"><span>Max credit cap</span><strong>${durationMinutes(Number(config.maxCreditSeconds || 0) * 1000)} min</strong></div>
+      ${(data.heartbeats || []).map((hb) => `<div class="governor-setting"><span>${escapeHtml(hb.service)}</span><strong>${fmtDate(hb.lastSeenAt)}</strong></div>`).join("")}
+    `;
+  }
+
+  renderRows("outage-paused", paused, (item) => [
+    `<span class="mono">${escapeHtml(item.username)}</span>`,
+    escapeHtml(item.customerPhone),
+    escapeHtml(item.outagePauseCause),
+    fmtDate(item.outagePausedAt),
+    fmtDate(item.expiresAt)
+  ], 5);
+
+  renderRows("outage-credits", credits, (item) => [
+    fmtDate(item.createdAt),
+    escapeHtml(item.service),
+    fmtDate(item.outageStartedAt),
+    fmtDate(item.outageEndedAt),
+    `${durationMinutes(Number(item.creditedSeconds || 0) * 1000)} min`,
+    item.entitlementId ? `<span class="mono">${escapeHtml(item.entitlementId.slice(0, 8))}</span>` : "-"
+  ], 6);
+}
+
 function renderNetworkStatus() {
   const diagnostics = state.cache.networkStatus || {};
   const items = diagnostics.pipeline || [];
@@ -645,6 +752,8 @@ function renderAll() {
   renderPlanCards();
   renderNetworkStatus();
   renderGovernorStatus();
+  renderDynamicPlanStatus();
+  renderOutageCredits();
   renderVouchers();
 
   const payments = state.cache.payments || [];
@@ -721,7 +830,7 @@ async function loadDashboard() {
   setAuthError("");
   refreshBtn.disabled = true;
   try {
-    const [summary, sites, plans, payments, entitlements, projections, accounting, networkStatus, governorStatus] = await Promise.all([
+    const [summary, sites, plans, payments, entitlements, projections, accounting, networkStatus, governorStatus, dynamicPlanStatus, outageCredits] = await Promise.all([
       api(adminApi("/summary")),
       api(endpoints.sites),
       api(endpoints.plans),
@@ -730,9 +839,11 @@ async function loadDashboard() {
       api(endpoints.projections),
       api(endpoints.accounting),
       api(endpoints.networkStatus),
-      api(endpoints.governorStatus)
+      api(endpoints.governorStatus),
+      api(endpoints.dynamicPlanStatus),
+      api(endpoints.outageCredits)
     ]);
-    state.cache = { sites, plans, payments, entitlements, projections, accounting, networkStatus, governorStatus };
+    state.cache = { sites, plans, payments, entitlements, projections, accounting, networkStatus, governorStatus, dynamicPlanStatus, outageCredits };
     renderSummary(summary);
     renderAll();
     authPanel.classList.add("hidden");

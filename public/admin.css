@@ -323,7 +323,9 @@ td { max-width: 260px; overflow-wrap: anywhere; }
 .status.green, .status.GREEN { background: var(--green-soft); color: var(--green); }
 .status.yellow, .status.YELLOW { background: var(--amber-soft); color: var(--amber); }
 .status.red, .status.RED, .status.critical, .status.CRITICAL { background: var(--red-soft); color: var(--red); }
-.status.on, .status.enabled { background: var(--green-soft); color: var(--green); }
+.status.on, .status.enabled, .status.published { background: var(--green-soft); color: var(--green); }
 .status.off, .status.disabled { background: var(--surface-soft); color: var(--muted); }
+.status.QUIET { background: rgba(35, 221, 255, .14); color: var(--brand-cyan); }
+.status.paused { background: var(--amber-soft); color: var(--amber); }
 @media (max-width: 1100px) { .governor-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 760px) { .governor-summary { grid-template-columns: 1fr; } }

@@ -16,6 +16,7 @@
   padding-bottom: 16px; margin-bottom: 4px; border-bottom: 1px solid var(--line);
 }
 .intro-row h1 { font-size: clamp(23px, 3vw, 30px); line-height: 1.12; margin-top: 4px; }
+.intro-note { margin: 6px 0 0; color: var(--muted); font-size: 12.5px; line-height: 1.5; font-weight: 500; max-width: 46ch; }
 .intro-meta { display: flex; gap: 8px; flex-wrap: wrap; }
 .have-code-btn {
   width: auto; min-height: 38px; padding: 0 16px; border-radius: 999px;
