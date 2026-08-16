@@ -69,11 +69,18 @@ function scaleRateLimit(rateLimit: string | null, multiplier: number): string | 
   });
 }
 
+// Day-plus plans (daily/weekly/monthly) keep their advertised duration fixed
+// -- flexing a 30-day plan's duration by the same +/-25-35% multiplier used
+// for hourly plans produces nonsense like "900 hours" instead of "30 days".
+// Only price/speed flex for these; only sub-day plans flex duration too.
+const DURATION_SCALE_MAX_BASELINE_SECONDS = 86400;
+
 export function scaleBaselinePlan(baseline: BaselinePlan, tier: Tier): ScaledSpec {
   const multiplier = TIER_MULTIPLIERS[tier];
+  const durationMultiplier = baseline.durationSeconds >= DURATION_SCALE_MAX_BASELINE_SECONDS ? 1 : multiplier.duration;
   return {
     name: baseline.name,
-    durationSeconds: scaleDuration(baseline.durationSeconds, multiplier.duration),
+    durationSeconds: scaleDuration(baseline.durationSeconds, durationMultiplier),
     priceKsh: scalePrice(baseline.priceKsh, multiplier.price),
     rateLimit: scaleRateLimit(baseline.rateLimit, multiplier.rate),
     category: baseline.category,

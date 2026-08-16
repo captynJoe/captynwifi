@@ -59,6 +59,21 @@ test("CRITICAL tier is unpublished regardless of the scaled numbers", () => {
   assert.equal(spec.enabled, false);
 });
 
+test("day-plus baselines keep a fixed duration but still flex price and speed", () => {
+  const monthly = { ...baseline, name: "Monthly Standard", durationSeconds: 2592000, priceKsh: 600, rateLimit: "8M/12M" };
+  for (const tier of ["QUIET", "GREEN", "YELLOW", "RED"] as const) {
+    const spec = scaleBaselinePlan(monthly, tier);
+    assert.equal(spec.durationSeconds, 2592000, `${tier} duration should stay fixed at 30 days`);
+  }
+  assert.ok(scaleBaselinePlan(monthly, "QUIET").priceKsh < 600);
+  assert.ok(scaleBaselinePlan(monthly, "RED").priceKsh > 600);
+});
+
+test("sub-day baselines still flex duration as before", () => {
+  const spec = scaleBaselinePlan(baseline, "QUIET");
+  assert.notEqual(spec.durationSeconds, baseline.durationSeconds);
+});
+
 test("price never scales to zero or below, even for a very cheap baseline", () => {
   const cheap = { ...baseline, priceKsh: 1 };
   const spec = scaleBaselinePlan(cheap, "QUIET");

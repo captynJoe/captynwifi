@@ -673,9 +673,6 @@ function speedTierForPlan(plan: PortalPlan) {
     return true;
   }) || null;
 }
-function renderNeedTabs() {
-  return SPEED_TIERS.map((tier) => `<button type="button" class="speed-tab ${tier.key === state.activeNeed ? "active" : ""}" data-speed-key="${esc(tier.key)}"><span>${esc(tier.label)}</span><small>${esc(tier.range)}</small></button>`).join("");
-}
 function plansForSpeedTier(tier: ReturnType<typeof activeSpeedTierConfig>) {
   const plans = customerPlans();
   if (tier.key === "all") return plans;
@@ -687,6 +684,16 @@ function plansForSpeedTier(tier: ReturnType<typeof activeSpeedTierConfig>) {
     return true;
   });
 }
+function visibleSpeedTiers() {
+  // Every plan's speed moves together with traffic now, so a tab that's
+  // populated today can go empty tomorrow (e.g. everything getting faster in
+  // a quiet spell can empty out "Basic" entirely) -- don't show a tab that
+  // currently has nothing in it.
+  return SPEED_TIERS.filter((tier) => tier.key === "all" || plansForSpeedTier(tier).length > 0);
+}
+function renderNeedTabs() {
+  return visibleSpeedTiers().map((tier) => `<button type="button" class="speed-tab ${tier.key === state.activeNeed ? "active" : ""}" data-speed-key="${esc(tier.key)}"><span>${esc(tier.label)}</span><small>${esc(tier.range)}</small></button>`).join("");
+}
 function renderPlanGrid(plans: PortalPlan[]) {
   return plans.length ? plans.map(planCard).join("") : '<div class="empty-state">No packages in this group yet.</div>';
 }
@@ -697,6 +704,7 @@ function renderPackageBrowser() {
     renderSelectedPlan();
     return;
   }
+  if (!visibleSpeedTiers().some((candidate) => candidate.key === state.activeNeed)) state.activeNeed = "all";
   const tier = activeSpeedTierConfig();
   const focusedPlans = plansForSpeedTier(tier);
   plansEl.innerHTML = `
