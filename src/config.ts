@@ -112,6 +112,11 @@ export const config = {
     partyB: readMpesaValue("MPESA_PARTY_B") || readMpesaValue("MPESA_STORE_NUMBER"),
     passkey: readMpesaValue("MPESA_PASSKEY") || readMpesaValue("MPESA_STK_PASSKEY"),
     callbackUrl: readMpesaValue("MPESA_CALLBACK_URL") || "https://captyn.shop/wifi/api/public/payments/mpesa/callback",
-    transactionType: readMpesaValue("MPESA_STK_TRANSACTION_TYPE") || readMpesaValue("MPESA_TRANSACTION_TYPE") || "CustomerBuyGoodsOnline"
+    transactionType: readMpesaValue("MPESA_STK_TRANSACTION_TYPE") || readMpesaValue("MPESA_TRANSACTION_TYPE") || "CustomerBuyGoodsOnline",
+    // How long a payment intent can sit in pending_confirmation with no M-PESA
+    // callback before the worker gives up on it and marks it failed. Matches
+    // the "stale" cutoff already used for the admin network-status metric, so
+    // that count naturally drains instead of just flagging forever.
+    pendingTimeoutSeconds: readPositiveInt("CAPTYN_WIFI_MPESA_PENDING_TIMEOUT_SECONDS", 15 * 60)
   }
 };

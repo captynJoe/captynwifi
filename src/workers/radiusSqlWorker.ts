@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { config } from "../config.js";
 import { prisma } from "../prisma.js";
-import { applyRadiusProjectionRows } from "../services/radiusSqlApply.js";
+import { applyRadiusProjectionRows, hasOtherActiveEntitlement } from "../services/radiusSqlApply.js";
 import { applyOutageCredit, evaluateAccountingOutage, resumePausedEntitlements, touchOutageHeartbeat } from "../services/outageCredit.js";
 
 async function applyProjection(id: string) {
@@ -15,8 +15,11 @@ async function applyProjection(id: string) {
     const now = new Date();
     const isActive = projection.entitlement.status === "active" && projection.entitlement.expiresAt > now;
     if (!isActive) {
-      await tx.$executeRaw`DELETE FROM radcheck WHERE username = ${projection.username}`;
-      await tx.$executeRaw`DELETE FROM radreply WHERE username = ${projection.username}`;
+      const keepRows = await hasOtherActiveEntitlement(tx, projection.username, projection.entitlement.id, now);
+      if (!keepRows) {
+        await tx.$executeRaw`DELETE FROM radcheck WHERE username = ${projection.username}`;
+        await tx.$executeRaw`DELETE FROM radreply WHERE username = ${projection.username}`;
+      }
       await tx.wifiRadiusProjection.update({
         where: { id: projection.id },
         data: { status: "applied", lastError: null, appliedAt: now }
@@ -47,8 +50,11 @@ async function expireEntitlements() {
   for (const entitlement of expired) {
     await prisma.$transaction(async (tx) => {
       await tx.wifiEntitlement.update({ where: { id: entitlement.id }, data: { status: "expired" } });
-      await tx.$executeRaw`DELETE FROM radcheck WHERE username = ${entitlement.username}`;
-      await tx.$executeRaw`DELETE FROM radreply WHERE username = ${entitlement.username}`;
+      const keepRows = await hasOtherActiveEntitlement(tx, entitlement.username, entitlement.id, now);
+      if (!keepRows) {
+        await tx.$executeRaw`DELETE FROM radcheck WHERE username = ${entitlement.username}`;
+        await tx.$executeRaw`DELETE FROM radreply WHERE username = ${entitlement.username}`;
+      }
       // Only stamp status/appliedAt if the projection was never actually applied
       // (still pending/failed at expiry). Otherwise this would overwrite the
       // real apply time with the expiry time, making it look like every grant
@@ -61,6 +67,21 @@ async function expireEntitlements() {
       }
     });
   }
+}
+
+// M-PESA callbacks aren't guaranteed delivery -- if Safaricom's callback never
+// arrives (dropped, customer's phone unreachable, etc.) a payment intent
+// would otherwise sit in pending_confirmation forever with no entitlement
+// ever created. updatedAt is what moves this window: the STK-initiate step
+// touches it once right after creation, so this only counts idle time since
+// then, not time since the customer first tapped Pay.
+async function expireStalePaymentIntents() {
+  const cutoff = new Date(Date.now() - config.mpesa.pendingTimeoutSeconds * 1000);
+  const result = await prisma.wifiPaymentIntent.updateMany({
+    where: { status: "pending_confirmation", updatedAt: { lt: cutoff } },
+    data: { status: "failed" }
+  });
+  return result.count;
 }
 
 async function applyPendingBatch() {
@@ -90,6 +111,8 @@ async function applyPendingBatch() {
 
 async function tick() {
   await expireEntitlements();
+  const timedOutPayments = await expireStalePaymentIntents();
+  if (timedOutPayments > 0) console.log(`Marked ${timedOutPayments} stale pending WiFi payment(s) as failed`);
   const applied = await applyPendingBatch();
   await touchOutageHeartbeat(prisma);
 

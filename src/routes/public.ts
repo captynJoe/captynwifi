@@ -72,19 +72,53 @@ function mpesaFailureReason(rawPayload: unknown): string | null {
   return MPESA_FAILURE_MESSAGES[callback.ResultCode] ?? callback.ResultDesc ?? "Payment did not complete.";
 }
 
-function publicEntitlement(entitlement: { username: string; cleartextSecret: string; expiresAt: Date; deviceLimit: number; rateLimit: string | null }) {
+// Sums every outage credit ever applied to this entitlement (see
+// outageCredit.ts's resumePausedEntitlements), so the portal can tell a
+// customer how much time they've gotten back from past network outages —
+// on top of whatever's currently paused (outagePausedAt on the entitlement
+// itself), which hasn't been credited yet since it hasn't resumed.
+async function sumOutageCreditSeconds(entitlementId: string): Promise<number> {
+  const result = await prisma.wifiOutageCredit.aggregate({
+    where: { entitlementId },
+    _sum: { creditedSeconds: true }
+  });
+  return result._sum.creditedSeconds ?? 0;
+}
+
+async function publicEntitlement(entitlement: {
+  id: string;
+  username: string;
+  cleartextSecret: string;
+  expiresAt: Date;
+  deviceLimit: number;
+  rateLimit: string | null;
+  outagePausedAt: Date | null;
+}) {
+  const totalCreditedSeconds = await sumOutageCreditSeconds(entitlement.id);
   return {
     username: entitlement.username,
     password: entitlement.cleartextSecret,
     expiresAt: entitlement.expiresAt,
     deviceLimit: entitlement.deviceLimit,
-    rateLimit: entitlement.rateLimit
+    rateLimit: entitlement.rateLimit,
+    pausedSince: entitlement.outagePausedAt,
+    totalCreditedSeconds
   };
+}
+
+// An entitlement paused for outage credit (see outageCredit.ts) keeps its
+// pre-outage expiresAt until a reconnect is actually detected -- crediting
+// only happens after that, not before -- so a customer paused longer than
+// their remaining balance would otherwise look expired here well before the
+// backend has given up on them. outagePausedAt being set means the clock is
+// frozen, regardless of how stale expiresAt has become.
+function activeAccessWhere(now: Date): Prisma.WifiEntitlementWhereInput {
+  return { status: "active", OR: [{ expiresAt: { gt: now } }, { outagePausedAt: { not: null } }] };
 }
 
 async function findCurrentEntitlementForUsername(username: string, at = new Date()) {
   const active = await prisma.wifiEntitlement.findFirst({
-    where: { username, status: "active", expiresAt: { gt: at } },
+    where: { username, ...activeAccessWhere(at) },
     orderBy: { expiresAt: "desc" }
   });
   if (active) return active;
@@ -143,7 +177,7 @@ async function activatePaymentIntent(intent: WifiPaymentIntent, confirmedAt = ne
     // (and, on its own earlier expiry, delete) this one's radcheck/radreply
     // rows even though this one is still supposed to be valid.
     const existingActive = await tx.wifiEntitlement.findFirst({
-      where: { username, status: "active", expiresAt: { gt: startsAt } },
+      where: { username, ...activeAccessWhere(startsAt) },
       include: { projection: true },
       orderBy: { expiresAt: "desc" }
     });
@@ -157,7 +191,11 @@ async function activatePaymentIntent(intent: WifiPaymentIntent, confirmedAt = ne
       const extendedExpiresAt = new Date(existingActive.expiresAt.getTime() + paymentIntent.plan.durationSeconds * 1000);
       const extendedEntitlement = await tx.wifiEntitlement.update({
         where: { id: existingActive.id },
-        data: { expiresAt: extendedExpiresAt }
+        // A fresh payment reactivates RADIUS right now (below), so an
+        // outage pause on this entitlement is moot -- clear it here rather
+        // than leaving it for the outage sweep to later re-credit and
+        // re-apply a projection this payment has already superseded.
+        data: { expiresAt: extendedExpiresAt, outagePausedAt: null, outagePauseCause: null }
       });
 
       const extendedProjection = buildRadiusProjection({
@@ -358,12 +396,18 @@ publicRouter.get("/sites", async (_req, res, next) => {
           // card edited via the admin Packages UI, not a static price
           // customers buy directly. Free/promotional captyn_admin plans
           // (priceKsh 0, e.g. CAPTYN Welcome) are never mirrored and keep
-          // showing as-is.
+          // showing as-is. manualPricing captyn_admin plans are the third
+          // case: the admin pinned this price on purpose, dynamicPlanEngine
+          // skips mirroring them (see maybeRotate()), so they also show as-is.
           where: {
             enabled: true,
-            OR: [{ source: "captyn_dynamic" }, { source: "captyn_admin", priceKsh: 0 }]
+            OR: [
+              { source: "captyn_dynamic" },
+              { source: "captyn_admin", priceKsh: 0 },
+              { source: "captyn_admin", manualPricing: true }
+            ]
           },
-          orderBy: [{ priceKsh: "asc" }, { durationSeconds: "asc" }, { name: "asc" }]
+          orderBy: [{ featured: "desc" }, { priceKsh: "asc" }, { durationSeconds: "asc" }, { name: "asc" }]
         }
       }
     });
@@ -399,7 +443,7 @@ publicRouter.post("/access/free", async (req, res, next) => {
     if (activated.blocked) {
       return res.status(400).json({
         error: "This device already has active free WiFi access. It needs to expire before you can claim it again.",
-        entitlement: toJsonSafe(publicEntitlement(activated.existingActive))
+        entitlement: toJsonSafe(await publicEntitlement(activated.existingActive))
       });
     }
     return res.status(201).json({
@@ -410,7 +454,7 @@ publicRouter.post("/access/free", async (req, res, next) => {
         amountKsh: activated.intent.amountKsh,
         site: plan.site,
         plan,
-        entitlement: publicEntitlement(activated.entitlement),
+        entitlement: await publicEntitlement(activated.entitlement),
         extended: activated.extended
       })
     });
@@ -451,7 +495,7 @@ publicRouter.get("/payments/:id", async (req, res, next) => {
         amountKsh: intent.amountKsh,
         site: intent.site,
         plan: intent.plan,
-        entitlement: entitlement ? publicEntitlement(entitlement) : null,
+        entitlement: entitlement ? await publicEntitlement(entitlement) : null,
         extended: !intent.entitlement && Boolean(entitlement),
         failureReason: intent.status === "failed" ? mpesaFailureReason(intent.rawPayload) : null
       })
@@ -466,11 +510,11 @@ publicRouter.get("/entitlements/by-device/:mac", async (req, res, next) => {
     const mac = normalizeDeviceMac(req.params.mac);
     if (!mac) return res.status(400).json({ error: "Device MAC required" });
     const entitlement = await prisma.wifiEntitlement.findFirst({
-      where: { deviceMac: mac, status: "active", expiresAt: { gt: new Date() } },
+      where: { deviceMac: mac, ...activeAccessWhere(new Date()) },
       orderBy: { expiresAt: "desc" }
     });
     if (!entitlement) return res.status(404).json({ error: "No active access for this device" });
-    return res.json({ data: toJsonSafe(publicEntitlement(entitlement)) });
+    return res.json({ data: toJsonSafe(await publicEntitlement(entitlement)) });
   } catch (error) {
     return next(error);
   }
@@ -493,7 +537,7 @@ publicRouter.post("/entitlements/link-device", async (req, res, next) => {
     if (!mac) return res.status(400).json({ error: "Device MAC required" });
 
     const entitlement = await prisma.wifiEntitlement.findFirst({
-      where: { username: parsed.username, status: "active", expiresAt: { gt: new Date() } },
+      where: { username: parsed.username, ...activeAccessWhere(new Date()) },
       orderBy: { createdAt: "desc" }
     });
     if (!entitlement || entitlement.cleartextSecret !== parsed.password) {
@@ -525,10 +569,10 @@ publicRouter.post("/payments/lookup-by-receipt", async (req, res, next) => {
       intent.entitlement ??
       (intent.status === "activated" ? await findCurrentEntitlementForUsername(normalizeWifiUsername(intent.customerPhone)) : null);
     if (!entitlement) return res.status(404).json({ error: "No payment found for that M-PESA code." });
-    if (entitlement.status !== "active" || entitlement.expiresAt <= new Date()) {
+    if (entitlement.status !== "active" || (entitlement.expiresAt <= new Date() && !entitlement.outagePausedAt)) {
       return res.status(404).json({ error: "That payment's WiFi access has already expired." });
     }
-    return res.json({ data: toJsonSafe(publicEntitlement(entitlement)) });
+    return res.json({ data: toJsonSafe(await publicEntitlement(entitlement)) });
   } catch (error) {
     return next(error);
   }
