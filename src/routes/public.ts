@@ -4,11 +4,44 @@ import type { Prisma, WifiPaymentIntent, WifiPlan } from "@prisma/client";
 import { z } from "zod";
 import { config } from "../config.js";
 import { prisma } from "../prisma.js";
-import { formatDarajaMsisdn, getMpesaStatus, initiateWifiStkPush } from "../services/mpesa.js";
+import { formatDarajaMsisdn, getMpesaStatus, initiateWifiStkPush, isSuccessfulStkQuery, queryWifiStkPush } from "../services/mpesa.js";
 import { buildRadiusProjection, createRadiusSecret, normalizeDeviceMac, normalizeWifiUsername } from "../services/radiusProjection.js";
 import { applyRadiusProjectionRows } from "../services/radiusSqlApply.js";
+import { bodyFieldKey, clientRateLimit, ipKey } from "../middleware/rateLimitGuard.js";
 
 export const publicRouter = Router();
+
+const publicFreeAccessLimit = clientRateLimit({
+  name: "wifi-public-free-access",
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  key: ipKey,
+  message: "Too many access attempts. Try again shortly."
+});
+
+const publicCredentialLinkLimit = clientRateLimit({
+  name: "wifi-public-link-device",
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  key: ipKey,
+  message: "Too many reconnect attempts. Try again shortly."
+});
+
+const publicReceiptLookupLimit = clientRateLimit({
+  name: "wifi-public-receipt-lookup",
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  key: (req) => `${ipKey(req)}:${bodyFieldKey("receipt")(req)}`,
+  message: "Too many receipt lookups. Try again shortly."
+});
+
+const publicPaymentIpLimit = clientRateLimit({
+  name: "wifi-public-payment",
+  windowMs: 60 * 1000,
+  max: 12,
+  key: ipKey,
+  message: "Too many payment attempts. Try again shortly."
+});
 
 // "captyn_housing"-sourced plans exist only to record housing-forwarded
 // resident payments, and stay out of this list. "captyn_dynamic" plans are
@@ -144,6 +177,12 @@ function readStkCallback(body: unknown): StkCallback | null {
   if (!body || typeof body !== "object") return null;
   const record = body as { Body?: { stkCallback?: StkCallback } };
   return record.Body?.stkCallback ?? null;
+}
+
+function rawPayloadMerchantRequestId(rawPayload: unknown) {
+  if (!rawPayload || typeof rawPayload !== "object" || Array.isArray(rawPayload)) return null;
+  const value = (rawPayload as { MerchantRequestID?: unknown }).MerchantRequestID;
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 async function activatePaymentIntent(intent: WifiPaymentIntent, confirmedAt = new Date()) {
@@ -417,7 +456,7 @@ publicRouter.get("/sites", async (_req, res, next) => {
   }
 });
 
-publicRouter.post("/access/free", async (req, res, next) => {
+publicRouter.post("/access/free", publicFreeAccessLimit, async (req, res, next) => {
   try {
     const parsed = freeAccessSchema.parse(req.body);
     const plan = await prisma.wifiPlan.findFirst({
@@ -505,19 +544,10 @@ publicRouter.get("/payments/:id", async (req, res, next) => {
   }
 });
 
-publicRouter.get("/entitlements/by-device/:mac", async (req, res, next) => {
-  try {
-    const mac = normalizeDeviceMac(req.params.mac);
-    if (!mac) return res.status(400).json({ error: "Device MAC required" });
-    const entitlement = await prisma.wifiEntitlement.findFirst({
-      where: { deviceMac: mac, ...activeAccessWhere(new Date()) },
-      orderBy: { expiresAt: "desc" }
-    });
-    if (!entitlement) return res.status(404).json({ error: "No active access for this device" });
-    return res.json({ data: toJsonSafe(await publicEntitlement(entitlement)) });
-  } catch (error) {
-    return next(error);
-  }
+publicRouter.get("/entitlements/by-device/:mac", (_req, res) => {
+  return res.status(410).json({
+    error: "Saved-device lookup now requires this browser to have remembered the access details. Use your M-PESA receipt, voucher code, or technical login to reconnect."
+  });
 });
 
 const linkDeviceSchema = z.object({
@@ -530,7 +560,7 @@ const linkDeviceSchema = z.object({
 // or receipt code) so this device is remembered against the entitlement and
 // can be silently reconnected next time it hits the captive portal, instead
 // of prompting for credentials again.
-publicRouter.post("/entitlements/link-device", async (req, res, next) => {
+publicRouter.post("/entitlements/link-device", publicCredentialLinkLimit, async (req, res, next) => {
   try {
     const parsed = linkDeviceSchema.parse(req.body);
     const mac = normalizeDeviceMac(parsed.deviceMac);
@@ -553,14 +583,20 @@ publicRouter.post("/entitlements/link-device", async (req, res, next) => {
   }
 });
 
-const receiptLookupSchema = z.object({ receipt: z.string().trim().min(4) });
+const receiptLookupSchema = z.object({
+  receipt: z.string().trim().min(8).max(32),
+  phone: z.string().trim().min(7)
+});
 
-publicRouter.post("/payments/lookup-by-receipt", async (req, res, next) => {
+publicRouter.post("/payments/lookup-by-receipt", publicReceiptLookupLimit, async (req, res, next) => {
   try {
     const parsed = receiptLookupSchema.parse(req.body);
     const receipt = parsed.receipt.toUpperCase();
+    const phone = formatDarajaMsisdn(parsed.phone);
+    if (!phone) return res.status(400).json({ error: "Enter the Safaricom phone number used for this payment." });
+
     const intent = await prisma.wifiPaymentIntent.findFirst({
-      where: { receiptNumber: receipt },
+      where: { receiptNumber: receipt, customerPhone: phone },
       include: { entitlement: true }
     });
     if (!intent) return res.status(404).json({ error: "No payment found for that M-PESA code." });
@@ -590,7 +626,7 @@ publicRouter.get("/entitlements/:username/status", async (req, res, next) => {
   }
 });
 
-publicRouter.post("/payments/mpesa/stk", async (req, res, next) => {
+publicRouter.post("/payments/mpesa/stk", publicPaymentIpLimit, async (req, res, next) => {
   try {
     const parsed = stkRequestSchema.parse(req.body);
     const phone = formatDarajaMsisdn(parsed.phone);
@@ -662,7 +698,9 @@ publicRouter.post("/payments/mpesa/stk", async (req, res, next) => {
 publicRouter.post("/payments/mpesa/callback", async (req, res, next) => {
   try {
     const callback = readStkCallback(req.body);
-    if (!callback?.CheckoutRequestID) return res.status(400).json({ error: "Invalid M-PESA callback" });
+    if (!callback) return res.status(400).json({ error: "Invalid M-PESA callback" });
+    const checkoutRequestId = callback.CheckoutRequestID?.trim();
+    if (!checkoutRequestId) return res.status(400).json({ error: "Invalid M-PESA callback" });
 
     const resultCode = Number(callback.ResultCode ?? -1);
     const receipt = metadataValue(callback.CallbackMetadata, "MpesaReceiptNumber");
@@ -671,42 +709,73 @@ publicRouter.post("/payments/mpesa/callback", async (req, res, next) => {
     const phone = metadataValue(callback.CallbackMetadata, "PhoneNumber");
 
     console.log(
-      `M-PESA STK callback received: checkoutRequestId=${callback.CheckoutRequestID} ` +
-        `resultCode=${resultCode} resultDesc=${callback.ResultDesc ?? "-"} ` +
-        `phone=${phone ?? "-"} amount=${amount ?? "-"} receipt=${receipt ?? "-"}`
+      "M-PESA STK callback received: checkoutRequestId=" + checkoutRequestId +
+        " resultCode=" + resultCode +
+        " resultDesc=" + (callback.ResultDesc ?? "-") +
+        " phone=" + (phone ?? "-") +
+        " amount=" + (amount ?? "-") +
+        " receipt=" + (receipt ?? "-")
     );
 
     const intent = await prisma.wifiPaymentIntent.findFirst({
-      where: { provider: "mpesa", providerReference: callback.CheckoutRequestID },
+      where: { provider: "mpesa", providerReference: checkoutRequestId },
       include: { plan: true }
     });
     if (!intent) {
-      console.warn(`M-PESA STK callback matched no payment intent: checkoutRequestId=${callback.CheckoutRequestID}`);
+      console.warn("M-PESA STK callback matched no payment intent: checkoutRequestId=" + checkoutRequestId);
       return res.json({ data: { accepted: true, matched: false } });
     }
 
-    if (resultCode === 0 && (paidAmount === null || Math.round(paidAmount) < intent.amountKsh)) {
-      await prisma.wifiPaymentIntent.update({
-        where: { id: intent.id },
-        data: {
-          rawPayload: req.body as Prisma.InputJsonValue,
-          providerReference: callback.CheckoutRequestID,
-          status: "failed"
-        }
-      });
-      return res.json({
-        data: { accepted: true, matched: true, activated: false, resultCode, resultDesc: "Payment amount did not match package price" }
-      });
+    const expectedMerchantRequestId = rawPayloadMerchantRequestId(intent.rawPayload);
+    if (expectedMerchantRequestId && callback.MerchantRequestID !== expectedMerchantRequestId) {
+      console.warn("M-PESA STK callback rejected: merchant request id mismatch for checkoutRequestId=" + checkoutRequestId);
+      return res.status(400).json({ error: "Invalid M-PESA callback" });
     }
 
+    if (resultCode === 0) {
+      if (paidAmount === null || Math.round(paidAmount) < intent.amountKsh) {
+        await prisma.wifiPaymentIntent.update({
+          where: { id: intent.id },
+          data: {
+            rawPayload: req.body as Prisma.InputJsonValue,
+            providerReference: checkoutRequestId,
+            status: "failed"
+          }
+        });
+        return res.json({
+          data: { accepted: true, matched: true, activated: false, resultCode, resultDesc: "Payment amount did not match package price" }
+        });
+      }
+
+      const callbackPhone = phone === undefined || phone === null ? null : formatDarajaMsisdn(String(phone));
+      if (callbackPhone && callbackPhone !== intent.customerPhone) {
+        console.warn("M-PESA STK callback rejected: phone mismatch for checkoutRequestId=" + checkoutRequestId);
+        return res.status(400).json({ error: "Invalid M-PESA callback" });
+      }
+
+      let verification: Awaited<ReturnType<typeof queryWifiStkPush>>;
+      try {
+        verification = await queryWifiStkPush(checkoutRequestId);
+      } catch (error) {
+        console.error("M-PESA STK callback verification failed for checkoutRequestId=" + checkoutRequestId, error);
+        return res.status(503).json({ error: "Unable to verify M-PESA payment yet." });
+      }
+
+      if (!isSuccessfulStkQuery(verification, checkoutRequestId)) {
+        console.warn("M-PESA STK callback refused: provider query did not confirm success for checkoutRequestId=" + checkoutRequestId);
+        return res.status(503).json({ error: "M-PESA payment is not verified yet." });
+      }
+    }
+
+    const confirmedAt = resultCode === 0 ? new Date() : null;
     await prisma.wifiPaymentIntent.update({
       where: { id: intent.id },
       data: {
         rawPayload: req.body as Prisma.InputJsonValue,
-        providerReference: callback.CheckoutRequestID,
-        receiptNumber: typeof receipt === "string" ? receipt : intent.receiptNumber,
+        providerReference: checkoutRequestId,
+        receiptNumber: resultCode === 0 && typeof receipt === "string" ? receipt : intent.receiptNumber,
         status: resultCode === 0 ? "confirmed" : "failed",
-        confirmedAt: resultCode === 0 ? new Date() : null
+        confirmedAt
       }
     });
 
@@ -714,7 +783,7 @@ publicRouter.post("/payments/mpesa/callback", async (req, res, next) => {
       return res.json({ data: { accepted: true, matched: true, activated: false, resultCode, resultDesc: callback.ResultDesc } });
     }
 
-    const activated = await activatePaymentIntent(intent, new Date());
+    const activated = await activatePaymentIntent(intent, confirmedAt ?? new Date());
     return res.json({
       data: toJsonSafe({
         accepted: true,

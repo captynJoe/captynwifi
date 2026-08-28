@@ -17,6 +17,16 @@ export interface DarajaStkPushResponse {
   [key: string]: unknown;
 }
 
+export interface DarajaStkQueryResponse {
+  MerchantRequestID?: string;
+  CheckoutRequestID?: string;
+  ResponseCode?: string;
+  ResponseDescription?: string;
+  ResultCode?: string | number;
+  ResultDesc?: string;
+  [key: string]: unknown;
+}
+
 let cachedAccessToken: { token: string; expiresAtMs: number } | null = null;
 
 export function formatDarajaMsisdn(input: string): string | null {
@@ -128,6 +138,47 @@ export async function initiateWifiStkPush(request: StkPushRequest): Promise<Dara
     `M-PESA STK push sent: phone=${request.phoneNumber} amount=${request.amount} ` +
       `checkoutRequestId=${body.CheckoutRequestID ?? "-"} responseCode=${body.ResponseCode ?? "-"} ` +
       `responseDesc=${body.ResponseDescription ?? "-"}`
+  );
+
+  return body;
+}
+
+export function isSuccessfulStkQuery(response: DarajaStkQueryResponse | null | undefined, checkoutRequestId: string) {
+  if (!response || response.CheckoutRequestID !== checkoutRequestId) return false;
+  return Number(response.ResultCode) === 0;
+}
+
+export async function queryWifiStkPush(checkoutRequestId: string): Promise<DarajaStkQueryResponse> {
+  const status = getMpesaStatus();
+  if (!status.configured) {
+    throw new Error(`M-PESA is not configured for CAPTYN WiFi: ${status.missing.join(", ")}`);
+  }
+
+  const token = await getAccessToken();
+  const timestamp = toTimestamp();
+  const payload = {
+    BusinessShortCode: config.mpesa.shortCode,
+    Password: buildPassword(timestamp),
+    Timestamp: timestamp,
+    CheckoutRequestID: checkoutRequestId
+  };
+
+  const response = await fetch(`${config.mpesa.baseUrl}/mpesa/stkpushquery/v1/query`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(12000)
+  });
+  const body = await parseJsonSafely<DarajaStkQueryResponse>(response);
+  if (!response.ok || !body) throw new Error(`M-PESA STK query failed (${response.status})`);
+
+  console.log(
+    `M-PESA STK query checked: checkoutRequestId=${checkoutRequestId} ` +
+      `responseCode=${body.ResponseCode ?? "-"} resultCode=${body.ResultCode ?? "-"} ` +
+      `resultDesc=${body.ResultDesc ?? body.ResponseDescription ?? "-"}`
   );
 
   return body;

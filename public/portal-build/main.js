@@ -58,6 +58,7 @@ const voucherLoginStatus = requireElement("voucher-login-status");
 const receiptLoginToggle = requireElement("receipt-login-toggle");
 const receiptLoginForm = requireElement("receipt-login-form");
 const receiptCodeInput = requireElement("receipt-code-input");
+const receiptPhoneInput = requireElement("receipt-phone-input");
 const receiptLoginStatus = requireElement("receipt-login-status");
 const themeToggleBtn = requireElement("theme-toggle-btn");
 const welcomeAccessBtn = requireElement("welcome-access-btn");
@@ -171,6 +172,21 @@ function resetPhonePrefix() {
     if (!phoneInput.value.trim())
         phoneInput.value = "+254";
 }
+function attachPhoneNormalization(input) {
+    input.addEventListener("focus", () => {
+        if (!input.value.trim())
+            input.value = "+254";
+    });
+    input.addEventListener("blur", () => {
+        const normalized = normalizeMpesaPhoneInput(input.value);
+        if (normalized)
+            input.value = normalized;
+        else if (!input.value.trim())
+            input.value = "+254";
+    });
+    if (!input.value.trim())
+        input.value = "+254";
+}
 phoneInput.addEventListener("focus", resetPhonePrefix);
 phoneInput.addEventListener("blur", () => {
     const normalized = normalizeMpesaPhoneInput(phoneInput.value);
@@ -178,6 +194,7 @@ phoneInput.addEventListener("blur", () => {
         phoneInput.value = normalized;
     else
         resetPhonePrefix();
+attachPhoneNormalization(receiptPhoneInput);
 });
 resetPhonePrefix();
 function readHotspotParams() {
@@ -1211,8 +1228,13 @@ receiptLoginToggle?.addEventListener("click", () => {
 receiptLoginForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const receipt = receiptCodeInput.value.trim().toUpperCase();
+    const phone = normalizeMpesaPhoneInput(receiptPhoneInput.value);
     if (!receipt)
         return;
+    if (!phone) {
+        setConnectState(receiptLoginStatus, receiptLoginForm, "failed", "Enter the Safaricom phone number used for this payment.");
+        return;
+    }
     if (!state.hotspot?.login) {
         setConnectState(receiptLoginStatus, null, "failed", "Connect to this WiFi network first, then reopen this page to log in.");
         return;
@@ -1222,7 +1244,7 @@ receiptLoginForm?.addEventListener("submit", async (event) => {
         const response = await fetch(api("/payments/lookup-by-receipt"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ receipt })
+            body: JSON.stringify({ receipt, phone })
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok)
@@ -1234,33 +1256,22 @@ receiptLoginForm?.addEventListener("submit", async (event) => {
     }
 });
 async function attemptReturningDeviceAutoConnect() {
-    const mac = state.hotspot?.mac;
-    if (!mac || !state.hotspot?.login)
+    const remembered = loadRememberedAccess();
+    if (!remembered || !state.hotspot?.login)
         return false;
-    try {
-        const response = await fetch(api(`/entitlements/by-device/${encodeURIComponent(mac)}`));
-        if (!response.ok)
-            return false;
-        const payload = await response.json();
-        if (!payload?.data?.username)
-            return false;
-        showError("");
-        showConnectedPanel(payload.data, {
-            heading: "Welcome back",
-            message: "You already have Wi-Fi access on this device — reconnecting you now."
-        });
-        return true;
-    }
-    catch (_error) {
-        return false;
-    }
+    showError("");
+    showConnectedPanel(remembered, {
+        heading: "Welcome back",
+        message: "You already have WiFi access saved in this browser. Reconnecting you now.",
+        hideCredentials: true
+    });
+    return true;
 }
 async function bootstrap() {
     const loadPlansPromise = loadPlans().catch((error) => showError(error instanceof Error ? error.message : "Unable to load packages."));
-    // A genuine hotspot-redirect device match (fresh from the server) takes
-    // priority; otherwise fall back to what this browser remembers locally so
-    // reloading the page or reopening the tab still shows "connected" instead
-    // of the package list, even without hotspot-redirect context.
+    // If this browser already saved active access, reconnect it before showing
+    // package checkout. Clearing browser storage now requires receipt, voucher,
+    // or technical login proof instead of server-side MAC credential recovery.
     const reconnectedViaDevice = await attemptReturningDeviceAutoConnect();
     if (!reconnectedViaDevice) {
         const remembered = loadRememberedAccess();

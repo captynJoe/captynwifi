@@ -49,6 +49,7 @@ const voucherLoginStatus = document.getElementById("voucher-login-status");
 const receiptLoginToggle = document.getElementById("receipt-login-toggle");
 const receiptLoginForm = document.getElementById("receipt-login-form");
 const receiptCodeInput = document.getElementById("receipt-code-input");
+const receiptPhoneInput = document.getElementById("receipt-phone-input");
 const receiptLoginStatus = document.getElementById("receipt-login-status");
 const themeToggleBtn = document.getElementById("theme-toggle-btn");
 const expiryBanner = document.getElementById("expiry-banner");
@@ -83,6 +84,16 @@ function duration(seconds) {
 }
 function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
+}
+function normalizeMpesaPhoneInput(raw) {
+  const cleaned = String(raw || "").replace(/[^\d+]/g, "").replace(/^\++/, "+");
+  const digits = cleaned.startsWith("+") ? cleaned.slice(1) : cleaned;
+  let normalized = "";
+  if (/^254[17]\d{8}$/.test(digits)) normalized = digits;
+  else if (/^2540[17]\d{8}$/.test(digits)) normalized = "254" + digits.slice(4);
+  else if (/^0[17]\d{8}$/.test(digits)) normalized = "254" + digits.slice(1);
+  else if (/^[17]\d{8}$/.test(digits)) normalized = "254" + digits;
+  return normalized ? "+" + normalized : null;
 }
 function ratePartToMbps(value) {
   const match = /^(\d+(?:\.\d+)?)([kKmM])?$/.exec(String(value || "").trim());
@@ -741,7 +752,12 @@ receiptLoginToggle?.addEventListener("click", () => {
 receiptLoginForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const receipt = receiptCodeInput.value.trim().toUpperCase();
+  const phone = normalizeMpesaPhoneInput(receiptPhoneInput?.value);
   if (!receipt) return;
+  if (!phone) {
+    setConnectState(receiptLoginStatus, receiptLoginForm, "failed", "Enter the Safaricom phone number used for this payment.");
+    return;
+  }
   if (!state.hotspot?.login) {
     setConnectState(receiptLoginStatus, null, "failed", "Connect to this WiFi network first, then reopen this page to log in.");
     return;
@@ -751,7 +767,7 @@ receiptLoginForm?.addEventListener("submit", async (event) => {
     const response = await fetch(api("/payments/lookup-by-receipt"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ receipt })
+      body: JSON.stringify({ receipt, phone })
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || "Couldn't find that M-PESA code.");
@@ -762,31 +778,23 @@ receiptLoginForm?.addEventListener("submit", async (event) => {
 });
 
 async function attemptReturningDeviceAutoConnect() {
-  const mac = state.hotspot?.mac;
-  if (!mac || !state.hotspot?.login) return false;
-  try {
-    const response = await fetch(api(`/entitlements/by-device/${encodeURIComponent(mac)}`));
-    if (!response.ok) return false;
-    const payload = await response.json();
-    if (!payload?.data?.username) return false;
-    showError("");
-    showConnectedPanel(payload.data, {
-      heading: "Welcome back",
-      message: "You already have Wi-Fi access on this device — reconnecting you now."
-    });
-    return true;
-  } catch (_error) {
-    return false;
-  }
+  const remembered = loadRememberedAccess();
+  if (!remembered || !state.hotspot?.login) return false;
+  showError("");
+  showConnectedPanel(remembered, {
+    heading: "Welcome back",
+    message: "You already have WiFi access saved in this browser. Reconnecting you now.",
+    hideCredentials: true
+  });
+  return true;
 }
 
 async function bootstrap() {
   const loadPlansPromise = loadPlans().catch((error) => showError(error instanceof Error ? error.message : "Unable to load packages."));
 
-  // A genuine hotspot-redirect device match (fresh from the server) takes
-  // priority; otherwise fall back to what this browser remembers locally so
-  // reloading the page or reopening the tab still shows "connected" instead
-  // of the package list, even without hotspot-redirect context.
+  // If this browser already saved active access, reconnect it before showing
+  // package checkout. Clearing browser storage now requires receipt, voucher,
+  // or technical login proof instead of server-side MAC credential recovery.
   const reconnectedViaDevice = await attemptReturningDeviceAutoConnect();
   if (!reconnectedViaDevice) {
     const remembered = loadRememberedAccess();

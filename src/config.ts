@@ -22,6 +22,23 @@ function readBoolean(name: string, fallback = false): boolean {
   return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
 }
 
+const runtimeEnv = (process.env.NODE_ENV ?? "").trim().toLowerCase();
+const allowInsecureDevSecrets = runtimeEnv === "development" || runtimeEnv === "test";
+const KNOWN_UNSAFE_SECRET_MARKERS = ["change-me", "change-", "dev-captyn-wifi", "dev-"];
+
+function isUnsafeSecretValue(value: string): boolean {
+  const trimmed = value.trim();
+  const lowered = trimmed.toLowerCase();
+  return trimmed.length < 24 || KNOWN_UNSAFE_SECRET_MARKERS.some((marker) => lowered.includes(marker));
+}
+
+function readRequiredSecret(name: string, devFallback: string): string {
+  const configured = process.env[name]?.trim() ?? "";
+  if (configured && !isUnsafeSecretValue(configured)) return configured;
+  if (allowInsecureDevSecrets) return configured || devFallback;
+  throw new Error(`${name} must be set to a non-placeholder value of at least 24 characters.`);
+}
+
 function stripTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
 }
@@ -31,25 +48,26 @@ function readMpesaValue(name: string): string {
 }
 
 function readSessionSecret(): string {
-  const configured = process.env.CAPTYN_WIFI_ADMIN_SESSION_SECRET?.trim();
-  if (configured) return configured;
+  const configured = process.env.CAPTYN_WIFI_ADMIN_SESSION_SECRET?.trim() ?? "";
+  if (configured && !isUnsafeSecretValue(configured)) return configured;
 
-  const fallback = process.env.CAPTYN_WIFI_ADMIN_TOKEN?.trim() || process.env.CAPTYN_WIFI_INTEGRATION_TOKEN?.trim();
-  if (fallback) return fallback;
+  if (allowInsecureDevSecrets) {
+    return crypto.createHash("sha256").update(configured || "dev-captyn-wifi-admin-session-secret").digest("hex");
+  }
 
-  return crypto.createHash("sha256").update("dev-captyn-wifi-admin-session-secret").digest("hex");
+  throw new Error("CAPTYN_WIFI_ADMIN_SESSION_SECRET must be set to a non-placeholder value of at least 24 characters.");
 }
 
 export const config = {
   port: readPositiveInt("PORT", 4120),
   corsOrigin: process.env.CORS_ORIGIN ?? "https://housing.captyn.shop",
-  integrationToken: process.env.CAPTYN_WIFI_INTEGRATION_TOKEN ?? "dev-captyn-wifi-token",
+  integrationToken: readRequiredSecret("CAPTYN_WIFI_INTEGRATION_TOKEN", "dev-captyn-wifi-token"),
   adminDatabaseUrl: process.env.CAPTYN_ADMIN_DATABASE_URL ?? "",
   adminRootEmails: process.env.ADMIN_ROOT_EMAILS ?? process.env.ROOT_ADMIN_EMAILS ?? process.env.ADMIN_EMAIL ?? "",
   adminSessionSecret: readSessionSecret(),
   adminSessionMaxAgeSeconds: readPositiveInt("CAPTYN_WIFI_ADMIN_SESSION_MAX_AGE_SECONDS", 60 * 60 * 12),
   adminTrustedDeviceMaxAgeSeconds: readPositiveInt("CAPTYN_WIFI_ADMIN_TRUSTED_DEVICE_MAX_AGE_SECONDS", 60 * 60 * 24 * 30),
-  adminPasswordOnlyLogin: readBoolean("CAPTYN_WIFI_ADMIN_PASSWORD_ONLY_LOGIN"),
+  adminPasswordOnlyLogin: allowInsecureDevSecrets && readBoolean("CAPTYN_WIFI_ADMIN_PASSWORD_ONLY_LOGIN"),
   totpEncryptionKey: process.env.TOTP_ENCRYPTION_KEY ?? "",
   defaultRadiusRealm: process.env.DEFAULT_RADIUS_REALM ?? "captyn-wifi",
   defaultAcctInterimSeconds: readPositiveInt("DEFAULT_ACCT_INTERIM_INTERVAL_SECONDS", 120),

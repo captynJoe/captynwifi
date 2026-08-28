@@ -215,6 +215,23 @@ export function verifyAdminSessionToken(token: string | null | undefined): WifiA
   return payload;
 }
 
+export async function verifyActiveAdminSessionToken(token: string | null | undefined): Promise<WifiAdminSession | null> {
+  const session = verifyAdminSessionToken(token);
+  if (!session) return null;
+
+  const user = await readAdminUser(session.email);
+  if (!user || user.id !== session.sub || normalizeEmail(user.email) !== normalizeEmail(session.email)) return null;
+  if (user.status !== "active" || !user.isAdmin || !user.emailVerified) return null;
+  if (!config.adminPasswordOnlyLogin && (!user.twoFactorEnabled || !user.twoFactorSecret)) return null;
+
+  return {
+    ...session,
+    email: user.email,
+    name: user.name,
+    role: resolveAdminRole(user)
+  };
+}
+
 function adminSessionResponse(user: AdminUserRow, trustedDeviceToken: ReturnType<typeof createTrustedDeviceToken> | null = null) {
   const session = createAdminSession(user);
   return {

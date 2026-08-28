@@ -6,7 +6,7 @@ client captyn_private_network {
   netmask = 24
   secret = __CAPTYN_WIFI_RADIUS_SECRET__
   nas_type = mikrotik
-  require_message_authenticator = no
+  require_message_authenticator = auto
 }
 
 client docker_internal {
@@ -14,12 +14,12 @@ client docker_internal {
   netmask = 8
   secret = __CAPTYN_WIFI_RADIUS_SECRET__
   nas_type = other
-  require_message_authenticator = no
+  require_message_authenticator = auto
 }
 
 client localhost {
   ipaddr = 127.0.0.1
   secret = __CAPTYN_WIFI_RADIUS_SECRET__
   nas_type = other
-  require_message_authenticator = no
+  require_message_authenticator = auto
 }

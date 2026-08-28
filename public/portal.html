@@ -72,6 +72,7 @@
           <button id="receipt-login-toggle" class="ghost existing-login-toggle" type="button">Use M-PESA receipt</button>
           <form id="receipt-login-form" class="payment-form existing-login-form hidden">
             <label class="field" for="receipt-code-input"><span>M-PESA transaction ID</span><input id="receipt-code-input" name="receipt" type="text" autocapitalize="characters" autocomplete="off" placeholder="e.g. SFC1A2B3C4" required /></label>
+            <label class="field" for="receipt-phone-input"><span>M-PESA phone</span><input id="receipt-phone-input" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+254" value="+254" required /></label>
             <button id="receipt-login-submit" class="secondary" type="submit">Connect</button>
           </form>
           <p id="receipt-login-status" class="status-text"></p>
@@ -139,6 +140,6 @@
       </div>
     </div>
 
-    <script type="module" src="portal-build/main.js?v=2026081201" data-cfasync="false"></script>
+    <script type="module" src="portal-build/main.js?v=2026082801" data-cfasync="false"></script>
   </body>
 </html>

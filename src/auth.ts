@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { config } from "./config.js";
-import { verifyAdminSessionToken, type WifiAdminSession } from "./adminCredentialAuth.js";
+import { verifyActiveAdminSessionToken, type WifiAdminSession } from "./adminCredentialAuth.js";
 
 declare global {
   namespace Express {
@@ -29,12 +29,16 @@ export function requireIntegrationToken(req: Request, res: Response, next: NextF
   );
 }
 
-export function requireAdminSession(req: Request, res: Response, next: NextFunction) {
-  const token = req.header("x-captyn-wifi-admin-session") || req.header("authorization")?.replace(/^Bearer\s+/i, "");
-  const session = verifyAdminSessionToken(token);
-  if (!session) {
-    return res.status(401).json({ error: "Admin session expired" });
+export async function requireAdminSession(req: Request, res: Response, next: NextFunction) {
+  try {
+    const token = req.header("x-captyn-wifi-admin-session") || req.header("authorization")?.replace(/^Bearer\s+/i, "");
+    const session = await verifyActiveAdminSessionToken(token);
+    if (!session) {
+      return res.status(401).json({ error: "Admin session expired" });
+    }
+    req.wifiAdminSession = session;
+    return next();
+  } catch (error) {
+    return next(error);
   }
-  req.wifiAdminSession = session;
-  return next();
 }

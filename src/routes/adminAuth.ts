@@ -1,8 +1,33 @@
 import { Router } from "express";
 import { ZodError } from "zod";
-import { adminLoginSchema, authenticateCaptynAdmin, restoreCaptynAdminTrustedSession, trustedSessionSchema, verifyAdminSessionToken } from "../adminCredentialAuth.js";
+import { adminLoginSchema, authenticateCaptynAdmin, restoreCaptynAdminTrustedSession, trustedSessionSchema, verifyActiveAdminSessionToken } from "../adminCredentialAuth.js";
+import { bodyFieldKey, clientRateLimit, ipKey } from "../middleware/rateLimitGuard.js";
 
 export const adminAuthRouter = Router();
+
+const adminAuthIpLimit = clientRateLimit({
+  name: "wifi-admin-auth-ip",
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  key: ipKey,
+  message: "Too many sign-in attempts. Try again shortly."
+});
+
+const adminLoginAccountLimit = clientRateLimit({
+  name: "wifi-admin-login-account",
+  windowMs: 15 * 60 * 1000,
+  max: 8,
+  key: (req) => `${ipKey(req)}:${bodyFieldKey("email")(req)}`,
+  message: "Too many sign-in attempts for this account. Try again shortly."
+});
+
+const trustedSessionLimit = clientRateLimit({
+  name: "wifi-admin-trusted-session",
+  windowMs: 15 * 60 * 1000,
+  max: 12,
+  key: ipKey,
+  message: "Too many trusted-device attempts. Try again shortly."
+});
 
 function errorPayload(error: unknown) {
   const message = error instanceof Error ? error.message : "Unable to sign in.";
@@ -23,7 +48,7 @@ function errorPayload(error: unknown) {
   return { status: 403, body: { error: message } };
 }
 
-adminAuthRouter.post("/login", async (req, res, next) => {
+adminAuthRouter.post("/login", adminAuthIpLimit, adminLoginAccountLimit, async (req, res, next) => {
   try {
     const credentials = adminLoginSchema.parse(req.body);
     const data = await authenticateCaptynAdmin(credentials);
@@ -38,7 +63,7 @@ adminAuthRouter.post("/login", async (req, res, next) => {
   }
 });
 
-adminAuthRouter.post("/trusted-session", async (req, res, next) => {
+adminAuthRouter.post("/trusted-session", adminAuthIpLimit, trustedSessionLimit, async (req, res, next) => {
   try {
     const input = trustedSessionSchema.parse(req.body);
     const data = await restoreCaptynAdminTrustedSession(input);
@@ -53,9 +78,13 @@ adminAuthRouter.post("/trusted-session", async (req, res, next) => {
   }
 });
 
-adminAuthRouter.get("/session", (req, res) => {
-  const token = req.header("x-captyn-wifi-admin-session") || req.header("authorization")?.replace(/^Bearer\s+/i, "");
-  const session = verifyAdminSessionToken(token);
-  if (!session) return res.status(401).json({ error: "Admin session expired" });
-  return res.json({ data: { user: { id: session.sub, email: session.email, name: session.name, role: session.role }, expiresAt: new Date(session.exp * 1000).toISOString() } });
+adminAuthRouter.get("/session", async (req, res, next) => {
+  try {
+    const token = req.header("x-captyn-wifi-admin-session") || req.header("authorization")?.replace(/^Bearer\s+/i, "");
+    const session = await verifyActiveAdminSessionToken(token);
+    if (!session) return res.status(401).json({ error: "Admin session expired" });
+    return res.json({ data: { user: { id: session.sub, email: session.email, name: session.name, role: session.role }, expiresAt: new Date(session.exp * 1000).toISOString() } });
+  } catch (error) {
+    return next(error);
+  }
 });
