@@ -46,13 +46,13 @@ test("GREEN tier reproduces the baseline exactly", () => {
   assert.equal(spec.enabled, true);
 });
 
-test("QUIET tier: everyday-family plans get a duration bonus only, price and speed stay put", () => {
+test("QUIET tier: everyday-family plans get a duration bonus and modest speed lift, price stays put", () => {
   // "Cruise Hour" classifies as the everyday family (no gulfstream/highspeed/
-  // flash/epl keyword) -- one axis moves per rotation, never all three.
+  // flash/epl keyword) -- duration is primary, speed gets only a small lift.
   const spec = scaleBaselinePlan(baseline, "QUIET");
   assert.equal(spec.priceKsh, baseline.priceKsh, "price should stay locked at baseline");
   assert.ok(spec.durationSeconds > baseline.durationSeconds, "duration should get the bonus");
-  assert.equal(spec.rateLimit, baseline.rateLimit, "speed should stay locked at baseline");
+  assert.equal(spec.rateLimit, "8M/14M", "speed should get the modest QUIET lift");
 });
 
 test("CRITICAL tier is unpublished regardless of the scaled numbers", () => {
@@ -125,11 +125,11 @@ test("Flash: price is the only axis that moves -- duration stays fixed, speed on
   assert.notEqual(spec.rateLimit, flash.rateLimit, "speed gets a small secondary nudge");
 });
 
-test("everyday family never moves more than one axis per rotation", () => {
+test("everyday family keeps price locked in QUIET while duration leads and speed nudges", () => {
   const threeHrGo = { ...baseline, name: "3 HR Go", durationSeconds: 10800, priceKsh: 10, rateLimit: "5M/3M" };
   const quiet = scaleBaselinePlan(threeHrGo, "QUIET");
   assert.equal(quiet.priceKsh, 10, "QUIET: price locked");
-  assert.equal(quiet.rateLimit, "5M/3M", "QUIET: speed locked");
+  assert.equal(quiet.rateLimit, "6M/4M", "QUIET: speed gets the modest secondary lift");
   assert.ok(quiet.durationSeconds > 10800, "QUIET: duration is the active axis");
 
   const red = scaleBaselinePlan(threeHrGo, "RED");
@@ -148,9 +148,9 @@ test("Gulfstream: price and duration are frozen, speed swings harder than a norm
 
   const gulfDownload = parseInt(quietGulf.rateLimit.split("/")[1], 10);
   const everydayDownload = parseInt(scaleBaselinePlan(everyday, "QUIET").rateLimit?.split("/")[1] ?? "0", 10);
-  // everyday's speed axis is locked (0 intensity), so its baseline speed
-  // passes through unchanged -- Gulfstream's amplified swing should exceed it.
-  assert.ok(gulfDownload > everydayDownload, "Gulfstream's speed swing should exceed a plan whose speed axis is locked");
+  // everyday gets only a modest secondary speed lift -- Gulfstream's
+  // amplified speed swing should still exceed it.
+  assert.ok(gulfDownload > everydayDownload, "Gulfstream's speed swing should exceed everyday's modest speed lift");
 });
 
 test("sub-day baselines still flex duration as before", () => {

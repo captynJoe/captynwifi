@@ -39,6 +39,7 @@ model WifiSite {
   plans       WifiPlan[]
   intents     WifiPaymentIntent[]
   entitlements WifiEntitlement[]
+  promos      WifiPromo[]
 
   @@unique([source, externalId])
   @@index([source])
@@ -56,6 +57,9 @@ model WifiPlan {
   rateLimit         String?
   deviceLimit       Int          @default(1)
   enabled           Boolean      @default(true)
+  featured          Boolean      @default(false)
+  manualPricing     Boolean      @default(false)
+  imageFile         String?
   createdAt         DateTime     @default(now())
   updatedAt         DateTime     @updatedAt
   site              WifiSite     @relation(fields: [siteId], references: [id], onDelete: Cascade)
@@ -111,6 +115,7 @@ model WifiEntitlement {
   acctInterimSeconds Int                 @default(120)
   outagePausedAt   DateTime?
   outagePauseCause String?
+  promoPausedAt    DateTime?
   createdAt        DateTime              @default(now())
   updatedAt        DateTime              @updatedAt
   site             WifiSite              @relation(fields: [siteId], references: [id], onDelete: Cascade)
@@ -122,6 +127,31 @@ model WifiEntitlement {
   @@index([username])
   @@index([deviceMac, status, expiresAt])
   @@index([outagePausedAt])
+  @@index([promoPausedAt])
+}
+
+// A time-boxed free-access campaign an admin can launch: everyone who hits
+// the portal gets free access until `endsAt` instead of the normal purchase
+// flow, and (if pauseExisting) every currently-active paid entitlement's
+// clock freezes for the duration -- same "credit the frozen time back" idea
+// as outage pausing, but tracked on separate fields (promoPausedAt, not
+// outagePausedAt) since this is a deliberate admin action, not an incident,
+// and must never be conflated with outage-credit accounting/analytics.
+model WifiPromo {
+  id            String   @id @default(uuid())
+  siteId        String
+  active        Boolean  @default(false)
+  heading       String?
+  message       String?
+  endsAt        DateTime
+  rateLimit     String?
+  deviceLimit   Int      @default(1)
+  pauseExisting Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  site          WifiSite @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@index([active])
 }
 
 model WifiRadiusProjection {

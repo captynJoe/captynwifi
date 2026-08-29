@@ -6,7 +6,7 @@
     <title>CAPTYN WiFi</title>
     <script src="theme.js?v=2026080402"></script>
     <link rel="stylesheet" href="theme.css?v=2026080924" />
-    <link rel="stylesheet" href="portal.css?v=2026081201" />
+    <link rel="stylesheet" href="portal.css?v=2026082501" />
   </head>
   <body>
     <main class="portal-app">
@@ -88,6 +88,19 @@
         </aside>
       </section>
 
+      <section id="promo" class="promo-panel hidden">
+        <span class="promo-eyebrow">Free access event — live now</span>
+        <h1 id="promo-heading">Thank you for choosing CAPTYN</h1>
+        <p id="promo-message" class="promo-message"></p>
+        <div class="promo-countdown-block">
+          <span class="promo-countdown-label">Free access ends in</span>
+          <strong id="promo-countdown" class="promo-countdown"></strong>
+        </div>
+        <p id="promo-note" class="promo-note"></p>
+        <p id="promo-status" class="status-text"></p>
+        <a class="sponsor-link access-sponsor" href="https://captyn.shop/" target="_blank" rel="noopener">Powered by captyn.shop</a>
+      </section>
+
       <section id="access" class="access-panel hidden">
         <div class="section-head">
           <h2 id="access-heading">You're connected</h2>
@@ -97,6 +110,7 @@
           <div class="access-time-left" id="access-time-left"></div>
           <div class="credential static expires-card"><span>Expires</span><strong id="access-expires"></strong></div>
         </div>
+        <p id="access-outage-note" class="access-outage-note hidden"></p>
         <details id="access-login-details" class="login-details">
           <summary>Connection details</summary>
           <div class="credential-grid compact">

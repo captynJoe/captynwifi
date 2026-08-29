@@ -48,7 +48,15 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      # This container runs a full `npm ci` (no fast-path skip) on every
+      # boot, then a strict-mode portal build on top -- under disk/network
+      # contention (e.g. right after a crash-restart loop) that alone has
+      # taken 2-4 minutes, comfortably blowing through the old 180s here.
+      # Autoheal restarting on top of a still-booting container just
+      # re-triggers another full npm ci, turning a slow boot into an
+      # indefinite restart loop (see incident 2026-08-21). 420s gives real
+      # margin without meaningfully delaying detection of an actual crash.
+      start_period: 420s
 
   radius_worker:
     image: node:22-alpine

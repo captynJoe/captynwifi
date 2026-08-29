@@ -6,7 +6,7 @@
     <title>CAPTYN WiFi Admin</title>
     <script src="theme.js?v=2026080402"></script>
     <link rel="stylesheet" href="theme.css?v=2026080924" />
-    <link rel="stylesheet" href="admin.css?v=2026081001" />
+    <link rel="stylesheet" href="admin.css?v=2026081701" />
   </head>
   <body>
     <header class="topbar">
@@ -46,6 +46,28 @@
         </div>
       </section>
 
+      <script>
+        // Runs synchronously during parse, before the auth panel above ever paints,
+        // so a returning admin sees a loading state instead of a flash of the login form.
+        (function () {
+          try {
+            var authed = !!(
+              window.localStorage.getItem("captyn_wifi_admin_session") ||
+              window.localStorage.getItem("captyn_wifi_admin_trusted_device")
+            );
+            if (authed) {
+              document.getElementById("auth-panel").classList.add("hidden");
+              document.getElementById("boot-loading").classList.remove("hidden");
+            }
+          } catch (_error) {}
+        })();
+      </script>
+
+      <section id="boot-loading" class="boot-loading hidden">
+        <div class="boot-spinner" aria-hidden="true"></div>
+        <p>Loading your WiFi admin session…</p>
+      </section>
+
       <section id="dashboard" class="dashboard hidden">
         <section class="command-strip">
           <div>
@@ -70,6 +92,7 @@
           <button class="nav-item" type="button" data-page="governor">Governor</button>
           <button class="nav-item" type="button" data-page="dynamic-plan">Dynamic Plan</button>
           <button class="nav-item" type="button" data-page="outage-credits">Outage Credits</button>
+          <button class="nav-item" type="button" data-page="promo">Promo</button>
           <button class="nav-item" type="button" data-page="accounting">Accounting</button>
         </nav>
 
@@ -126,6 +149,10 @@
               <label class="field" for="plan-upload"><span>Upload speed (Mbps)</span><input id="plan-upload" name="uploadMbps" type="number" min="0" step="0.5" placeholder="10" /><em class="field-hint">How fast the customer can send data (calls, uploads). Leave blank for no limit.</em></label>
               <label class="field" for="plan-devices"><span>Devices</span><input id="plan-devices" name="deviceLimit" type="number" min="1" value="1" required /><em class="field-hint">How many phones/laptops can use this login at once.</em></label>
               <label class="check-field inline" for="plan-enabled"><input id="plan-enabled" name="enabled" type="checkbox" checked /><span>Published</span></label>
+              <label class="check-field inline" for="plan-featured"><input id="plan-featured" name="featured" type="checkbox" /><span>Featured</span></label>
+              <label class="check-field inline" for="plan-manual-pricing"><input id="plan-manual-pricing" name="manualPricing" type="checkbox" /><span>Manual pricing</span></label>
+              <em class="field-hint full-row">Featured packages show first, ahead of cheaper non-featured ones. Manual pricing pins this exact price -- it won't get auto-adjusted for network conditions, and won't sell during a CRITICAL congestion lockout once you've re-enabled it after one.</em>
+              <label class="field wide" for="plan-image"><span>Package image <span class="optional-tag">optional</span></span><input id="plan-image" name="image" type="file" accept="image/jpeg,image/png,image/webp" /><em class="field-hint">JPEG, PNG, or WebP, under 8MB -- it's compressed automatically. HEIC photos straight off an iPhone aren't supported; export/share as JPEG first. Uploading a new image replaces the current one.</em></label>
               <div class="form-actions split-actions">
                 <button id="plan-submit" type="submit">Save package</button>
                 <button id="plan-cancel" class="secondary hidden" type="button">Cancel edit</button>
@@ -141,7 +168,7 @@
 
         <section class="page-grid hidden" data-page-panel="packages">
           <article class="surface span-12">
-            <div class="panel-head"><h2>Customer Packages</h2><span id="package-card-count"></span></div>
+            <div class="panel-head"><h2>Customer Packages</h2><span id="package-card-count"></span><button id="new-package-btn" class="secondary" type="button">New package</button></div>
             <div id="package-cards" class="package-cards"></div>
           </article>
           <article class="surface span-12 table-panel">
@@ -275,6 +302,27 @@
           </article>
         </section>
 
+        <section class="page-grid hidden" data-page-panel="promo">
+          <article class="surface span-5">
+            <div class="panel-head"><h2>Promo Status</h2><span id="promo-status-pill" class="pill muted">Checking</span></div>
+            <div id="promo-summary" class="governor-summary"></div>
+            <button id="promo-end-btn" class="secondary hidden" type="button">End promo now</button>
+          </article>
+          <form id="promo-form" class="surface setup-panel span-7">
+            <div class="panel-head"><h2>Launch Free Access Promo</h2><span id="promo-form-status"></span></div>
+            <div class="setup-body">
+              <label class="field" for="promo-heading"><span>Heading</span><input id="promo-heading" name="heading" type="text" maxlength="120" placeholder="Thank you for choosing CAPTYN" /></label>
+              <label class="field" for="promo-message"><span>Message</span><textarea id="promo-message" name="message" rows="3" maxlength="500" placeholder="Free Surfing till midday, enjoy!"></textarea></label>
+              <label class="field" for="promo-ends-at"><span>Valid till</span><input id="promo-ends-at" name="endsAt" type="datetime-local" required /></label>
+              <label class="field" for="promo-rate-limit"><span>Rate limit (rx/tx)</span><input id="promo-rate-limit" name="rateLimit" type="text" placeholder="3M/5M" /></label>
+              <label class="field" for="promo-device-limit"><span>Device limit</span><input id="promo-device-limit" name="deviceLimit" type="number" min="1" max="10" value="1" /></label>
+              <label class="check-field" for="promo-pause-existing"><input id="promo-pause-existing" name="pauseExisting" type="checkbox" checked /><span>Pause everyone's existing packages while this runs</span></label>
+              <em class="field-hint">Every device that hits the portal sees this offer instead of the package list until "Valid till". Existing paid time is frozen, not spent, and resumes automatically afterward.</em>
+              <button id="promo-submit" type="submit">Start promo</button>
+            </div>
+          </form>
+        </section>
+
         <section class="page-grid hidden" data-page-panel="accounting">
           <article class="surface span-12 table-panel">
             <div class="panel-head"><h2>Accounting Sessions</h2><span id="accounting-count"></span></div>
@@ -284,6 +332,6 @@
       </section>
     </main>
 
-    <script src="admin.js?v=2026081001" defer data-cfasync="false"></script>
+    <script src="admin.js?v=2026081801" defer data-cfasync="false"></script>
   </body>
 </html>

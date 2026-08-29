@@ -86,13 +86,13 @@ function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
 }
 function normalizeMpesaPhoneInput(raw) {
-  const cleaned = String(raw || "").replace(/[^\d+]/g, "").replace(/^\++/, "+");
+  const cleaned = String(raw || "").replace(/[^d+]/g, "").replace(/^++/, "+");
   const digits = cleaned.startsWith("+") ? cleaned.slice(1) : cleaned;
   let normalized = "";
-  if (/^254[17]\d{8}$/.test(digits)) normalized = digits;
-  else if (/^2540[17]\d{8}$/.test(digits)) normalized = "254" + digits.slice(4);
-  else if (/^0[17]\d{8}$/.test(digits)) normalized = "254" + digits.slice(1);
-  else if (/^[17]\d{8}$/.test(digits)) normalized = "254" + digits;
+  if (/^254[17]d{8}$/.test(digits)) normalized = digits;
+  else if (/^2540[17]d{8}$/.test(digits)) normalized = "254" + digits.slice(4);
+  else if (/^0[17]d{8}$/.test(digits)) normalized = "254" + digits.slice(1);
+  else if (/^[17]d{8}$/.test(digits)) normalized = "254" + digits;
   return normalized ? "+" + normalized : null;
 }
 function ratePartToMbps(value) {

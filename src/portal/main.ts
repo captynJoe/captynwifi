@@ -34,6 +34,9 @@ interface PortalPlanInput {
   durationSeconds: number;
   rateLimit: string | null;
   deviceLimit: number;
+  featured?: boolean;
+  manualPricing?: boolean;
+  imageFile?: string | null;
 }
 
 interface PortalPlan extends PortalPlanInput {
@@ -45,6 +48,8 @@ interface Entitlement {
   password: string;
   expiresAt: string;
   deviceLimit?: number;
+  pausedSince?: string | null;
+  totalCreditedSeconds?: number;
 }
 
 interface ConnectedPanelOptions {
@@ -105,8 +110,17 @@ const accessUsername = requireElement<HTMLElement>("access-username");
 const accessPassword = requireElement<HTMLElement>("access-password");
 const accessRecovery = requireElement<HTMLElement>("access-recovery");
 const accessExpires = requireElement<HTMLElement>("access-expires");
+const accessOutageNote = requireElement<HTMLElement>("access-outage-note");
 const extendPeriodBtn = requireElement<HTMLButtonElement>("extend-period-btn");
 const workspaceEl = document.querySelector<HTMLElement>(".workspace");
+const introRowEl = document.querySelector<HTMLElement>(".intro-row");
+const promoSection = requireElement<HTMLElement>("promo");
+const promoHeading = requireElement<HTMLHeadingElement>("promo-heading");
+const promoMessage = requireElement<HTMLParagraphElement>("promo-message");
+const promoCountdown = requireElement<HTMLElement>("promo-countdown");
+const promoNote = requireElement<HTMLParagraphElement>("promo-note");
+const promoStatus = requireElement<HTMLParagraphElement>("promo-status");
+let promoCountdownTimer: number | null = null;
 const manualConnectFallback = requireElement<HTMLElement>("manual-connect-fallback");
 const manualConnectMessage = requireElement<HTMLParagraphElement>("manual-connect-message");
 const manualConnectOpenBtn = requireElement<HTMLAnchorElement>("manual-connect-open-btn");
@@ -250,9 +264,9 @@ phoneInput.addEventListener("blur", () => {
   const normalized = normalizeMpesaPhoneInput(phoneInput.value);
   if (normalized) phoneInput.value = normalized;
   else resetPhonePrefix();
-attachPhoneNormalization(receiptPhoneInput);
 });
 resetPhonePrefix();
+attachPhoneNormalization(receiptPhoneInput);
 
 function readHotspotParams() {
   const search = new URLSearchParams(window.location.search);
@@ -350,7 +364,7 @@ function showPaymentModal(kind, title, message) {
   paymentModal.classList.remove("hidden");
   const iconClass = kind === "connecting" ? "spin" : kind === "ok" ? "ok" : kind === "welcome-used" ? "laugh-cry" : "bad";
   paymentModalIcon.className = `payment-modal-icon ${iconClass}`;
-  paymentModalIcon.textContent = kind === "welcome-used" ? "\u{1F923}\u{1F62D}" : "";
+  paymentModalIcon.textContent = kind === "welcome-used" ? "\u{1F62D}" : "";
   paymentModalTitle.textContent = title;
   paymentModalMessage.textContent = message || "";
   paymentModalCancelBtn.classList.toggle("hidden", kind !== "connecting");
@@ -384,6 +398,40 @@ function formatTimeLeft(remainingMs) {
   if (hours > 0) return `${hours}h ${minutes}m left`;
   if (minutes > 1) return `${minutes} minutes left`;
   return "Less than a minute left";
+}
+function formatDuration(totalSeconds) {
+  const totalMinutes = Math.round(Number(totalSeconds || 0) / 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours > 0 && minutes > 0) return `${hours}h ${minutes}m`;
+  if (hours > 0) return `${hours}h`;
+  if (minutes > 0) return `${minutes}m`;
+  return "under a minute";
+}
+// Reflects outageCredit.ts's pause/credit tracking: `pausedSince` is set
+// while this device's access is currently paused for a network outage (not
+// yet credited -- that only happens once it resumes), and
+// `totalCreditedSeconds` is every credit already applied to this
+// entitlement's expiry from past outages. Only one of these is ever shown
+// at a time since a paused entitlement's own gap isn't credited yet.
+function renderOutageNote(entitlement: Entitlement) {
+  if (!accessOutageNote) return;
+  if (entitlement.pausedSince) {
+    accessOutageNote.textContent = `Paused since ${new Date(entitlement.pausedSince).toLocaleString()} due to a network outage — this time will be added back once you're reconnected.`;
+    accessOutageNote.classList.remove("hidden", "credited");
+    accessOutageNote.classList.add("paused");
+    return;
+  }
+  const creditedSeconds = Number(entitlement.totalCreditedSeconds || 0);
+  if (creditedSeconds > 0) {
+    accessOutageNote.textContent = `${formatDuration(creditedSeconds)} credited back for past network outages.`;
+    accessOutageNote.classList.remove("hidden", "paused");
+    accessOutageNote.classList.add("credited");
+    return;
+  }
+  accessOutageNote.textContent = "";
+  accessOutageNote.classList.add("hidden");
+  accessOutageNote.classList.remove("paused", "credited");
 }
 function updateAccessTimeLeft(remainingMs, deviceLimit?: number) {
   if (!accessTimeLeft) return;
@@ -535,11 +583,14 @@ function classifyFamily(name: string): "everyday" | "fast" | "gulfstream" | "fla
 // but with dynamic pricing its actual speed/duration moves with traffic --
 // keeping that name on screen means the title itself can claim a tier the
 // plan isn't currently in. Displayed title is regenerated from the plan's
-// family + duration instead. Only non-speed-tiered plans (free access,
-// occasion-based like EPL match day) keep their original name, since those
-// aren't claiming anything about current speed.
+// family + duration instead. Exempt: non-speed-tiered plans (free access,
+// occasion-based like EPL match day), since those aren't claiming anything
+// about current speed -- and manualPricing plans, since dynamicPlanEngine
+// never flexes those (excluded from mirroring on purpose), so there's no
+// drift for the name to misrepresent. The admin's chosen name is the whole
+// point of pinning a price manually; show it as-is until they untick it.
 function displayPlanName(plan) {
-  if (isWelcomePlan(plan) || planCategory(plan) === "limited") return plan.name;
+  if (isWelcomePlan(plan) || planCategory(plan) === "limited" || plan.manualPricing) return plan.name;
   if (String(plan.name || "").toLowerCase().includes("epl")) return plan.name;
   const tier = speedTierForPlan(plan);
   return `${tier ? tier.label : "Standard"} · ${duration(plan.durationSeconds)}`;
@@ -580,19 +631,32 @@ function planCard(plan) {
   const selected = plan.id === state.selectedPlanId;
   const tone = planTone(plan);
   const badgeHtml = tone.badge ? '<span class="plan-badge">' + esc(tone.badge) + '</span>' : "";
+  // Only render the image slot when a real photo exists -- a placeholder
+  // block for every photo-less card read as "this failed to load" rather
+  // than an intentional empty state, especially since most utility plans
+  // will likely never get a photo. Trade-off: a photo card and a text-only
+  // card sharing a grid row can leave a short gap under the shorter one
+  // (rows stretch to the tallest card), but that's minor next to a grid
+  // full of blank color blocks.
+  const imageHtml = plan.imageFile
+    ? `<img class="plan-card-image" src="${servicePath(`/uploads/plan-images/${encodeURIComponent(plan.imageFile)}`)}" alt="" loading="lazy" decoding="async" />`
+    : "";
   return `<button type="button" class="plan-card ${selected ? "selected" : ""} ${planCategory(plan) === "limited" ? "limited" : "standard"} ${isWelcomePlan(plan) ? "welcome" : ""}" data-plan-id="${esc(plan.id)}">
-    <span class="plan-top">
-      <span><h3>${esc(displayPlanName(plan))}</h3></span>
-      <span class="plan-top-badges">
-        <span class="plan-duration">${duration(plan.durationSeconds)}</span>
-        <span class="plan-devices">${esc(plan.deviceLimit)} device${Number(plan.deviceLimit) === 1 ? "" : "s"}</span>
+    ${imageHtml}
+    <span class="plan-card-body">
+      <span class="plan-top">
+        <span><h3>${esc(displayPlanName(plan))}</h3></span>
+        <span class="plan-top-badges">
+          <span class="plan-duration">${duration(plan.durationSeconds)}</span>
+          <span class="plan-devices">${esc(plan.deviceLimit)} device${Number(plan.deviceLimit) === 1 ? "" : "s"}</span>
+        </span>
       </span>
+      ${badgeHtml}
+      <span><strong class="plan-price">${money(plan.priceKsh)}</strong></span>
+      <span class="plan-caption">${esc(tone.pitch)}</span>
+      <span class="plan-meta"><span class="plan-speed ${speedTierClass(plan)}">${friendlyRate(plan.rateLimit)}</span></span>
+      <span class="plan-cta">Get ${duration(plan.durationSeconds)} →</span>
     </span>
-    ${badgeHtml}
-    <span><strong class="plan-price">${money(plan.priceKsh)}</strong></span>
-    <span class="plan-caption">${esc(tone.pitch)}</span>
-    <span class="plan-meta"><span class="plan-speed ${speedTierClass(plan)}">${friendlyRate(plan.rateLimit)}</span></span>
-    <span class="plan-cta">Get ${duration(plan.durationSeconds)} →</span>
   </button>`;
 }
 const UPGRADE_SUGGESTIONS: Record<string, string> = {
@@ -901,6 +965,7 @@ function showConnectedPanel(entitlement: Entitlement, { heading, skipAutoConnect
   accessPasswordCard?.classList.toggle("hidden", Boolean(hideCredentials));
   accessRecoveryCard?.classList.toggle("hidden", !recoveryReference);
   accessExpires.textContent = new Date(entitlement.expiresAt).toLocaleString();
+  renderOutageNote(entitlement);
   access.classList.remove("hidden");
   setStep("access");
   closeCheckoutSheet();
@@ -1259,8 +1324,81 @@ async function attemptReturningDeviceAutoConnect() {
   return true;
 }
 
+function startPromoCountdown(endsAt: string) {
+  const target = new Date(endsAt).getTime();
+  if (!Number.isFinite(target)) return;
+  if (promoCountdownTimer) clearInterval(promoCountdownTimer);
+  function tick() {
+    const remainingMs = target - Date.now();
+    if (remainingMs <= 0) {
+      promoCountdown.textContent = "Ending now";
+      if (promoCountdownTimer) clearInterval(promoCountdownTimer);
+      promoCountdownTimer = null;
+      return;
+    }
+    promoCountdown.textContent = formatTimeLeft(remainingMs).replace(/ left$/, "");
+  }
+  tick();
+  promoCountdownTimer = window.setInterval(tick, 30000);
+}
+
+// A live promo takes priority over everything else -- including a returning
+// device's own paid entitlement, which is safe to leave alone since it's
+// frozen (promoPausedAt) rather than being spent while the free grant is in
+// use. Anyone hitting the portal while a promo is active sees this instead
+// of the normal package list, whether they've paid before or not.
+async function checkPromo(): Promise<boolean> {
+  let promo;
+  try {
+    const response = await fetch(api("/promo"));
+    if (!response.ok) return false;
+    const payload = await response.json();
+    if (!payload?.data?.active) return false;
+    promo = payload.data;
+  } catch (_error) {
+    return false;
+  }
+
+  if (workspaceEl) workspaceEl.classList.add("hidden");
+  if (introRowEl) introRowEl.classList.add("hidden");
+  access.classList.add("hidden");
+  promoHeading.textContent = promo.heading || "Thank you for choosing CAPTYN";
+  promoMessage.textContent = promo.message || "Every device on the network gets full-speed access, on us — no purchase, no fine print.";
+  promoNote.textContent = "Got an active package? It's on pause, not spent — every minute picks back up the second this event ends.";
+  promoSection.classList.remove("hidden");
+  promoSection.scrollIntoView({ behavior: "smooth", block: "start" });
+  startPromoCountdown(promo.endsAt);
+
+  const mac = state.hotspot?.mac;
+  if (!mac) {
+    promoStatus.textContent = "Connect to the CAPTYN WiFi network, then reopen this page to grab your free access.";
+    return true;
+  }
+
+  promoStatus.textContent = "Unlocking your free access...";
+  try {
+    const response = await fetch(api("/promo/claim"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deviceMac: mac })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "Couldn't activate free access.");
+    await attemptAutoConnect(payload.data.username, payload.data.password, promoStatus, null, { freshGrant: true });
+  } catch (error) {
+    promoStatus.textContent = error instanceof Error ? error.message : "Couldn't activate free access.";
+  }
+  return true;
+}
+
 async function bootstrap() {
   const loadPlansPromise = loadPlans().catch((error) => showError(error instanceof Error ? error.message : "Unable to load packages."));
+
+  const promoActive = await checkPromo();
+  if (promoActive) {
+    await loadPlansPromise;
+    return;
+  }
 
   // If this browser already saved active access, reconnect it before showing
   // package checkout. Clearing browser storage now requires receipt, voucher,

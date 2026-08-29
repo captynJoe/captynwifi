@@ -1,17 +1,33 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Prisma } from "@prisma/client";
 import { Router } from "express";
+import multer from "multer";
+import sharp from "sharp";
 import { z } from "zod";
 import { prisma } from "../prisma.js";
 import { config } from "../config.js";
 import { getMpesaStatus } from "../services/mpesa.js";
 import { buildRadiusProjection } from "../services/radiusProjection.js";
-import { applyRadiusProjectionRows } from "../services/radiusSqlApply.js";
+import { applyRadiusProjectionRows, hasOtherActiveEntitlement } from "../services/radiusSqlApply.js";
 import { kickHotspotUser } from "../services/routeros.js";
 import { issueVoucher } from "../services/voucherIssuance.js";
 import { normalizeKenyaPhone } from "../lib/phone.js";
+import { endPromo, getActivePromo, startPromo } from "../services/promo.js";
 
 export const adminRouter = Router();
+
+// src/routes/admin.ts -> dist/routes/admin.js at runtime, so public/ is two
+// levels up, same computation server.ts uses for its own publicDir.
+const publicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "public");
+const planImagesDir = path.join(publicDir, "uploads", "plan-images");
+const ACCEPTED_IMAGE_FORMATS = ["jpeg", "png", "webp"] as const;
+const planImageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 }
+});
 
 const optionalText = z.preprocess(
   (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
@@ -51,7 +67,9 @@ const planCreateSchema = z.object({
   rateLimit: mikrotikRateLimit,
   deviceLimit: z.coerce.number().int().positive().default(1),
   enabled: z.coerce.boolean().default(true),
-  source: optionalText.default("captyn_admin")
+  source: optionalText.default("captyn_admin"),
+  featured: z.coerce.boolean().default(false),
+  manualPricing: z.coerce.boolean().default(false)
 });
 
 const planUpdateSchema = planCreateSchema.partial().extend({ enabled: z.coerce.boolean().optional() });
@@ -153,8 +171,11 @@ async function applyEntitlementRadius(
 ) {
   const isActive = entitlement.status === "active" && entitlement.expiresAt > at;
   if (!isActive) {
-    await tx.$executeRaw`DELETE FROM radcheck WHERE username = ${entitlement.username}`;
-    await tx.$executeRaw`DELETE FROM radreply WHERE username = ${entitlement.username}`;
+    const keepRows = await hasOtherActiveEntitlement(tx, entitlement.username, entitlement.id, at);
+    if (!keepRows) {
+      await tx.$executeRaw`DELETE FROM radcheck WHERE username = ${entitlement.username}`;
+      await tx.$executeRaw`DELETE FROM radreply WHERE username = ${entitlement.username}`;
+    }
     if (entitlement.projection) {
       await tx.wifiRadiusProjection.update({
         where: { id: entitlement.projection.id },
@@ -550,7 +571,9 @@ adminRouter.post("/plans", async (req, res, next) => {
         category: data.category,
         rateLimit: data.rateLimit,
         deviceLimit: data.deviceLimit,
-        enabled: data.enabled
+        enabled: data.enabled,
+        featured: data.featured,
+        manualPricing: data.manualPricing
       },
       include: { site: true }
     });
@@ -563,24 +586,129 @@ adminRouter.post("/plans", async (req, res, next) => {
 adminRouter.patch("/plans/:id", async (req, res, next) => {
   try {
     const data = planUpdateSchema.parse(req.body);
-    const plan = await prisma.wifiPlan.update({
-      where: { id: req.params.id },
-      data: {
-        ...(data.siteId !== undefined ? { siteId: data.siteId } : {}),
-        ...(data.source !== undefined ? { source: data.source } : {}),
-        ...(data.externalPackageId !== undefined ? { externalPackageId: data.externalPackageId } : {}),
-        ...(data.name !== undefined ? { name: data.name } : {}),
-        ...(data.durationSeconds !== undefined ? { durationSeconds: data.durationSeconds } : {}),
-        ...(data.priceKsh !== undefined ? { priceKsh: data.priceKsh } : {}),
-        ...(data.category !== undefined ? { category: data.category } : {}),
-        ...(data.rateLimit !== undefined ? { rateLimit: data.rateLimit } : {}),
-        ...(data.deviceLimit !== undefined ? { deviceLimit: data.deviceLimit } : {}),
-        ...(data.enabled !== undefined ? { enabled: data.enabled } : {})
-      },
-      include: { site: true }
+    const plan = await prisma.$transaction(async (tx) => {
+      const updated = await tx.wifiPlan.update({
+        where: { id: req.params.id },
+        data: {
+          ...(data.siteId !== undefined ? { siteId: data.siteId } : {}),
+          ...(data.source !== undefined ? { source: data.source } : {}),
+          ...(data.externalPackageId !== undefined ? { externalPackageId: data.externalPackageId } : {}),
+          ...(data.name !== undefined ? { name: data.name } : {}),
+          ...(data.durationSeconds !== undefined ? { durationSeconds: data.durationSeconds } : {}),
+          ...(data.priceKsh !== undefined ? { priceKsh: data.priceKsh } : {}),
+          ...(data.category !== undefined ? { category: data.category } : {}),
+          ...(data.rateLimit !== undefined ? { rateLimit: data.rateLimit } : {}),
+          ...(data.deviceLimit !== undefined ? { deviceLimit: data.deviceLimit } : {}),
+          ...(data.enabled !== undefined ? { enabled: data.enabled } : {}),
+          ...(data.featured !== undefined ? { featured: data.featured } : {}),
+          ...(data.manualPricing !== undefined ? { manualPricing: data.manualPricing } : {})
+        },
+        include: { site: true }
+      });
+
+      // If this plan is (now) manually priced, make sure no stale
+      // captyn_dynamic mirror is still hanging around from before it opted
+      // in -- dynamicPlanEngine's rotation loop excludes manualPricing
+      // plans from mirroring going forward, but never revisits or deletes a
+      // mirror it already created. Left alone, that mirror would keep
+      // showing (and stay purchasable) at its last auto-flexed price
+      // alongside the admin's new pinned price. deleteMany is a safe no-op
+      // when no mirror exists.
+      if (updated.manualPricing) {
+        await tx.wifiPlan.deleteMany({
+          where: { siteId: updated.siteId, source: "captyn_dynamic", externalPackageId: updated.id }
+        });
+      }
+
+      return updated;
     });
     return sendData(res, plan);
   } catch (error) {
+    return next(error);
+  }
+});
+
+adminRouter.post("/plans/:id/image", planImageUpload.single("image"), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "No image file provided." });
+
+    const plan = await prisma.wifiPlan.findUnique({ where: { id: req.params.id } });
+    if (!plan) return res.status(404).json({ error: "Package not found" });
+
+    // Standard prebuilt sharp/libvips binaries don't decode HEIC/HEIF --
+    // iPhone camera photos are HEIC by default, so this is the realistic
+    // main error path for "upload a real photo of the package," not edge
+    // -case polish. sharp() itself just throws on an unreadable buffer, so
+    // wrap metadata() rather than let that surface as a raw 500.
+    let format: string | undefined;
+    try {
+      format = (await sharp(req.file.buffer).metadata()).format;
+    } catch {
+      // fall through to the format check below with format left undefined
+    }
+    if (!format || !ACCEPTED_IMAGE_FORMATS.includes(format as (typeof ACCEPTED_IMAGE_FORMATS)[number])) {
+      return res.status(400).json({
+        error:
+          "Please upload a JPEG, PNG, or WebP image. HEIC photos straight off an iPhone aren't supported -- export or share it as a JPEG first."
+      });
+    }
+
+    // This is a captive-portal card image, loaded during initial hotspot
+    // association where every extra KB matters -- resize well past the
+    // card's actual rendered size (480x270 vs. ~170px-wide grid cards, so
+    // still sharp at 2x/retina) and step quality down until it's genuinely
+    // small, not just "smaller than the original."
+    let quality = 70;
+    let output: Buffer;
+    do {
+      output = await sharp(req.file.buffer)
+        .resize({ width: 480, height: 270, fit: "inside", withoutEnlargement: true })
+        .webp({ quality })
+        .toBuffer();
+      quality -= 15;
+    } while (output.byteLength > 30 * 1024 && quality >= 25);
+
+    await fs.mkdir(planImagesDir, { recursive: true });
+    const filename = `${plan.id}-${Date.now()}.webp`;
+    await fs.writeFile(path.join(planImagesDir, filename), output);
+
+    const updated = await prisma.wifiPlan.update({
+      where: { id: plan.id },
+      data: { imageFile: filename },
+      include: { site: true }
+    });
+
+    if (plan.imageFile) {
+      await fs.rm(path.join(planImagesDir, plan.imageFile), { force: true });
+    }
+
+    return sendData(res, updated);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+adminRouter.delete("/plans/:id", async (req, res, next) => {
+  try {
+    const deleted = await prisma.wifiPlan.delete({ where: { id: req.params.id } });
+    if (deleted.imageFile) {
+      await fs.rm(path.join(planImagesDir, deleted.imageFile), { force: true });
+    }
+    return sendData(res, deleted);
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      if (error.code === "P2025") return res.status(404).json({ error: "Package not found" });
+      // WifiPaymentIntent.planId / WifiEntitlement.planId are onDelete:
+      // Restrict -- any package that's ever been paid for or granted access
+      // through hits this, and that's the point: deleting it out from under
+      // real payment/access history would be a correctness bug, not a
+      // convenience. Uncheck Published instead to hide it from customers.
+      if (error.code === "P2003") {
+        return res.status(409).json({
+          error: "This package has payment or access history and can't be deleted -- uncheck Published to hide it from customers instead."
+        });
+      }
+    }
     return next(error);
   }
 });
@@ -983,6 +1111,49 @@ adminRouter.get("/accounting-sessions", async (_req, res, next) => {
       limit 100
     `);
     return sendData(res, rows);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+adminRouter.get("/promo", async (_req, res, next) => {
+  try {
+    const promo = await getActivePromo(prisma);
+    return sendData(res, promo);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+const startPromoSchema = z.object({
+  siteId: z.string().min(1),
+  heading: z.string().trim().min(1).max(120).optional(),
+  message: z.string().trim().min(1).max(500).optional(),
+  endsAt: z.coerce.date(),
+  rateLimit: z.string().trim().min(1).optional(),
+  deviceLimit: z.coerce.number().int().positive().max(10).optional(),
+  pauseExisting: z.boolean().optional()
+});
+
+adminRouter.post("/promo/start", async (req, res, next) => {
+  try {
+    const existing = await getActivePromo(prisma);
+    if (existing) return res.status(409).json({ error: "A promo is already active. End it before starting another." });
+    const data = startPromoSchema.parse(req.body);
+    if (data.endsAt.getTime() <= Date.now()) return res.status(400).json({ error: "endsAt must be in the future." });
+    const promo = await startPromo(prisma, data);
+    return sendData(res, promo);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+adminRouter.post("/promo/end", async (_req, res, next) => {
+  try {
+    const promo = await getActivePromo(prisma);
+    if (!promo) return res.status(404).json({ error: "No active promo." });
+    const result = await endPromo(prisma, promo.id);
+    return sendData(res, result);
   } catch (error) {
     return next(error);
   }

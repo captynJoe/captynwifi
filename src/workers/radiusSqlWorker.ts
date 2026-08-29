@@ -3,6 +3,7 @@ import { config } from "../config.js";
 import { prisma } from "../prisma.js";
 import { applyRadiusProjectionRows, hasOtherActiveEntitlement } from "../services/radiusSqlApply.js";
 import { applyOutageCredit, evaluateAccountingOutage, resumePausedEntitlements, touchOutageHeartbeat } from "../services/outageCredit.js";
+import { endPromo, getActivePromo } from "../services/promo.js";
 
 async function applyProjection(id: string) {
   await prisma.$transaction(async (tx) => {
@@ -38,11 +39,11 @@ async function applyProjection(id: string) {
 async function expireEntitlements() {
   const now = new Date();
   const expired = await prisma.wifiEntitlement.findMany({
-    // Paused entitlements are excluded -- they keep their RADIUS credentials
-    // until the resume sweep processes them, even if expiresAt has already
-    // passed real time. See resumePausedEntitlements for the force-release
-    // safety valve if a customer never reconnects.
-    where: { status: "active", expiresAt: { lte: now }, outagePausedAt: null },
+    // Paused entitlements (outage OR promo) are excluded -- they keep their
+    // RADIUS credentials until the relevant resume sweep processes them,
+    // even if their frozen expiresAt has already passed real time while
+    // paused. See resumePausedEntitlements / endPromo for the resume paths.
+    where: { status: "active", expiresAt: { lte: now }, outagePausedAt: null, promoPausedAt: null },
     select: { id: true, username: true, projection: { select: { id: true, status: true } } },
     take: config.radiusSql.batchSize
   });
@@ -109,12 +110,20 @@ async function applyPendingBatch() {
   return projections.length;
 }
 
+async function endExpiredPromo() {
+  const promo = await getActivePromo(prisma);
+  if (!promo || Date.now() < promo.endsAt.getTime()) return;
+  const result = await endPromo(prisma, promo.id);
+  console.log(`Promo ended: resumed ${result.resumed} paused entitlement(s)`);
+}
+
 async function tick() {
   await expireEntitlements();
   const timedOutPayments = await expireStalePaymentIntents();
   if (timedOutPayments > 0) console.log(`Marked ${timedOutPayments} stale pending WiFi payment(s) as failed`);
   const applied = await applyPendingBatch();
   await touchOutageHeartbeat(prisma);
+  await endExpiredPromo();
 
   const accounting = await evaluateAccountingOutage(prisma);
   if (accounting.paused) {

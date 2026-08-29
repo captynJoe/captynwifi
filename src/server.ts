@@ -2,6 +2,7 @@ import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import cors from "cors";
+import multer from "multer";
 import { ZodError } from "zod";
 import { config } from "./config.js";
 import { requireAdminSession, requireIntegrationToken } from "./auth.js";
@@ -44,6 +45,13 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
       error: "Invalid request",
       issues: error.issues
     });
+  }
+
+  // Thrown by multer's own upload.single() middleware, before any route
+  // handler runs -- never reaches a route's own try/catch, so it has to be
+  // handled centrally here.
+  if (error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE") {
+    return res.status(413).json({ error: "Image is too large -- please keep it under 8MB." });
   }
 
   console.error("CAPTYN Wi-Fi API error:", error);

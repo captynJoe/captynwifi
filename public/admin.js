@@ -22,7 +22,7 @@ function removeStoredValue(key, storage) {
 }
 
 const state = {
-  sessionToken: readStoredValue(SESSION_KEY, window.sessionStorage),
+  sessionToken: readStoredValue(SESSION_KEY, window.localStorage),
   trustedDeviceToken: readStoredValue(TRUSTED_DEVICE_KEY, window.localStorage),
   sessionUser: null,
   activePage: "overview",
@@ -35,6 +35,8 @@ const state = {
 
 const authPanel = document.getElementById("auth-panel");
 const dashboard = document.getElementById("dashboard");
+const bootLoading = document.getElementById("boot-loading");
+function finishBoot() { bootLoading?.classList.add("hidden"); }
 const loginForm = document.getElementById("login-form");
 const emailInput = document.getElementById("admin-email");
 const passwordInput = document.getElementById("admin-password");
@@ -78,6 +80,9 @@ const planDownloadInput = document.getElementById("plan-download");
 const planUploadInput = document.getElementById("plan-upload");
 const planDevicesInput = document.getElementById("plan-devices");
 const planEnabledInput = document.getElementById("plan-enabled");
+const planFeaturedInput = document.getElementById("plan-featured");
+const planManualPricingInput = document.getElementById("plan-manual-pricing");
+const planImageInput = document.getElementById("plan-image");
 const planSubmit = document.getElementById("plan-submit");
 const planCancel = document.getElementById("plan-cancel");
 const planStatus = document.getElementById("plan-status");
@@ -97,7 +102,8 @@ const endpoints = {
   networkStatus: adminApi("/network-status"),
   governorStatus: adminApi("/governor-status"),
   dynamicPlanStatus: adminApi("/dynamic-plan-status"),
-  outageCredits: adminApi("/outage-credits")
+  outageCredits: adminApi("/outage-credits"),
+  promo: adminApi("/promo")
 };
 
 const voucherForm = document.getElementById("voucher-form");
@@ -216,7 +222,10 @@ function setHealth(kind, label) { healthPill.className = `pill ${kind}`; healthP
 function setAuthError(message) { authError.textContent = message; authError.classList.toggle("hidden", !message); }
 function setInlineStatus(element, message, kind = "") { if (element) { element.textContent = message; element.className = kind; } }
 
+// Mirrors public.ts's /sites orderBy exactly: featured first, then price.
 function comparePlansByPrice(a, b) {
+  const featuredDelta = (b?.featured ? 1 : 0) - (a?.featured ? 1 : 0);
+  if (featuredDelta) return featuredDelta;
   const priceDelta = Number(a?.priceKsh || 0) - Number(b?.priceKsh || 0);
   if (priceDelta) return priceDelta;
   const durationDelta = Number(a?.durationSeconds || 0) - Number(b?.durationSeconds || 0);
@@ -226,6 +235,22 @@ function comparePlansByPrice(a, b) {
 
 function enabledPlans() {
   return (state.cache.plans || []).filter((plan) => plan.enabled).sort(comparePlansByPrice);
+}
+
+// Mirrors the public catalog query in routes/public.ts exactly: once a paid
+// captyn_admin plan has a captyn_dynamic mirror, the admin baseline row is a
+// reference rate card only (edited via the Packages UI, not sold directly)
+// and only its mirror is customer-facing. Free/promotional captyn_admin
+// plans (priceKsh 0) are never mirrored and stay visible as-is, and so are
+// manualPricing captyn_admin plans -- the admin pinned that price on
+// purpose and dynamicPlanEngine skips mirroring them. Without this, every
+// priced package shows up here twice -- the static baseline next to its
+// live-tuned mirror -- which reads as a duplicate-packages bug even though
+// nothing is actually wrong with what customers see.
+function publiclyVisiblePlans() {
+  return enabledPlans().filter(
+    (plan) => plan.source === "captyn_dynamic" || Number(plan.priceKsh) === 0 || plan.manualPricing
+  );
 }
 
 function setSignedIn(user) {
@@ -238,7 +263,7 @@ function clearSession(options = {}) {
   state.sessionToken = "";
   state.sessionUser = null;
   state.cache = {};
-  removeStoredValue(SESSION_KEY, window.sessionStorage);
+  removeStoredValue(SESSION_KEY, window.localStorage);
   if (options.forgetTrusted) {
     state.trustedDeviceToken = "";
     removeStoredValue(TRUSTED_DEVICE_KEY, window.localStorage);
@@ -246,10 +271,11 @@ function clearSession(options = {}) {
   setSignedIn(null);
   dashboard.classList.add("hidden");
   authPanel.classList.remove("hidden");
+  finishBoot();
 }
 function storeAdminSession(result) {
   state.sessionToken = result.sessionToken;
-  storeValue(SESSION_KEY, state.sessionToken, window.sessionStorage);
+  storeValue(SESSION_KEY, state.sessionToken, window.localStorage);
   if (result.trustedDeviceToken) {
     state.trustedDeviceToken = result.trustedDeviceToken;
     storeValue(TRUSTED_DEVICE_KEY, state.trustedDeviceToken, window.localStorage);
@@ -311,6 +337,9 @@ async function restoreTrustedSession() {
   } catch (_error) {
     state.trustedDeviceToken = "";
     removeStoredValue(TRUSTED_DEVICE_KEY, window.localStorage);
+    dashboard.classList.add("hidden");
+    authPanel.classList.remove("hidden");
+    finishBoot();
     return false;
   }
 }
@@ -326,7 +355,7 @@ function renderRows(id, rows, mapper, emptyColspan = 8, rowAttrs) {
 
 function renderSummary(summary) {
   const metrics = summary.metrics || {};
-  const published = enabledPlans().length;
+  const published = publiclyVisiblePlans().length;
   document.getElementById("metric-sites").textContent = text(metrics.siteCount, "0");
   document.getElementById("metric-plans").textContent = text(metrics.planCount, "0");
   document.getElementById("metric-published").textContent = String(published);
@@ -354,7 +383,7 @@ function renderSiteOptions() {
 
 function renderVoucherPlanOptions() {
   if (!voucherPlanSelect) return;
-  const plans = enabledPlans();
+  const plans = publiclyVisiblePlans();
   const current = voucherPlanSelect.value;
   voucherPlanSelect.innerHTML = plans.length
     ? plans.map((plan) => `<option value="${escapeHtml(plan.id)}">${escapeHtml(plan.site?.name)} — ${escapeHtml(plan.name)} (${fmtMoney(plan.priceKsh)})</option>`).join("")
@@ -366,7 +395,7 @@ function renderVoucherPlanOptions() {
 
 function renderBulkVoucherPlanOptions() {
   if (!bulkVoucherPlanSelect) return;
-  const plans = enabledPlans();
+  const plans = publiclyVisiblePlans();
   const current = bulkVoucherPlanSelect.value;
   bulkVoucherPlanSelect.innerHTML = plans.length
     ? plans.map((plan) => `<option value="${escapeHtml(plan.id)}">${escapeHtml(plan.site?.name)} — ${escapeHtml(plan.name)} (${fmtMoney(plan.priceKsh)})</option>`).join("")
@@ -532,12 +561,20 @@ function packageTone(plan) {
 function rateCard(plan, withAction = false) {
   const tone = packageTone(plan);
   const badgeHtml = tone.badge ? '<span class="rate-badge">' + escapeHtml(tone.badge) + '</span>' : "";
+  const merchandisingBadges = [
+    plan.featured ? '<span class="rate-badge featured">Featured</span>' : "",
+    plan.manualPricing ? '<span class="rate-badge manual-pricing">Manual price</span>' : ""
+  ].join("");
+  const imageHtml = plan.imageFile
+    ? `<img class="rate-card-image" src="${basePath}/uploads/plan-images/${encodeURIComponent(plan.imageFile)}" alt="" loading="lazy" />`
+    : "";
   return `<article class="rate-card ${planCategory(plan) === "limited" ? "limited" : "standard"} ${isWelcomePlan(plan) ? "welcome" : ""}">
+    ${imageHtml}
     <div>
       <div class="site">${escapeHtml(plan.site?.name)}</div>
       <h3>${escapeHtml(plan.name)}</h3>
     </div>
-    ${badgeHtml}
+    ${badgeHtml}${merchandisingBadges}
     <strong>${fmtMoney(plan.priceKsh)}</strong>
     <p class="rate-pitch">${escapeHtml(tone.pitch)}</p>
     <div class="rate-meta">
@@ -545,12 +582,12 @@ function rateCard(plan, withAction = false) {
       <span class="rate-speed ${speedTierClass(plan)}">Speed ${friendlyRate(plan.rateLimit)}</span>
       <span>${escapeHtml(plan.deviceLimit)} device${Number(plan.deviceLimit) === 1 ? "" : "s"}</span>
     </div>
-    ${withAction ? `<span class="action-row"><button class="secondary" type="button" data-edit-plan="${escapeHtml(plan.id)}">Edit package</button><a class="button-link secondary" href="/wifi/" target="_blank" rel="noreferrer">Preview</a></span>` : ""}
+    ${withAction ? `<span class="action-row"><button class="secondary" type="button" data-edit-plan="${escapeHtml(plan.id)}">Edit package</button><a class="button-link secondary" href="/wifi/" target="_blank" rel="noreferrer">Preview</a><button class="danger" type="button" data-delete-plan="${escapeHtml(plan.id)}">Delete</button></span>` : ""}
   </article>`;
 }
 
 function renderPlanCards() {
-  const published = enabledPlans();
+  const published = publiclyVisiblePlans();
   const preview = document.getElementById("client-preview");
   const cards = document.getElementById("package-cards");
   document.getElementById("preview-count").textContent = `${published.length} published`;
@@ -732,6 +769,31 @@ function renderOutageCredits() {
   ], 6);
 }
 
+function renderPromo() {
+  const promo = state.cache.promo;
+  const pill = document.getElementById("promo-status-pill");
+  const summary = document.getElementById("promo-summary");
+  const endBtn = document.getElementById("promo-end-btn");
+  if (!pill || !summary || !endBtn) return;
+
+  if (promo && promo.active) {
+    pill.className = "pill ok";
+    pill.textContent = "Live";
+    summary.innerHTML = `
+      <div class="governor-card"><span>Heading</span><strong>${escapeHtml(promo.heading || "—")}</strong></div>
+      <div class="governor-card"><span>Valid till</span><strong>${fmtDate(promo.endsAt)}</strong></div>
+      <div class="governor-card"><span>Rate limit</span><strong>${escapeHtml(promo.rateLimit || "plan default")}</strong></div>
+      <div class="governor-card"><span>Pausing existing</span>${status(promo.pauseExisting ? "yes" : "no")}</div>
+    `;
+    endBtn.classList.remove("hidden");
+  } else {
+    pill.className = "pill muted";
+    pill.textContent = "Off";
+    summary.innerHTML = '<div class="empty-state">No promo running. Fill in the form to launch one.</div>';
+    endBtn.classList.add("hidden");
+  }
+}
+
 function renderNetworkStatus() {
   const diagnostics = state.cache.networkStatus || {};
   const items = diagnostics.pipeline || [];
@@ -758,6 +820,7 @@ function renderAll() {
   renderGovernorStatus();
   renderDynamicPlanStatus();
   renderOutageCredits();
+  renderPromo();
   renderVouchers();
 
   const payments = state.cache.payments || [];
@@ -834,7 +897,7 @@ async function loadDashboard() {
   setAuthError("");
   refreshBtn.disabled = true;
   try {
-    const [summary, sites, plans, payments, entitlements, projections, accounting, networkStatus, governorStatus, dynamicPlanStatus, outageCredits] = await Promise.all([
+    const [summary, sites, plans, payments, entitlements, projections, accounting, networkStatus, governorStatus, dynamicPlanStatus, outageCredits, promo] = await Promise.all([
       api(adminApi("/summary")),
       api(endpoints.sites),
       api(endpoints.plans),
@@ -845,17 +908,20 @@ async function loadDashboard() {
       api(endpoints.networkStatus),
       api(endpoints.governorStatus),
       api(endpoints.dynamicPlanStatus),
-      api(endpoints.outageCredits)
+      api(endpoints.outageCredits),
+      api(endpoints.promo)
     ]);
-    state.cache = { sites, plans, payments, entitlements, projections, accounting, networkStatus, governorStatus, dynamicPlanStatus, outageCredits };
+    state.cache = { sites, plans, payments, entitlements, projections, accounting, networkStatus, governorStatus, dynamicPlanStatus, outageCredits, promo };
     renderSummary(summary);
     renderAll();
     authPanel.classList.add("hidden");
     dashboard.classList.remove("hidden");
+    finishBoot();
     setPage(state.activePage);
   } catch (error) {
     dashboard.classList.add("hidden");
     authPanel.classList.remove("hidden");
+    finishBoot();
     setAuthError(error instanceof Error ? error.message : "Unable to open admin.");
   } finally {
     refreshBtn.disabled = false;
@@ -878,6 +944,8 @@ function resetPlanForm() {
   planDownloadInput.value = "";
   planUploadInput.value = "";
   planEnabledInput.checked = true;
+  planFeaturedInput.checked = false;
+  planManualPricingInput.checked = false;
   planSubmit.textContent = "Save package";
   planCancel.classList.add("hidden");
   setInlineStatus(planStatus, "");
@@ -901,11 +969,38 @@ function editPlan(planId) {
   planUploadInput.value = rate.upload;
   planDevicesInput.value = String(plan.deviceLimit || 1);
   planEnabledInput.checked = Boolean(plan.enabled);
+  planFeaturedInput.checked = Boolean(plan.featured);
+  planManualPricingInput.checked = Boolean(plan.manualPricing);
   planSubmit.textContent = "Update package";
   planCancel.classList.remove("hidden");
   setInlineStatus(planStatus, "Editing", "warn");
   setPage("setup");
   window.scrollTo({ top: dashboard.offsetTop, behavior: "smooth" });
+}
+
+function newPlan() {
+  resetPlanForm();
+  setPage("setup");
+  window.scrollTo({ top: dashboard.offsetTop, behavior: "smooth" });
+  planNameInput.focus();
+}
+
+async function deletePlan(planId) {
+  const plan = (state.cache.plans || []).find((item) => item.id === planId);
+  if (!plan) return;
+  if (!window.confirm(`Delete "${plan.name}"? This can't be undone.`)) return;
+  try {
+    await api(adminApi(`/plans/${encodeURIComponent(planId)}`), { method: "DELETE" });
+    if (state.editingPlanId === planId) resetPlanForm();
+    await loadDashboard();
+  } catch (error) {
+    // The API returns a 409 with a clear message when a package has real
+    // payment/access history (WifiPaymentIntent/WifiEntitlement are
+    // onDelete: Restrict, on purpose -- deleting it out from under real
+    // history would be a correctness bug). Surface that instead of a
+    // generic failure.
+    window.alert(error instanceof Error ? error.message : "Unable to delete package.");
+  }
 }
 
 async function selectAccess(entitlementId, preserveMessage = false) {
@@ -1022,6 +1117,10 @@ planForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   planSubmit.disabled = true;
   setInlineStatus(planStatus, "Saving");
+  // Grab the selected file now -- resetPlanForm() calls planForm.reset(),
+  // which clears the file input, so reading it after the save would always
+  // see nothing.
+  const imageFile = planImageInput.files && planImageInput.files[0] ? planImageInput.files[0] : null;
   try {
     const body = {
       siteId: planSiteSelect.value,
@@ -1031,10 +1130,25 @@ planForm.addEventListener("submit", async (event) => {
       category: planCategorySelect.value,
       rateLimit: composeRateLimit(planDownloadInput.value, planUploadInput.value),
       deviceLimit: Number(planDevicesInput.value || 1),
-      enabled: planEnabledInput.checked
+      enabled: planEnabledInput.checked,
+      featured: planFeaturedInput.checked,
+      manualPricing: planManualPricingInput.checked
     };
-    if (state.editingPlanId) await writeApi(adminApi(`/plans/${encodeURIComponent(state.editingPlanId)}`), "PATCH", body);
-    else await writeApi(adminApi("/plans"), "POST", body);
+    let planId = state.editingPlanId;
+    if (planId) {
+      await writeApi(adminApi(`/plans/${encodeURIComponent(planId)}`), "PATCH", body);
+    } else {
+      const created = await writeApi(adminApi("/plans"), "POST", body);
+      planId = created.id;
+    }
+    if (imageFile) {
+      const formData = new FormData();
+      formData.append("image", imageFile);
+      // api() only injects the auth header, it doesn't force a JSON
+      // Content-Type -- fetch sets the multipart boundary itself as long as
+      // we don't set Content-Type manually here.
+      await api(adminApi(`/plans/${encodeURIComponent(planId)}/image`), { method: "POST", body: formData });
+    }
     resetPlanForm();
     setInlineStatus(planStatus, "Saved", "ok");
     await loadDashboard();
@@ -1123,9 +1237,67 @@ bulkVoucherForm.addEventListener("submit", async (event) => {
   }
 });
 
+const promoForm = document.getElementById("promo-form");
+const promoFormStatus = document.getElementById("promo-form-status");
+const promoSubmit = document.getElementById("promo-submit");
+const promoEndBtn = document.getElementById("promo-end-btn");
+
+promoForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const siteId = (state.cache.sites || [])[0]?.id;
+  if (!siteId) {
+    setInlineStatus(promoFormStatus, "Create a site first", "bad");
+    return;
+  }
+  const endsAtValue = document.getElementById("promo-ends-at").value;
+  const endsAt = endsAtValue ? new Date(endsAtValue) : null;
+  if (!endsAt || Number.isNaN(endsAt.getTime())) {
+    setInlineStatus(promoFormStatus, "Pick a valid \"Valid till\" time", "bad");
+    return;
+  }
+  promoSubmit.disabled = true;
+  setInlineStatus(promoFormStatus, "Starting");
+  try {
+    await writeApi(adminApi("/promo/start"), "POST", {
+      siteId,
+      heading: document.getElementById("promo-heading").value.trim() || undefined,
+      message: document.getElementById("promo-message").value.trim() || undefined,
+      endsAt: endsAt.toISOString(),
+      rateLimit: document.getElementById("promo-rate-limit").value.trim() || undefined,
+      deviceLimit: Number(document.getElementById("promo-device-limit").value) || 1,
+      pauseExisting: document.getElementById("promo-pause-existing").checked
+    });
+    setInlineStatus(promoFormStatus, "Live", "ok");
+    promoForm.reset();
+    document.getElementById("promo-device-limit").value = "1";
+    document.getElementById("promo-pause-existing").checked = true;
+    await loadDashboard();
+    setPage("promo");
+  } catch (error) {
+    setInlineStatus(promoFormStatus, error instanceof Error ? error.message : "Failed", "bad");
+  } finally {
+    promoSubmit.disabled = false;
+  }
+});
+
+promoEndBtn?.addEventListener("click", async () => {
+  if (!window.confirm("End the promo now? Everyone's free access stops and paused packages resume immediately.")) return;
+  promoEndBtn.disabled = true;
+  try {
+    await writeApi(adminApi("/promo/end"), "POST", {});
+    await loadDashboard();
+    setPage("promo");
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : "Failed to end promo");
+  } finally {
+    promoEndBtn.disabled = false;
+  }
+});
+
 refreshBtn.addEventListener("click", () => { void checkHealth(); if (state.sessionToken) void loadDashboard(); });
 logoutBtn.addEventListener("click", () => clearSession({ forgetTrusted: true }));
 planCancel.addEventListener("click", resetPlanForm);
+document.getElementById("new-package-btn")?.addEventListener("click", newPlan);
 copyPortalBtn.addEventListener("click", async () => {
   try {
     await navigator.clipboard.writeText(PORTAL_URL);
@@ -1141,6 +1313,8 @@ document.addEventListener("click", (event) => {
   if (!(target instanceof HTMLElement)) return;
   const planId = target.dataset.editPlan;
   if (planId) editPlan(planId);
+  const deleteId = target.dataset.deletePlan;
+  if (deleteId) void deletePlan(deleteId);
   const action = target.dataset.accessAction;
   if (action) void runAccessAction(action);
   const row = target.closest("[data-entitlement-id]");

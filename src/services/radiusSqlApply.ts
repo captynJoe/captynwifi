@@ -62,3 +62,29 @@ export async function applyRadiusProjectionRows(
   await replaceRadiusRows(tx, "radcheck", username, asRadiusAttributes(checkItems));
   await replaceRadiusRows(tx, "radreply", username, asRadiusAttributes(replyItems));
 }
+
+/**
+ * `username` on WifiEntitlement is the customer's phone number (or a free
+ * grant's device-MAC-derived id), and repeat customers reuse it across every
+ * purchase -- radcheck/radreply are keyed on that same username, not on any
+ * per-entitlement id. If entitlement A (an old, now-expiring purchase) is
+ * cleaned up while entitlement B (a newer purchase, same phone number) is
+ * still active, a delete-by-username would erase B's live RADIUS credentials
+ * along with A's, locking out a paying customer with time still on the
+ * clock. Callers must check this before deleting radcheck/radreply for a
+ * no-longer-active entitlement, and skip the delete if it's true --
+ * whichever entitlement is still active already owns (or will shortly
+ * re-own, via its own apply) those rows.
+ */
+export async function hasOtherActiveEntitlement(
+  tx: Prisma.TransactionClient,
+  username: string,
+  excludeEntitlementId: string,
+  at: Date
+) {
+  const other = await tx.wifiEntitlement.findFirst({
+    where: { username, id: { not: excludeEntitlementId }, status: "active", expiresAt: { gt: at } },
+    select: { id: true }
+  });
+  return Boolean(other);
+}

@@ -1,7 +1,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { config } from "../config.js";
 import { buildRadiusProjection } from "./radiusProjection.js";
-import { applyRadiusProjectionRows } from "./radiusSqlApply.js";
+import { applyRadiusProjectionRows, hasOtherActiveEntitlement } from "./radiusSqlApply.js";
 
 type HeartbeatRow = { lastSeenAt: Date };
 
@@ -111,6 +111,28 @@ async function creditEntitlement(
   const expiresAt = new Date(entitlement.expiresAt.getTime() + creditedSeconds * 1000);
   const durationSeconds = Math.max(60, secondsBetween(now, expiresAt));
 
+  // status is force-set back to "active" here (not just expiresAt) as a
+  // defensive backstop -- see the matching comment in promo.ts's endPromo,
+  // which is what surfaced this pattern: if expireEntitlements' paused-clock
+  // exclusion is ever missing or wrong for some future pause mechanism, this
+  // stops a customer being stuck on "expired" forever even after their time
+  // is correctly credited back.
+  await tx.wifiEntitlement.update({
+    where: { id: entitlement.id },
+    data: { status: "active", expiresAt }
+  });
+
+  // The radacct row that triggered this resume is matched on username alone
+  // (see resumePausedEntitlements), and username is shared across every
+  // purchase a phone number ever makes -- so it can belong to a newer
+  // entitlement for the same phone that's already active, not to this one
+  // reconnecting. Writing this (possibly stale/expired) entitlement's own
+  // secret and expiry into radcheck/radreply in that case would clobber the
+  // newer entitlement's live credentials out from under a customer who's
+  // mid-session. The time credit above is safe to keep either way -- only
+  // the RADIUS side effect needs to stay out of a still-active sibling's way.
+  if (await hasOtherActiveEntitlement(tx, entitlement.username, entitlement.id, now)) return;
+
   const projection = buildRadiusProjection({
     entitlementId: entitlement.id,
     phone: entitlement.customerPhone,
@@ -121,11 +143,6 @@ async function creditEntitlement(
     durationSeconds,
     rateLimit: entitlement.rateLimit,
     deviceLimit: entitlement.deviceLimit
-  });
-
-  await tx.wifiEntitlement.update({
-    where: { id: entitlement.id },
-    data: { expiresAt }
   });
 
   await applyRadiusProjectionRows(tx, projection.username, projection.checkItems, projection.replyItems);

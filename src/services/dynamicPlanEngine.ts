@@ -143,7 +143,16 @@ function familyAxisIntensity(family: Family, tier: Tier): { price: number; rate:
       return { price: 0, rate: 0, duration: 0 };
     case "everyday":
     default:
-      if (tier === "QUIET") return { price: 0, rate: 0, duration: 1 };
+      // Duration is still everyday's primary QUIET axis, but a handful of
+      // baseline plans (Basic Hour, 3/6 HR Go, Basic Day) sit at exactly
+      // 5Mbps download -- the portal's red/"speed-starter" cutoff -- so
+      // duration-only movement leaves them looking slow on a screen even
+      // when the network is sitting idle with capacity to spare. A modest
+      // secondary rate intensity (well below flash/fast/gulfstream's) lifts
+      // every current baseline clear of that cutoff during QUIET specifically,
+      // without erasing the speed gap to the families that lean on rate as
+      // their primary axis.
+      if (tier === "QUIET") return { price: 0, rate: 0.5, duration: 1 };
       if (tier === "YELLOW" || tier === "RED" || tier === "CRITICAL") return { price: 1, rate: 0, duration: 0 };
       return { price: 0, rate: 0, duration: 0 }; // GREEN: no movement either way
   }
@@ -221,8 +230,11 @@ export class DynamicPlanEngine {
       // Only paid, enabled baseline plans get a dynamic mirror -- free/
       // promotional plans (e.g. CAPTYN Welcome) stay on captyn_admin
       // untouched, since /access/free depends on them staying there.
+      // manualPricing plans are also excluded -- the admin pinned that
+      // price on purpose, and mirroring it would immediately re-flex it
+      // with the tier multiplier, defeating the whole point.
       const baselines = await prisma.wifiPlan.findMany({
-        where: { siteId: site.id, source: "captyn_admin", enabled: true, priceKsh: { gt: 0 } },
+        where: { siteId: site.id, source: "captyn_admin", enabled: true, priceKsh: { gt: 0 }, manualPricing: false },
         select: { id: true, name: true, durationSeconds: true, priceKsh: true, rateLimit: true, category: true, deviceLimit: true }
       });
 
@@ -249,6 +261,23 @@ export class DynamicPlanEngine {
         }
 
         totalMirrored += 1;
+      }
+
+      // manualPricing plans skip the mirror loop above entirely, so they'd
+      // otherwise keep selling straight through CRITICAL-tier congestion --
+      // the same condition that hides every other paid plan network-wide
+      // (see TIER_MULTIPLIERS.CRITICAL.published). One-directional on
+      // purpose: only ever flips enabled -> false here, never back to true,
+      // since there's no way to tell "disabled by this kill switch" apart
+      // from "admin disabled it for their own reason" -- auto-flipping it
+      // back on would silently override that. Re-enabling after congestion
+      // clears is a deliberate admin action, not automatic. Never touches
+      // price/rate/duration -- a kill switch, not a repricing.
+      if (!config.dynamicPlan.dryRun && tier === "CRITICAL") {
+        await prisma.wifiPlan.updateMany({
+          where: { siteId: site.id, source: "captyn_admin", manualPricing: true, enabled: true },
+          data: { enabled: false }
+        });
       }
 
       await prisma.wifiDynamicPlanEvent.create({

@@ -26,6 +26,11 @@
 .primary-action { width: 100%; margin-top: 4px; min-height: 46px; }
 .check-field.inline { align-self: end; min-height: 46px; }
 
+/* Boot loading (shown instead of the login form while a stored session is verified) */
+.boot-loading { min-height: calc(100vh - 116px); display: grid; place-items: center; gap: 14px; padding: 22px 0; text-align: center; color: var(--muted); font-weight: 600; }
+.boot-spinner { width: 34px; height: 34px; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--brand-blue); animation: boot-spin .8s linear infinite; }
+@keyframes boot-spin { to { transform: rotate(360deg); } }
+
 /* Dashboard shell */
 .dashboard { display: grid; gap: 18px; }
 .command-strip, .surface, .metric {
@@ -64,6 +69,7 @@
 .setup-body { display: grid; gap: 14px; padding: 18px; }
 .plan-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .plan-grid .wide { grid-column: span 2; }
+.plan-grid .full-row { grid-column: 1 / -1; }
 .form-actions { display: flex; justify-content: flex-end; gap: 10px; }
 .split-actions { grid-column: 1 / -1; }
 
@@ -89,6 +95,9 @@
 .rate-card .site { color: var(--brand-blue); font-size: 11.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
 .rate-card h3 { font-size: 18px; }
 .rate-badge { width: fit-content; min-height: 24px; display: inline-flex; align-items: center; padding: 0 9px; border-radius: 999px; background: var(--brand-cyan-soft); color: var(--brand-cyan); font-size: 11px; font-weight: 800; }
+.rate-badge.featured { background: var(--brand-blue-soft); color: var(--brand-blue); }
+.rate-badge.manual-pricing { background: var(--surface-soft); color: var(--muted); }
+.rate-card-image { width: 100%; height: 110px; object-fit: cover; border-radius: var(--radius-sm); }
 .rate-pitch { color: var(--muted); font-size: 12.5px; font-weight: 650; line-height: 1.45; }
 .rate-card strong { font-family: var(--font-display); font-size: 27px; line-height: 1; color: var(--text-strong); }
 .rate-meta { display: flex; gap: 7px; flex-wrap: wrap; color: var(--muted); font-size: 12px; font-weight: 700; }

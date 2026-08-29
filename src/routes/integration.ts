@@ -401,6 +401,46 @@ integrationRouter.get("/housing/sites/:siteId/sessions", async (req, res, next) 
   }
 });
 
+integrationRouter.get("/housing/sites/:siteId/entitlements/:entitlementId/usage", async (req, res, next) => {
+  try {
+    const siteId = req.params.siteId?.trim();
+    const entitlementId = req.params.entitlementId?.trim();
+    if (!siteId || !entitlementId) {
+      return res.status(400).json({ error: "siteId and entitlementId are required" });
+    }
+
+    const entitlement = await prisma.wifiEntitlement.findFirst({
+      where: { id: entitlementId, siteId },
+      include: { plan: true }
+    });
+    if (!entitlement) return res.status(404).json({ error: "Entitlement not found for this site" });
+
+    const sessions = await prisma.wifiAccountingSession.findMany({
+      where: { username: entitlement.username },
+      orderBy: { updatedAt: "desc" },
+      take: MAX_LIST_TAKE
+    });
+
+    const totalInputOctets = sessions.reduce((sum, item) => sum + (item.inputOctets ?? 0n), 0n);
+    const totalOutputOctets = sessions.reduce((sum, item) => sum + (item.outputOctets ?? 0n), 0n);
+
+    return sendData(res, {
+      entitlement: {
+        id: entitlement.id,
+        status: entitlement.status,
+        startsAt: entitlement.startsAt,
+        expiresAt: entitlement.expiresAt,
+        plan: entitlement.plan
+      },
+      totalInputOctets,
+      totalOutputOctets,
+      sessionCount: sessions.length
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 integrationRouter.post("/housing/sites/:siteId/vouchers/bulk", async (req, res, next) => {
   try {
     const siteId = req.params.siteId?.trim();

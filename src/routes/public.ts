@@ -7,6 +7,7 @@ import { prisma } from "../prisma.js";
 import { formatDarajaMsisdn, getMpesaStatus, initiateWifiStkPush, isSuccessfulStkQuery, queryWifiStkPush } from "../services/mpesa.js";
 import { buildRadiusProjection, createRadiusSecret, normalizeDeviceMac, normalizeWifiUsername } from "../services/radiusProjection.js";
 import { applyRadiusProjectionRows } from "../services/radiusSqlApply.js";
+import { claimPromoGrant, getActivePromo } from "../services/promo.js";
 import { bodyFieldKey, clientRateLimit, ipKey } from "../middleware/rateLimitGuard.js";
 
 export const publicRouter = Router();
@@ -41,6 +42,14 @@ const publicPaymentIpLimit = clientRateLimit({
   max: 12,
   key: ipKey,
   message: "Too many payment attempts. Try again shortly."
+});
+
+const publicPromoClaimLimit = clientRateLimit({
+  name: "wifi-public-promo-claim",
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  key: ipKey,
+  message: "Too many promo attempts. Try again shortly."
 });
 
 // "captyn_housing"-sourced plans exist only to record housing-forwarded
@@ -139,14 +148,18 @@ async function publicEntitlement(entitlement: {
   };
 }
 
-// An entitlement paused for outage credit (see outageCredit.ts) keeps its
-// pre-outage expiresAt until a reconnect is actually detected -- crediting
-// only happens after that, not before -- so a customer paused longer than
-// their remaining balance would otherwise look expired here well before the
-// backend has given up on them. outagePausedAt being set means the clock is
-// frozen, regardless of how stale expiresAt has become.
+// An entitlement paused for outage credit (see outageCredit.ts) or paused
+// for a promo (see promo.ts) keeps its pre-pause expiresAt until it's
+// resumed -- crediting/restoring only happens then, not before -- so a
+// customer paused longer than their remaining balance would otherwise look
+// expired here well before the backend has actually given up on them.
+// Either pause flag being set means the clock is frozen, regardless of how
+// stale expiresAt has become.
 function activeAccessWhere(now: Date): Prisma.WifiEntitlementWhereInput {
-  return { status: "active", OR: [{ expiresAt: { gt: now } }, { outagePausedAt: { not: null } }] };
+  return {
+    status: "active",
+    OR: [{ expiresAt: { gt: now } }, { outagePausedAt: { not: null } }, { promoPausedAt: { not: null } }]
+  };
 }
 
 async function findCurrentEntitlementForUsername(username: string, at = new Date()) {
@@ -605,7 +618,10 @@ publicRouter.post("/payments/lookup-by-receipt", publicReceiptLookupLimit, async
       intent.entitlement ??
       (intent.status === "activated" ? await findCurrentEntitlementForUsername(normalizeWifiUsername(intent.customerPhone)) : null);
     if (!entitlement) return res.status(404).json({ error: "No payment found for that M-PESA code." });
-    if (entitlement.status !== "active" || (entitlement.expiresAt <= new Date() && !entitlement.outagePausedAt)) {
+    if (
+      entitlement.status !== "active" ||
+      (entitlement.expiresAt <= new Date() && !entitlement.outagePausedAt && !entitlement.promoPausedAt)
+    ) {
       return res.status(404).json({ error: "That payment's WiFi access has already expired." });
     }
     return res.json({ data: toJsonSafe(await publicEntitlement(entitlement)) });
@@ -796,6 +812,41 @@ publicRouter.post("/payments/mpesa/callback", async (req, res, next) => {
         entitlementId: activated.entitlement.id
       })
     });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// Polled by the portal on every load, before it decides whether to show the
+// normal package list or a promo landing page -- see claimPromoGrant for why
+// this takes priority over the returning-device/remembered-access checks
+// while a promo is active.
+publicRouter.get("/promo", async (_req, res, next) => {
+  try {
+    const promo = await getActivePromo(prisma);
+    if (!promo) return res.json({ data: { active: false } });
+    return res.json({
+      data: toJsonSafe({
+        active: true,
+        heading: promo.heading,
+        message: promo.message,
+        endsAt: promo.endsAt
+      })
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+const promoClaimSchema = z.object({ deviceMac: z.string().trim().min(1) });
+
+publicRouter.post("/promo/claim", publicPromoClaimLimit, async (req, res, next) => {
+  try {
+    const parsed = promoClaimSchema.parse(req.body);
+    const promo = await getActivePromo(prisma);
+    if (!promo) return res.status(404).json({ error: "This offer has ended." });
+    const grant = await claimPromoGrant(prisma, promo, parsed.deviceMac);
+    return res.json({ data: toJsonSafe(grant) });
   } catch (error) {
     return next(error);
   }

@@ -1,0 +1,3 @@
+ALTER TABLE "WifiPlan" ADD COLUMN "featured" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "WifiPlan" ADD COLUMN "manualPricing" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "WifiPlan" ADD COLUMN "imageFile" TEXT;
