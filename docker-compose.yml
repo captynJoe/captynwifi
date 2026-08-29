@@ -23,7 +23,7 @@ services:
   wifi_api:
     image: node:22-alpine
     working_dir: /app
-    command: sh -lc "npm ci && npm run prisma:deploy && npm run build && npm start"
+    command: sh -lc "npm ci --include=dev && npm run prisma:deploy && npm run build && npm start"
     env_file:
       - .env
     environment:
@@ -53,7 +53,7 @@ services:
   radius_worker:
     image: node:22-alpine
     working_dir: /app
-    command: sh -lc "npm ci && npm run prisma:deploy && npm run build && npm run radius:worker"
+    command: sh -lc "npm ci --include=dev && npm run prisma:deploy && npm run build && npm run radius:worker"
     env_file:
       - .env
     environment:
@@ -73,7 +73,7 @@ services:
   wifi_governor:
     image: node:22-alpine
     working_dir: /app
-    command: sh -lc "npm ci && npm run prisma:deploy && npm run build && npm run governor:worker"
+    command: sh -lc "npm ci --include=dev && npm run prisma:deploy && npm run build && npm run governor:worker"
     profiles:
       - governor
     env_file:
