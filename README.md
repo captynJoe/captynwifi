@@ -27,6 +27,8 @@ npm run build
 
 Set `CAPTYN_WIFI_RADIUS_SQL_ENABLED=false` to disable the worker. The Docker Compose stack includes `radius_worker` for continuous projection.
 
+`CAPTYN_WIFI_IDLE_TIMEOUT_SECONDS` controls the RADIUS `Idle-Timeout` returned to MikroTik. The default is `21600` seconds (6 hours). Set it to `0` to omit `Idle-Timeout` entirely and rely on RouterOS user-profile idle policy.
+
 ## FreeRADIUS
 
 The Docker Compose stack includes a `freeradius` service bound to the private/WireGuard address in `CAPTYN_WIFI_RADIUS_BIND_IP` on UDP `1812` and `1813`.

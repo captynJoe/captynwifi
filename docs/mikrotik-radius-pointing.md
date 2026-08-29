@@ -15,6 +15,8 @@ On the MikroTik L009, after it can reach `10.8.0.2` over WireGuard/private routi
 ```routeros
 /radius add service=hotspot address=10.8.0.2 secret="<CAPTYN_WIFI_RADIUS_SECRET>" authentication-port=1812 accounting-port=1813 timeout=3s
 /ip hotspot profile set [find name="<HOTSPOT_PROFILE_NAME>"] use-radius=yes radius-accounting=yes radius-interim-update=2m
+/ip hotspot profile set [find name="<HOTSPOT_PROFILE_NAME>"] login-by=cookie,http-chap,http-pap,mac-cookie http-cookie-lifetime=3d
+/ip hotspot user profile set [find] add-mac-cookie=yes mac-cookie-timeout=3d
 ```
 
 If you also use PPP/PPPoE later, add those services explicitly:

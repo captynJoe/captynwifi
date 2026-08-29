@@ -6,6 +6,11 @@ function readPositiveInt(name: string, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? Math.round(value) : fallback;
 }
 
+function readNonNegativeInt(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value >= 0 ? Math.round(value) : fallback;
+}
+
 function readPositiveNumber(name: string, fallback: number): number {
   const value = Number(process.env[name]);
   return Number.isFinite(value) && value > 0 ? value : fallback;
@@ -71,6 +76,7 @@ export const config = {
   totpEncryptionKey: process.env.TOTP_ENCRYPTION_KEY ?? "",
   defaultRadiusRealm: process.env.DEFAULT_RADIUS_REALM ?? "captyn-wifi",
   defaultAcctInterimSeconds: readPositiveInt("DEFAULT_ACCT_INTERIM_INTERVAL_SECONDS", 120),
+  defaultIdleTimeoutSeconds: readNonNegativeInt("CAPTYN_WIFI_IDLE_TIMEOUT_SECONDS", 60 * 60 * 6),
   radiusSql: {
     enabled: readBoolean("CAPTYN_WIFI_RADIUS_SQL_ENABLED", true),
     pollIntervalMs: readPositiveMs("CAPTYN_WIFI_RADIUS_SQL_POLL_INTERVAL_MS", 5000),

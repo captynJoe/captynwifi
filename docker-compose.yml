@@ -64,10 +64,10 @@ services:
     depends_on:
       wifi_db:
         condition: service_healthy
-    cpus: ${CAPTYN_WIFI_RADIUS_WORKER_CPUS:-0.25}
-    mem_limit: ${CAPTYN_WIFI_RADIUS_WORKER_MEM_LIMIT:-256m}
-    memswap_limit: ${CAPTYN_WIFI_RADIUS_WORKER_MEMSWAP_LIMIT:-384m}
-    mem_reservation: ${CAPTYN_WIFI_RADIUS_WORKER_MEM_RESERVATION:-128m}
+    cpus: ${CAPTYN_WIFI_RADIUS_WORKER_CPUS:-0.35}
+    mem_limit: ${CAPTYN_WIFI_RADIUS_WORKER_MEM_LIMIT:-512m}
+    memswap_limit: ${CAPTYN_WIFI_RADIUS_WORKER_MEMSWAP_LIMIT:-768m}
+    mem_reservation: ${CAPTYN_WIFI_RADIUS_WORKER_MEM_RESERVATION:-192m}
     restart: unless-stopped
 
   wifi_governor:

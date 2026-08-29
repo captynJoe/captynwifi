@@ -39,6 +39,7 @@ export function buildRadiusProjection(input: BuildEntitlementInput) {
   const username = input.username ?? normalizeWifiUsername(input.phone);
   const password = input.password ?? createRadiusSecret();
   const sessionTimeout = Math.max(60, Math.round(input.durationSeconds));
+  const idleTimeout = Math.round(config.defaultIdleTimeoutSeconds);
   const interim = config.defaultAcctInterimSeconds;
 
   const checkItems: RadiusAttribute[] = [
@@ -54,13 +55,15 @@ export function buildRadiusProjection(input: BuildEntitlementInput) {
     { attribute: "Simultaneous-Use", op: ":=", value: input.deviceLimit }
   ];
 
-  const replyItems: RadiusAttribute[] = [
-    { attribute: "Session-Timeout", op: ":=", value: sessionTimeout },
-    { attribute: "Idle-Timeout", op: ":=", value: 900 },
+  const replyItems: RadiusAttribute[] = [{ attribute: "Session-Timeout", op: ":=", value: sessionTimeout }];
+  if (idleTimeout > 0) {
+    replyItems.push({ attribute: "Idle-Timeout", op: ":=", value: idleTimeout });
+  }
+  replyItems.push(
     { attribute: "Acct-Interim-Interval", op: ":=", value: interim },
     { attribute: "WISPr-Session-Terminate-Time", op: ":=", value: input.expiresAt.toISOString() },
     { attribute: "Class", op: ":=", value: `entitlement:${input.entitlementId}` }
-  ];
+  );
 
   if (input.rateLimit) {
     replyItems.unshift({ attribute: "Mikrotik-Rate-Limit", op: ":=", value: input.rateLimit });
