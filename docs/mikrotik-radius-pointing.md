@@ -32,6 +32,7 @@ Unauthenticated users must be able to reach CAPTYN WiFi payment pages:
 ```routeros
 /ip hotspot walled-garden add dst-host=captyn.shop comment="CAPTYN WiFi portal"
 /ip hotspot walled-garden add dst-host=www.captyn.shop comment="CAPTYN WiFi portal"
+/ip hotspot walled-garden add dst-host=housing.captyn.shop comment="CAPTYN Housing portal"
 /ip hotspot walled-garden add dst-host=api.safaricom.co.ke comment="M-PESA live"
 ```
 
