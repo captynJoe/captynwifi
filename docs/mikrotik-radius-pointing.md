@@ -8,6 +8,8 @@ CAPTYN WiFi FreeRADIUS is hosted on VPS1 and listens on the private WireGuard ad
 The shared secret is stored in `/home/captyn/captyn-wifi/.env` as `CAPTYN_WIFI_RADIUS_SECRET`.
 Do not paste the secret into tickets, chat, or screenshots.
 
+RouterOS API control-plane actions should target the MikroTik WireGuard address `10.8.0.50`. VPS node addresses `10.8.0.1` through `10.8.0.5` are reserved for servers, so do not reuse them for MikroTik.
+
 ## RouterOS Commands
 
 On the MikroTik L009, after it can reach `10.8.0.2` over WireGuard/private routing:
@@ -58,7 +60,7 @@ python3 -m http.server 8088 --bind 10.8.0.2
 Before replacing the router copy, download a local rollback copy:
 
 ```bash
-scp -O admin@10.8.0.5:hotspot/login.html /tmp/mikrotik-hotspot-login.backup-YYYYMMDD-HHMM.html
+scp -O admin@10.8.0.50:hotspot/login.html /tmp/mikrotik-hotspot-login.backup-YYYYMMDD-HHMM.html
 ```
 
 Then run on RouterOS:
