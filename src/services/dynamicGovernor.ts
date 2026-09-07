@@ -16,6 +16,7 @@ type ActiveAccountingRow = {
   entitlementId: string | null;
   rateLimit: string | null;
   planName: string | null;
+  currentRateLimit: string | null;
   priceKsh: number | null;
   category: string | null;
 };
@@ -29,6 +30,7 @@ type AccountingSample = {
   entitlementId: string | null;
   rateLimit: string | null;
   planName: string | null;
+  currentRateLimit: string | null;
   priceKsh: number;
   category: string | null;
 };
@@ -119,6 +121,14 @@ async function readActiveAccountingRows(): Promise<AccountingSample[]> {
       coalesce(r.acctupdatetime, r.acctstarttime) as "updatedAt",
       e.id as "entitlementId",
       e."rateLimit" as "rateLimit",
+      (
+        SELECT rr.value
+        FROM radreply rr
+        WHERE rr.username = r.username
+          AND rr.attribute = 'Mikrotik-Rate-Limit'
+        ORDER BY rr.id DESC
+        LIMIT 1
+      ) as "currentRateLimit",
       p.name as "planName",
       p."priceKsh" as "priceKsh",
       p.category as "category"
@@ -144,6 +154,7 @@ async function readActiveAccountingRows(): Promise<AccountingSample[]> {
       updatedAt: row.updatedAt as Date,
       entitlementId: row.entitlementId,
       rateLimit: row.rateLimit,
+      currentRateLimit: row.currentRateLimit,
       planName: row.planName,
       priceKsh: row.priceKsh ?? 0,
       category: row.category
@@ -270,7 +281,10 @@ export class WifiDynamicGovernor {
 
     const priority = priorityClass(sample);
     const targetRateLimit = scaleMikrotikRateLimit(sample.rateLimit, STATE_FACTORS[state][priority]);
-    if (!targetRateLimit || rateLimitEquals(sample.rateLimit, targetRateLimit)) return;
+    if (!targetRateLimit) return;
+
+    const currentRateLimit = sample.currentRateLimit || sample.rateLimit;
+    if (rateLimitEquals(currentRateLimit, targetRateLimit)) return;
 
     const reason = `${state.toLowerCase()}-${priority}`;
     await recordGovernorEvent({
@@ -281,10 +295,10 @@ export class WifiDynamicGovernor {
       utilizationScore,
       username: sample.username,
       entitlementId: sample.entitlementId,
-      previousRateLimit: sample.rateLimit,
+      previousRateLimit: currentRateLimit,
       targetRateLimit,
       reason,
-      raw: { planName: sample.planName, priceKsh: sample.priceKsh, category: sample.category }
+      raw: { planName: sample.planName, priceKsh: sample.priceKsh, category: sample.category, baselineRateLimit: sample.rateLimit }
     });
 
     if (config.governor.dryRun || !config.governor.applyRadiusSql) return;
