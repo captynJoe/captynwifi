@@ -138,20 +138,23 @@ model WifiEntitlement {
 // outagePausedAt) since this is a deliberate admin action, not an incident,
 // and must never be conflated with outage-credit accounting/analytics.
 model WifiPromo {
-  id            String   @id @default(uuid())
+  id            String    @id @default(uuid())
   siteId        String
-  active        Boolean  @default(false)
+  active        Boolean   @default(false)
   heading       String?
   message       String?
+  startsAt      DateTime  @default(now())
+  activatedAt   DateTime?
   endsAt        DateTime
   rateLimit     String?
-  deviceLimit   Int      @default(1)
-  pauseExisting Boolean  @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  site          WifiSite @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  deviceLimit   Int       @default(1)
+  pauseExisting Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  site          WifiSite  @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
   @@index([active])
+  @@index([active, startsAt, endsAt])
 }
 
 model WifiRadiusProjection {
@@ -257,4 +260,55 @@ model WifiOutageCredit {
   @@index([service, createdAt])
   @@index([outageStartedAt, outageEndedAt])
   @@index([entitlementId])
+}
+
+// A wallet-style ledger of duration CAPTYN owes a customer, independent of
+// any specific entitlement -- e.g. compensation for outage bugs or service
+// recovery. Each row is one grant; consumedAt/consumedEntitlementId get
+// filled in when the customer taps Activate, so "available credit" is just
+// the sum of unconsumed, unexpired rows for that phone/device. Money/package-
+// value credit types can be added later if a real need shows up --
+// durationSeconds is all today's compensation logic actually needs.
+model WifiCredit {
+  id                     String    @id @default(uuid())
+  customerPhone          String
+  deviceMac              String?
+  siteId                 String?
+  planId                 String?
+  durationSeconds        Int
+  rateLimit              String?
+  deviceLimit            Int?
+  // Expected values (plain string, not an enum, so new reasons don't need a
+  // migration): OUTAGE_COMPENSATION, PROMO_COMPENSATION, MANUAL_ADJUSTMENT,
+  // SERVICE_RECOVERY.
+  reason                 String
+  sourceReference        String?
+  expiresAt              DateTime?
+  consumedAt             DateTime?
+  consumedEntitlementId  String?
+  createdAt              DateTime  @default(now())
+  createdBy              String?
+  metadata               Json?
+
+  @@index([customerPhone, consumedAt, expiresAt])
+  @@index([deviceMac, consumedAt, expiresAt])
+  @@index([sourceReference])
+}
+
+// In-portal notification inbox. Delivery (push/SMS/etc) is a separate
+// concern layered on top later -- this table is the durable record and the
+// in-portal fallback that always works regardless of what delivery channels
+// exist.
+model WifiNotification {
+  id            String    @id @default(uuid())
+  customerPhone String
+  // Expected values so far: credit_granted, outage_resolved.
+  type          String
+  title         String
+  body          String
+  data          Json?
+  readAt        DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([customerPhone, readAt, createdAt])
 }

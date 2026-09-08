@@ -777,14 +777,20 @@ function renderPromo() {
   if (!pill || !summary || !endBtn) return;
 
   if (promo && promo.active) {
-    pill.className = "pill ok";
-    pill.textContent = "Live";
+    const now = Date.now();
+    const startsAt = promo.startsAt ? new Date(promo.startsAt).getTime() : 0;
+    const endsAt = promo.endsAt ? new Date(promo.endsAt).getTime() : 0;
+    const isLive = Boolean(promo.activatedAt) && startsAt <= now && now < endsAt;
+    pill.className = isLive ? "pill ok" : "pill warn";
+    pill.textContent = isLive ? "Live" : "Scheduled";
     summary.innerHTML = `
-      <div class="governor-card"><span>Heading</span><strong>${escapeHtml(promo.heading || "—")}</strong></div>
+      <div class="governor-card"><span>Heading</span><strong>${escapeHtml(promo.heading || "-")}</strong></div>
+      <div class="governor-card"><span>Starts at</span><strong>${fmtDate(promo.startsAt)}</strong></div>
       <div class="governor-card"><span>Valid till</span><strong>${fmtDate(promo.endsAt)}</strong></div>
       <div class="governor-card"><span>Rate limit</span><strong>${escapeHtml(promo.rateLimit || "plan default")}</strong></div>
       <div class="governor-card"><span>Pausing existing</span>${status(promo.pauseExisting ? "yes" : "no")}</div>
     `;
+    endBtn.textContent = isLive ? "End promo now" : "Cancel scheduled promo";
     endBtn.classList.remove("hidden");
   } else {
     pill.className = "pill muted";
@@ -1249,25 +1255,36 @@ promoForm?.addEventListener("submit", async (event) => {
     setInlineStatus(promoFormStatus, "Create a site first", "bad");
     return;
   }
+  const startsAtValue = document.getElementById("promo-starts-at").value;
   const endsAtValue = document.getElementById("promo-ends-at").value;
+  const startsAt = startsAtValue ? new Date(startsAtValue) : new Date();
   const endsAt = endsAtValue ? new Date(endsAtValue) : null;
+  if (Number.isNaN(startsAt.getTime())) {
+    setInlineStatus(promoFormStatus, "Pick a valid \"Starts at\" time", "bad");
+    return;
+  }
   if (!endsAt || Number.isNaN(endsAt.getTime())) {
     setInlineStatus(promoFormStatus, "Pick a valid \"Valid till\" time", "bad");
     return;
   }
+  if (endsAt <= startsAt) {
+    setInlineStatus(promoFormStatus, "Valid till must be after Starts at", "bad");
+    return;
+  }
   promoSubmit.disabled = true;
-  setInlineStatus(promoFormStatus, "Starting");
+  setInlineStatus(promoFormStatus, startsAt <= new Date() ? "Starting" : "Scheduling");
   try {
     await writeApi(adminApi("/promo/start"), "POST", {
       siteId,
       heading: document.getElementById("promo-heading").value.trim() || undefined,
       message: document.getElementById("promo-message").value.trim() || undefined,
+      startsAt: startsAt.toISOString(),
       endsAt: endsAt.toISOString(),
       rateLimit: document.getElementById("promo-rate-limit").value.trim() || undefined,
       deviceLimit: Number(document.getElementById("promo-device-limit").value) || 1,
       pauseExisting: document.getElementById("promo-pause-existing").checked
     });
-    setInlineStatus(promoFormStatus, "Live", "ok");
+    setInlineStatus(promoFormStatus, startsAt <= new Date() ? "Live" : "Scheduled", "ok");
     promoForm.reset();
     document.getElementById("promo-device-limit").value = "1";
     document.getElementById("promo-pause-existing").checked = true;
@@ -1281,7 +1298,12 @@ promoForm?.addEventListener("submit", async (event) => {
 });
 
 promoEndBtn?.addEventListener("click", async () => {
-  if (!window.confirm("End the promo now? Everyone's free access stops and paused packages resume immediately.")) return;
+  const promo = state.cache.promo;
+  const isLive = Boolean(promo?.activatedAt) && new Date(promo.startsAt).getTime() <= Date.now();
+  const prompt = isLive
+    ? "End the promo now? Everyone's free access stops and paused packages resume immediately."
+    : "Cancel this scheduled promo?";
+  if (!window.confirm(prompt)) return;
   promoEndBtn.disabled = true;
   try {
     await writeApi(adminApi("/promo/end"), "POST", {});

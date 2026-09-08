@@ -9,6 +9,7 @@ export type StartPromoInput = {
   siteId: string;
   heading?: string | null;
   message?: string | null;
+  startsAt?: Date;
   endsAt: Date;
   rateLimit?: string | null;
   deviceLimit?: number;
@@ -23,6 +24,39 @@ export async function getActivePromo(prisma: PrismaClient): Promise<WifiPromo | 
   return prisma.wifiPromo.findFirst({ where: { active: true }, orderBy: { createdAt: "desc" } });
 }
 
+export async function getLivePromo(prisma: PrismaClient, now = new Date()): Promise<WifiPromo | null> {
+  return prisma.wifiPromo.findFirst({
+    where: { active: true, activatedAt: { not: null }, startsAt: { lte: now }, endsAt: { gt: now } },
+    orderBy: { startsAt: "desc" }
+  });
+}
+
+async function pauseExistingEntitlements(tx: Prisma.TransactionClient, pausedAt: Date) {
+  return tx.wifiEntitlement.updateMany({
+    where: { status: "active", outagePausedAt: null, promoPausedAt: null, expiresAt: { gt: pausedAt } },
+    data: { promoPausedAt: pausedAt }
+  });
+}
+
+export async function activateDuePromos(prisma: PrismaClient, now = new Date()): Promise<{ activated: number; paused: number }> {
+  const promo = await prisma.wifiPromo.findFirst({
+    where: { active: true, activatedAt: null, startsAt: { lte: now }, endsAt: { gt: now } },
+    orderBy: { startsAt: "asc" }
+  });
+  if (!promo) return { activated: 0, paused: 0 };
+
+  return prisma.$transaction(async (tx) => {
+    const updated = await tx.wifiPromo.updateMany({
+      where: { id: promo.id, active: true, activatedAt: null, startsAt: { lte: now }, endsAt: { gt: now } },
+      data: { activatedAt: now }
+    });
+    if (updated.count === 0) return { activated: 0, paused: 0 };
+
+    const paused = promo.pauseExisting ? await pauseExistingEntitlements(tx, now) : { count: 0 };
+    return { activated: 1, paused: paused.count };
+  });
+}
+
 // Freezes every currently-ticking paid entitlement's clock (mirrors the
 // outage-pause technique, but on promoPausedAt -- kept separate from
 // outagePausedAt so this deliberate admin action never gets mixed into
@@ -32,6 +66,8 @@ export async function getActivePromo(prisma: PrismaClient): Promise<WifiPromo | 
 // customers while the promo is live.
 export async function startPromo(prisma: PrismaClient, input: StartPromoInput): Promise<WifiPromo> {
   const now = new Date();
+  const startsAt = input.startsAt ?? now;
+  const isLiveImmediately = startsAt.getTime() <= now.getTime();
   const pauseExisting = input.pauseExisting ?? true;
 
   return prisma.$transaction(async (tx) => {
@@ -41,6 +77,8 @@ export async function startPromo(prisma: PrismaClient, input: StartPromoInput): 
         active: true,
         heading: input.heading ?? null,
         message: input.message ?? null,
+        startsAt,
+        activatedAt: isLiveImmediately ? now : null,
         endsAt: input.endsAt,
         rateLimit: input.rateLimit ?? null,
         deviceLimit: input.deviceLimit ?? 1,
@@ -48,11 +86,8 @@ export async function startPromo(prisma: PrismaClient, input: StartPromoInput): 
       }
     });
 
-    if (pauseExisting) {
-      await tx.wifiEntitlement.updateMany({
-        where: { status: "active", outagePausedAt: null, promoPausedAt: null, expiresAt: { gt: now } },
-        data: { promoPausedAt: now }
-      });
+    if (isLiveImmediately && pauseExisting) {
+      await pauseExistingEntitlements(tx, now);
     }
 
     return promo;
@@ -175,6 +210,8 @@ export async function claimPromoGrant(prisma: PrismaClient, promo: WifiPromo, de
   if (!deviceMac) throw new Error("Device MAC required");
 
   const now = new Date();
+  if (now < promo.startsAt) throw new Error("This offer has not started yet");
+  if (!promo.activatedAt) throw new Error("This offer is starting. Try again in a moment.");
   if (now >= promo.endsAt) throw new Error("This offer has ended");
 
   const username = promoUsername(deviceMac);

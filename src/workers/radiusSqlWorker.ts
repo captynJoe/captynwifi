@@ -3,7 +3,7 @@ import { config } from "../config.js";
 import { prisma } from "../prisma.js";
 import { applyRadiusProjectionRows, hasOtherActiveEntitlement } from "../services/radiusSqlApply.js";
 import { applyOutageCredit, evaluateAccountingOutage, resumePausedEntitlements, touchOutageHeartbeat } from "../services/outageCredit.js";
-import { endPromo, getActivePromo } from "../services/promo.js";
+import { activateDuePromos, endPromo, getActivePromo } from "../services/promo.js";
 
 async function applyProjection(id: string) {
   await prisma.$transaction(async (tx) => {
@@ -110,6 +110,11 @@ async function applyPendingBatch() {
   return projections.length;
 }
 
+async function activateScheduledPromo() {
+  const result = await activateDuePromos(prisma);
+  if (result.activated > 0) console.log(`Promo started: paused ${result.paused} active entitlement(s)`);
+}
+
 async function endExpiredPromo() {
   const promo = await getActivePromo(prisma);
   if (!promo || Date.now() < promo.endsAt.getTime()) return;
@@ -123,6 +128,7 @@ async function tick() {
   if (timedOutPayments > 0) console.log(`Marked ${timedOutPayments} stale pending WiFi payment(s) as failed`);
   const applied = await applyPendingBatch();
   await touchOutageHeartbeat(prisma);
+  await activateScheduledPromo();
   await endExpiredPromo();
 
   const accounting = await evaluateAccountingOutage(prisma);

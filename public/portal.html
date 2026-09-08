@@ -6,7 +6,7 @@
     <title>CAPTYN WiFi</title>
     <script src="theme.js?v=2026080402"></script>
     <link rel="stylesheet" href="theme.css?v=2026080924" />
-    <link rel="stylesheet" href="portal.css?v=2026082501" />
+    <link rel="stylesheet" href="portal.css?v=2026090201" />
   </head>
   <body>
     <main class="portal-app">
@@ -14,11 +14,21 @@
         <a class="brand" href="/wifi/" aria-label="CAPTYN WiFi">
           <span><span class="eyebrow">CAPTYN</span><strong>WiFi</strong></span>
         </a>
-        <div class="topbar-status settings-control">
-          <button id="settings-toggle-btn" class="settings-toggle" type="button" aria-label="Open portal settings" aria-controls="settings-menu" aria-expanded="false">⚙</button>
-          <div id="settings-menu" class="settings-menu hidden" role="menu" aria-label="Portal settings">
-            <button id="theme-toggle-btn" class="theme-toggle settings-menu-item" type="button" role="menuitem">Theme</button>
-            <button id="welcome-access-btn" class="settings-menu-item welcome-access-btn" type="button" role="menuitem">Start welcome access</button>
+        <div class="topbar-status topbar-controls">
+          <div class="notif-control hidden" id="notif-control">
+            <button id="notif-toggle-btn" class="settings-toggle notif-toggle" type="button" aria-label="Open notifications" aria-controls="notif-menu" aria-expanded="false">
+              🔔<span id="notif-badge" class="notif-badge hidden">0</span>
+            </button>
+            <div id="notif-menu" class="settings-menu notif-menu hidden" role="menu" aria-label="Notifications">
+              <div id="notif-list" class="notif-list"></div>
+            </div>
+          </div>
+          <div class="settings-control">
+            <button id="settings-toggle-btn" class="settings-toggle" type="button" aria-label="Open portal settings" aria-controls="settings-menu" aria-expanded="false">⚙</button>
+            <div id="settings-menu" class="settings-menu hidden" role="menu" aria-label="Portal settings">
+              <button id="theme-toggle-btn" class="theme-toggle settings-menu-item" type="button" role="menuitem">Theme</button>
+              <button id="welcome-access-btn" class="settings-menu-item welcome-access-btn" type="button" role="menuitem">Start welcome access</button>
+            </div>
           </div>
         </div>
       </header>
@@ -30,6 +40,8 @@
         </div>
         <button id="have-code-btn" class="ghost have-code-btn" type="button">Already paid? Enter access code →</button>
       </section>
+
+      <section id="credit-offers" class="credit-offers hidden" aria-label="Available WiFi credit"></section>
 
       <div id="checkout-backdrop" class="checkout-backdrop"></div>
 
@@ -154,6 +166,6 @@
       </div>
     </div>
 
-    <script type="module" src="portal-build/main.js?v=2026082801" data-cfasync="false"></script>
+    <script type="module" src="portal-build/main.js?v=2026090201" data-cfasync="false"></script>
   </body>
 </html>

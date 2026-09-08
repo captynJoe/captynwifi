@@ -313,12 +313,13 @@
             <div class="setup-body">
               <label class="field" for="promo-heading"><span>Heading</span><input id="promo-heading" name="heading" type="text" maxlength="120" placeholder="Thank you for choosing CAPTYN" /></label>
               <label class="field" for="promo-message"><span>Message</span><textarea id="promo-message" name="message" rows="3" maxlength="500" placeholder="Free Surfing till midday, enjoy!"></textarea></label>
+              <label class="field" for="promo-starts-at"><span>Starts at</span><input id="promo-starts-at" name="startsAt" type="datetime-local" /></label>
               <label class="field" for="promo-ends-at"><span>Valid till</span><input id="promo-ends-at" name="endsAt" type="datetime-local" required /></label>
               <label class="field" for="promo-rate-limit"><span>Rate limit (rx/tx)</span><input id="promo-rate-limit" name="rateLimit" type="text" placeholder="3M/5M" /></label>
               <label class="field" for="promo-device-limit"><span>Device limit</span><input id="promo-device-limit" name="deviceLimit" type="number" min="1" max="10" value="1" /></label>
               <label class="check-field" for="promo-pause-existing"><input id="promo-pause-existing" name="pauseExisting" type="checkbox" checked /><span>Pause everyone's existing packages while this runs</span></label>
-              <em class="field-hint">Every device that hits the portal sees this offer instead of the package list until "Valid till". Existing paid time is frozen, not spent, and resumes automatically afterward.</em>
-              <button id="promo-submit" type="submit">Start promo</button>
+              <em class="field-hint">Every device that hits the portal sees this offer instead of the package list from "Starts at" until "Valid till". Existing paid time is frozen only while the promo is live.</em>
+              <button id="promo-submit" type="submit">Schedule promo</button>
             </div>
           </form>
         </section>

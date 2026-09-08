@@ -52,6 +52,20 @@ interface Entitlement {
   totalCreditedSeconds?: number;
 }
 
+interface NotificationData {
+  creditId?: string;
+  durationSeconds?: number;
+  reason?: string;
+  expiresAt?: string | null;
+  deviceMac?: string | null;
+  consumedAt?: string | null;
+  activatable?: boolean;
+}
+
+interface NotificationItem {
+  id: string; type: string; title: string; body: string; readAt: string | null; createdAt: string; data?: NotificationData | null;
+}
+
 interface ConnectedPanelOptions {
   heading?: string;
   message?: string;
@@ -121,6 +135,7 @@ const promoCountdown = requireElement<HTMLElement>("promo-countdown");
 const promoNote = requireElement<HTMLParagraphElement>("promo-note");
 const promoStatus = requireElement<HTMLParagraphElement>("promo-status");
 let promoCountdownTimer: number | null = null;
+const creditOffers = document.getElementById("credit-offers");
 const manualConnectFallback = requireElement<HTMLElement>("manual-connect-fallback");
 const manualConnectMessage = requireElement<HTMLParagraphElement>("manual-connect-message");
 const manualConnectOpenBtn = requireElement<HTMLAnchorElement>("manual-connect-open-btn");
@@ -152,6 +167,11 @@ const themeToggleBtn = requireElement<HTMLButtonElement>("theme-toggle-btn");
 const welcomeAccessBtn = requireElement<HTMLButtonElement>("welcome-access-btn");
 const settingsToggleBtn = requireElement<HTMLButtonElement>("settings-toggle-btn");
 const settingsMenu = requireElement<HTMLElement>("settings-menu");
+const notifControl = document.getElementById("notif-control");
+const notifToggleBtn = document.getElementById("notif-toggle-btn") as HTMLButtonElement | null;
+const notifMenu = document.getElementById("notif-menu");
+const notifBadge = document.getElementById("notif-badge");
+const notifList = document.getElementById("notif-list");
 const expiryBanner = requireElement<HTMLElement>("expiry-banner");
 const expiryCountdown = requireElement<HTMLElement>("expiry-countdown");
 const expiryRenewBtn = requireElement<HTMLButtonElement>("expiry-renew-btn");
@@ -193,6 +213,212 @@ document.addEventListener("click", (event) => {
 });
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") setSettingsMenuOpen(false);
+});
+
+// Keyed by username (see /notifications/:username on the server) --
+// populated whenever the portal learns whose access it's showing, since
+// that's the same moment it has a trusted identity to fetch under.
+let notifUsername: string | null = null;
+let notifItems: NotificationItem[] = [];
+let activatingCreditId = "";
+
+function relativeTime(iso: string): string {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const minutes = Math.floor(diffMs / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+function notificationCreditId(item: NotificationItem): string {
+  return typeof item.data?.creditId === "string" ? item.data.creditId : "";
+}
+
+function notificationKey(item: NotificationItem): string {
+  const creditId = notificationCreditId(item);
+  return creditId ? `credit:${creditId}` : `notification:${item.id}`;
+}
+
+function mergeNotificationItems(items: NotificationItem[]) {
+  const merged = new Map<string, NotificationItem>();
+  for (const item of notifItems) merged.set(notificationKey(item), item);
+  for (const item of items) {
+    const key = notificationKey(item);
+    const existing = merged.get(key);
+    if (existing?.type === "credit_available" && item.type !== "credit_available") {
+      merged.set(key, { ...existing, readAt: existing.readAt || item.readAt });
+    } else {
+      merged.set(key, { ...existing, ...item, readAt: existing?.readAt || item.readAt || null });
+    }
+  }
+  notifItems = Array.from(merged.values()).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+function isActionableCredit(item: NotificationItem) {
+  if (!item.data?.creditId || item.data.consumedAt || item.data.activatable !== true) return false;
+  if (!item.data.expiresAt) return true;
+  return new Date(item.data.expiresAt).getTime() > Date.now();
+}
+
+function creditExpiryLabel(item: NotificationItem) {
+  if (!item.data?.expiresAt) return "Activate when ready";
+  const remainingMs = new Date(item.data.expiresAt).getTime() - Date.now();
+  return remainingMs > 0 ? `${formatTimeLeft(remainingMs).replace(/ left$/, "")} to activate` : "Expired";
+}
+
+function renderCreditOffers() {
+  const creditItems = notifItems.filter(isActionableCredit);
+  if (!creditOffers) return;
+  creditOffers.classList.toggle("hidden", creditItems.length === 0);
+  creditOffers.innerHTML = creditItems
+    .map((item) => {
+      const creditId = notificationCreditId(item);
+      const durationLabel = formatDuration(item.data?.durationSeconds || 0);
+      const disabled = activatingCreditId === creditId ? " disabled" : "";
+      const buttonLabel = activatingCreditId === creditId ? "Activating..." : "Activate";
+      return `<article class="credit-offer">
+        <div>
+          <p class="credit-offer-title">${esc(item.title)}</p>
+          <p class="credit-offer-body">${esc(item.body)}</p>
+          <div class="credit-offer-meta"><span>${esc(durationLabel)}</span><span>${esc(creditExpiryLabel(item))}</span></div>
+        </div>
+        <button class="primary credit-activate-btn" type="button" data-activate-credit-id="${esc(creditId)}"${disabled}>${esc(buttonLabel)}</button>
+      </article>`;
+    })
+    .join("");
+}
+
+function renderNotifications() {
+  if (!notifList || !notifBadge) {
+    renderCreditOffers();
+    return;
+  }
+  notifList.innerHTML = notifItems.length
+    ? notifItems
+        .map(
+          (item) => `<div class="notif-item ${item.readAt ? "read" : ""}">
+            <p class="notif-item-title">${esc(item.title)}</p>
+            <p class="notif-item-body">${esc(item.body)}</p>
+            <span class="notif-item-time">${esc(relativeTime(item.createdAt))}</span>
+            ${
+              isActionableCredit(item)
+                ? `<div class="notif-action-row"><button class="primary credit-activate-btn" type="button" data-activate-credit-id="${esc(notificationCreditId(item))}"${activatingCreditId === notificationCreditId(item) ? " disabled" : ""}>${activatingCreditId === notificationCreditId(item) ? "Activating..." : "Activate"}</button><span class="notif-credit-meta">${esc(creditExpiryLabel(item))}</span></div>`
+                : ""
+            }
+          </div>`
+        )
+        .join("")
+    : '<div class="notif-empty">No notifications yet.</div>';
+  const unread = notifItems.filter((item) => !item.readAt).length;
+  notifBadge.textContent = String(unread);
+  notifBadge.classList.toggle("hidden", unread === 0);
+  renderCreditOffers();
+}
+
+async function loadRedeemableCredits(username = notifUsername) {
+  const params = new URLSearchParams();
+  if (username) params.set("username", username);
+  if (state.hotspot?.mac) params.set("deviceMac", state.hotspot.mac);
+  if (!params.toString()) return;
+  try {
+    const response = await fetch(api(`/credits/redeemable?${params.toString()}`));
+    if (!response.ok) return;
+    const payload = await response.json();
+    mergeNotificationItems(payload?.data?.notifications || []);
+    notifControl?.classList.remove("hidden");
+    renderNotifications();
+  } catch (_error) {
+    // Notifications are a nice-to-have overlay on top of the access flow --
+    // never worth surfacing an error for or blocking anything on.
+  }
+}
+
+async function loadNotifications(username: string) {
+  notifUsername = username;
+  try {
+    const response = await fetch(api(`/notifications/${encodeURIComponent(username)}`));
+    if (response.ok) {
+      const payload = await response.json();
+      mergeNotificationItems(payload?.data?.notifications || []);
+      notifControl?.classList.remove("hidden");
+      renderNotifications();
+    }
+  } catch (_error) {
+    // Same rule as credit loading: never block access on inbox niceties.
+  }
+  await loadRedeemableCredits(username);
+}
+
+async function activateCredit(creditId: string) {
+  if (!creditId || activatingCreditId) return;
+  if (!state.hotspot?.mac) {
+    showError("Connect to the CAPTYN WiFi network, then reopen this page to activate your free internet.");
+    return;
+  }
+  activatingCreditId = creditId;
+  showError("");
+  renderNotifications();
+  try {
+    const response = await fetch(api(`/credits/${encodeURIComponent(creditId)}/activate`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: notifUsername || undefined, deviceMac: state.hotspot.mac })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "Unable to activate this credit.");
+    notifItems = notifItems.filter((item) => notificationCreditId(item) !== creditId);
+    activatingCreditId = "";
+    renderNotifications();
+    showConnectedPanel(payload.data.entitlement, {
+      heading: payload.data.extended ? "Free internet added" : "Free internet ready",
+      recoveryReference: payload.data.sourceReference,
+      hideCredentials: Boolean(state.hotspot?.login),
+      freshGrant: true
+    });
+  } catch (error) {
+    activatingCreditId = "";
+    renderNotifications();
+    showError(error instanceof Error ? error.message : "Unable to activate this credit.");
+  }
+}
+
+function setNotifMenuOpen(open: boolean) {
+  if (!notifMenu || !notifToggleBtn) return;
+  notifMenu.classList.toggle("hidden", !open);
+  notifToggleBtn.setAttribute("aria-expanded", open ? "true" : "false");
+  if (!open || !notifUsername) return;
+  const unread = notifItems.filter((item) => !item.readAt);
+  if (!unread.length) return;
+  unread.forEach((item) => { item.readAt = new Date().toISOString(); });
+  renderNotifications();
+  void Promise.all(unread.map((item) => fetch(api(`/notifications/${item.id}/read`), { method: "POST" }).catch(() => {})));
+}
+notifToggleBtn?.addEventListener("click", (event) => {
+  event.stopPropagation();
+  setSettingsMenuOpen(false);
+  setNotifMenuOpen(notifMenu.classList.contains("hidden"));
+});
+function handleCreditActivationClick(event: Event) {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  const button = target.closest("[data-activate-credit-id]");
+  if (!(button instanceof HTMLElement)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  void activateCredit(button.dataset.activateCreditId || "");
+}
+notifList?.addEventListener("click", handleCreditActivationClick);
+creditOffers?.addEventListener("click", handleCreditActivationClick);
+document.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  if (target.closest(".notif-control")) return;
+  setNotifMenuOpen(false);
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") setNotifMenuOpen(false);
 });
 
 const basePath = window.location.pathname.startsWith("/wifi") ? "/wifi" : "";
@@ -966,6 +1192,7 @@ function showConnectedPanel(entitlement: Entitlement, { heading, skipAutoConnect
   accessRecoveryCard?.classList.toggle("hidden", !recoveryReference);
   accessExpires.textContent = new Date(entitlement.expiresAt).toLocaleString();
   renderOutageNote(entitlement);
+  void loadNotifications(entitlement.username);
   access.classList.remove("hidden");
   setStep("access");
   closeCheckoutSheet();
@@ -1313,15 +1540,41 @@ receiptLoginForm?.addEventListener("submit", async (event) => {
 });
 
 async function attemptReturningDeviceAutoConnect() {
+  if (!state.hotspot?.login) return false;
+
   const remembered = loadRememberedAccess();
-  if (!remembered || !state.hotspot?.login) return false;
-  showError("");
-  showConnectedPanel(remembered, {
-    heading: "Welcome back",
-    message: "You already have WiFi access saved in this browser. Reconnecting you now.",
-    hideCredentials: true
-  });
-  return true;
+  if (remembered) {
+    showError("");
+    showConnectedPanel(remembered, {
+      heading: "Welcome back",
+      message: "You already have WiFi access saved in this browser. Reconnecting you now.",
+      hideCredentials: true
+    });
+    return true;
+  }
+
+  // localStorage misses a lot of devices that should still be recognized --
+  // the captive-portal helper (iOS/Android's built-in sign-in webview) often
+  // opens a fresh, non-persistent context on each reconnect, wiping storage
+  // even when the device's own MAC hasn't changed. Fall back to a
+  // server-side MAC lookup before giving up and showing someone who already
+  // paid the package list again.
+  const mac = state.hotspot?.mac;
+  if (!mac) return false;
+  try {
+    const response = await fetch(api(`/entitlements/by-device/${encodeURIComponent(mac)}`));
+    if (!response.ok) return false;
+    const payload = await response.json();
+    if (!payload?.data?.username) return false;
+    showError("");
+    showConnectedPanel(payload.data, {
+      heading: "Welcome back",
+      message: "You already have WiFi access on this device — reconnecting you now."
+    });
+    return true;
+  } catch (_error) {
+    return false;
+  }
 }
 
 function startPromoCountdown(endsAt: string) {
@@ -1400,9 +1653,14 @@ async function bootstrap() {
     return;
   }
 
-  // If this browser already saved active access, reconnect it before showing
-  // package checkout. Clearing browser storage now requires receipt, voucher,
-  // or technical login proof instead of server-side MAC credential recovery.
+  void loadRedeemableCredits(null);
+
+  // Recognizes a returning device two ways, in order: this browser's own
+  // remembered access (fast, no network call), then a server-side by-device
+  // MAC lookup as a fallback for when storage didn't survive a fresh
+  // captive-portal webview. Receipt/voucher/technical login remain the
+  // manual fallback for whatever neither of those two catches (e.g. the
+  // device's MAC itself rotated too).
   const reconnectedViaDevice = await attemptReturningDeviceAutoConnect();
   if (!reconnectedViaDevice) {
     const remembered = loadRememberedAccess();

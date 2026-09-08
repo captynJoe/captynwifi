@@ -10,12 +10,13 @@ import { z } from "zod";
 import { prisma } from "../prisma.js";
 import { config } from "../config.js";
 import { getMpesaStatus } from "../services/mpesa.js";
-import { buildRadiusProjection } from "../services/radiusProjection.js";
+import { buildRadiusProjection, normalizeDeviceMac, normalizeWifiUsername } from "../services/radiusProjection.js";
 import { applyRadiusProjectionRows, hasOtherActiveEntitlement } from "../services/radiusSqlApply.js";
 import { kickHotspotUser } from "../services/routeros.js";
 import { issueVoucher } from "../services/voucherIssuance.js";
 import { normalizeKenyaPhone } from "../lib/phone.js";
 import { endPromo, getActivePromo, startPromo } from "../services/promo.js";
+import { CREDIT_REASONS, availableCreditSeconds, grantWifiCredit } from "../services/credits.js";
 
 export const adminRouter = Router();
 
@@ -1129,6 +1130,7 @@ const startPromoSchema = z.object({
   siteId: z.string().min(1),
   heading: z.string().trim().min(1).max(120).optional(),
   message: z.string().trim().min(1).max(500).optional(),
+  startsAt: z.coerce.date().optional(),
   endsAt: z.coerce.date(),
   rateLimit: z.string().trim().min(1).optional(),
   deviceLimit: z.coerce.number().int().positive().max(10).optional(),
@@ -1138,10 +1140,12 @@ const startPromoSchema = z.object({
 adminRouter.post("/promo/start", async (req, res, next) => {
   try {
     const existing = await getActivePromo(prisma);
-    if (existing) return res.status(409).json({ error: "A promo is already active. End it before starting another." });
+    if (existing) return res.status(409).json({ error: "A promo is already active or scheduled. End it before creating another." });
     const data = startPromoSchema.parse(req.body);
+    const startsAt = data.startsAt ?? new Date();
     if (data.endsAt.getTime() <= Date.now()) return res.status(400).json({ error: "endsAt must be in the future." });
-    const promo = await startPromo(prisma, data);
+    if (data.endsAt.getTime() <= startsAt.getTime()) return res.status(400).json({ error: "endsAt must be after startsAt." });
+    const promo = await startPromo(prisma, { ...data, startsAt });
     return sendData(res, promo);
   } catch (error) {
     return next(error);
@@ -1151,9 +1155,94 @@ adminRouter.post("/promo/start", async (req, res, next) => {
 adminRouter.post("/promo/end", async (_req, res, next) => {
   try {
     const promo = await getActivePromo(prisma);
-    if (!promo) return res.status(404).json({ error: "No active promo." });
+    if (!promo) return res.status(404).json({ error: "No active or scheduled promo." });
     const result = await endPromo(prisma, promo.id);
     return sendData(res, result);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+adminRouter.get("/credits", async (_req, res, next) => {
+  try {
+    const credits = await prisma.wifiCredit.findMany({ orderBy: { createdAt: "desc" }, take: 100 });
+    return sendData(res, credits);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+const grantCreditSchema = z.object({
+  customerPhone: z.string().min(7),
+  durationSeconds: z.coerce.number().int().positive(),
+  reason: z.enum(CREDIT_REASONS),
+  deviceMac: optionalText.nullable().optional(),
+  planId: optionalText,
+  sourceReference: z.string().trim().min(1).optional(),
+  expiresInHours: z.coerce.number().int().positive().max(24 * 31).optional(),
+  expiresInDays: z.coerce.number().int().positive().optional(),
+  note: z.string().trim().min(1).max(500).optional()
+});
+
+async function creditTemplatePlan(customerPhone: string, planId?: string) {
+  if (planId) return prisma.wifiPlan.findUnique({ where: { id: planId } });
+
+  const latestEntitlement = await prisma.wifiEntitlement.findFirst({
+    where: { customerPhone },
+    include: { plan: true },
+    orderBy: { createdAt: "desc" }
+  });
+  if (latestEntitlement?.plan) return latestEntitlement.plan;
+
+  const latestIntent = await prisma.wifiPaymentIntent.findFirst({
+    where: { customerPhone },
+    include: { plan: true },
+    orderBy: { createdAt: "desc" }
+  });
+  if (latestIntent?.plan) return latestIntent.plan;
+
+  return prisma.wifiPlan.findFirst({
+    where: { enabled: true, priceKsh: { gt: 0 } },
+    orderBy: [{ featured: "desc" }, { priceKsh: "asc" }, { durationSeconds: "asc" }, { name: "asc" }]
+  });
+}
+
+adminRouter.post("/credits/grant", async (req, res, next) => {
+  try {
+    const data = grantCreditSchema.parse(req.body);
+    const customerPhone = normalizeWifiUsername(data.customerPhone);
+    const expiresAt = data.expiresInHours
+      ? new Date(Date.now() + data.expiresInHours * 3600 * 1000)
+      : data.expiresInDays
+        ? new Date(Date.now() + data.expiresInDays * 86400 * 1000)
+        : null;
+    const plan = await creditTemplatePlan(customerPhone, data.planId);
+    if (!plan) return res.status(400).json({ error: "No WiFi package exists to use as the credit template." });
+    const credit = await grantWifiCredit(prisma, {
+      customerPhone,
+      deviceMac: normalizeDeviceMac(data.deviceMac),
+      siteId: plan.siteId,
+      planId: plan.id,
+      durationSeconds: data.durationSeconds,
+      rateLimit: plan.rateLimit,
+      deviceLimit: plan.deviceLimit,
+      reason: data.reason,
+      sourceReference: data.sourceReference,
+      expiresAt,
+      createdBy: req.wifiAdminSession?.email ?? null,
+      metadata: { ...(data.note ? { note: data.note } : {}), templatePlanName: plan.name }
+    });
+    return sendData(res, credit);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+adminRouter.get("/credits/balance/:phone", async (req, res, next) => {
+  try {
+    const customerPhone = normalizeWifiUsername(req.params.phone);
+    const seconds = await availableCreditSeconds(prisma, customerPhone);
+    return sendData(res, { customerPhone, availableSeconds: seconds });
   } catch (error) {
     return next(error);
   }

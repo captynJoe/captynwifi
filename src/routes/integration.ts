@@ -204,7 +204,10 @@ integrationRouter.post("/housing/payments/confirmed", async (req, res, next) => 
       });
 
       if (existingActive) {
-        const extendedExpiresAt = new Date(existingActive.expiresAt.getTime() + plan.durationSeconds * 1000);
+        // Keep extension math defensive: if this query ever broadens to
+        // paused entitlements, stale expiresAt must not eat newly paid time.
+        const extensionBase = existingActive.expiresAt > startsAt ? existingActive.expiresAt : startsAt;
+        const extendedExpiresAt = new Date(extensionBase.getTime() + plan.durationSeconds * 1000);
         const extendedEntitlement = await tx.wifiEntitlement.update({
           where: { id: existingActive.id },
           data: { expiresAt: extendedExpiresAt }
