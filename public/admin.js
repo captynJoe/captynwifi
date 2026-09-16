@@ -358,27 +358,63 @@ function renderRows(id, rows, mapper, emptyColspan = 8, rowAttrs) {
     : `<tr><td class="muted" colspan="${emptyColspan}">No records yet.</td></tr>`;
 }
 
+function renderTrendPill(elementId, changePercent) {
+  const el = document.getElementById(elementId);
+  if (!el) return;
+  if (changePercent === null || changePercent === undefined || !Number.isFinite(changePercent)) {
+    el.textContent = "";
+    el.className = "trend-pill";
+    return;
+  }
+  const positive = changePercent >= 0;
+  el.textContent = `${positive ? "+" : ""}${changePercent.toFixed(1)}% vs last month`;
+  el.className = `trend-pill ${positive ? "positive" : "negative"}`;
+}
+
+function monthOverMonthChange(monthlyBookings) {
+  const rows = monthlyBookings || [];
+  if (rows.length < 2) return null;
+  const [current, previous] = rows;
+  if (!previous.bookedKsh) return null;
+  return ((current.bookedKsh - previous.bookedKsh) / previous.bookedKsh) * 100;
+}
+
 function renderSummary(summary) {
   const metrics = summary.metrics || {};
+  const monthlyBookings = summary.monthlyBookings || [];
   const published = publiclyVisiblePlans().length;
   document.getElementById("metric-sites").textContent = text(metrics.siteCount, "0");
   document.getElementById("metric-plans").textContent = text(metrics.planCount, "0");
   document.getElementById("metric-published").textContent = String(published);
   document.getElementById("metric-active").textContent = text(metrics.activeEntitlementCount, "0");
+  document.getElementById("metric-active-detail").textContent = `${text(metrics.expiredEntitlementCount, "0")} access records have expired and need renewal.`;
   document.getElementById("metric-pending").textContent = text(metrics.pendingProjectionCount, "0");
   const networkMetrics = state.cache.networkStatus?.metrics || {};
   const failures = Number(metrics.failedProjectionCount || 0) + Number(networkMetrics.appliedMissingRadiusRowsCount || 0);
   document.getElementById("metric-failures").textContent = String(failures);
+  document.getElementById("metric-failures-detail").textContent = failures > 0
+    ? "RADIUS sync failures need review before customers are affected."
+    : "No RADIUS sync failures right now.";
   document.getElementById("metric-revenue").textContent = fmtMoney(metrics.revenueKsh);
+  document.getElementById("metric-revenue-detail").textContent = `${fmtMoney(metrics.bookedThisMonthKsh)} of that was booked this month.`;
   document.getElementById("metric-booked-month").textContent = fmtMoney(metrics.bookedThisMonthKsh);
-  renderRows("booked-by-month", summary.monthlyBookings || [], (row) => [
+  document.getElementById("metric-booked-month-detail").textContent = `${text(metrics.bookedThisMonthCount, "0")} payments booked so far this month.`;
+  const trendChange = monthOverMonthChange(monthlyBookings);
+  renderTrendPill("metric-revenue-trend", trendChange);
+  renderTrendPill("metric-booked-month-trend", trendChange);
+  renderRows("booked-by-month", monthlyBookings, (row) => [
     fmtMonth(row.month),
     fmtMoney(row.bookedKsh),
     String(row.count)
   ], 3);
   document.getElementById("published-count").textContent = String(published);
   document.getElementById("published-plural").textContent = published === 1 ? "" : "s";
-  document.getElementById("radius-health-label").textContent = Number(metrics.failedProjectionCount || 0) > 0 ? "Needs review" : "Ready";
+  document.getElementById("radius-health-label").textContent = failures > 0 ? "Needs review" : "Ready";
+  const opsHealthPill = document.getElementById("ops-health-pill");
+  if (opsHealthPill) {
+    opsHealthPill.className = `status-pill ${failures > 0 ? "warn" : "ok"}`;
+    opsHealthPill.innerHTML = `<span class="status-dot"></span>${failures > 0 ? "Ops health needs attention" : "Ops health stable"}`;
+  }
 }
 
 function renderSiteOptions() {
@@ -1327,6 +1363,18 @@ promoEndBtn?.addEventListener("click", async () => {
   }
 });
 
+document.getElementById("more-info-btn")?.addEventListener("click", (event) => {
+  const button = event.currentTarget;
+  const expanded = document.body.classList.toggle("show-more-info");
+  button.textContent = expanded ? "Less info" : "More info";
+  button.setAttribute("aria-expanded", String(expanded));
+});
+document.getElementById("toggle-sensitive-btn")?.addEventListener("click", (event) => {
+  const button = event.currentTarget;
+  const shown = document.body.classList.toggle("show-sensitive");
+  button.textContent = shown ? "Hide sensitive" : "Show sensitive";
+  button.setAttribute("aria-pressed", String(shown));
+});
 refreshBtn.addEventListener("click", () => { void checkHealth(); if (state.sessionToken) void loadDashboard(); });
 logoutBtn.addEventListener("click", () => clearSession({ forgetTrusted: true }));
 planCancel.addEventListener("click", resetPlanForm);

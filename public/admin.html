@@ -6,7 +6,7 @@
     <title>CAPTYN WiFi Admin</title>
     <script src="theme.js?v=2026080402"></script>
     <link rel="stylesheet" href="theme.css?v=2026080924" />
-    <link rel="stylesheet" href="admin.css?v=2026081701" />
+    <link rel="stylesheet" href="admin.css?v=2026091601" />
   </head>
   <body>
     <header class="topbar">
@@ -71,11 +71,17 @@
       <section id="dashboard" class="dashboard hidden">
         <section class="command-strip">
           <div>
+            <div class="status-row">
+              <span id="ops-health-pill" class="status-pill ok"><span class="status-dot"></span>Ops health stable</span>
+              <span class="status-chip">Tracking live RADIUS &amp; payment queue</span>
+            </div>
             <p class="eyebrow">WIFI OPERATIONS</p>
             <h1>Control live customer access</h1>
             <p class="supporting"><span id="published-count">0</span> enabled package<span id="published-plural">s</span> live at <strong>captyn.shop/wifi</strong>, with vouchers, RADIUS limits, and access actions managed here.</p>
           </div>
           <div class="command-actions">
+            <button id="more-info-btn" class="secondary" type="button" aria-expanded="false">More info</button>
+            <button id="toggle-sensitive-btn" class="secondary" type="button" aria-pressed="false">Show sensitive</button>
             <button id="copy-portal-btn" class="secondary" type="button">Copy URL</button>
             <a class="button-link" href="/wifi/" target="_blank" rel="noreferrer">Open Client Portal</a>
           </div>
@@ -97,25 +103,68 @@
         </nav>
 
         <section class="metrics-grid" aria-label="WiFi metrics">
-          <article class="metric"><span>Sites</span><strong id="metric-sites">0</strong></article>
-          <article class="metric"><span>Packages</span><strong id="metric-plans">0</strong></article>
-          <article class="metric"><span>Published</span><strong id="metric-published">0</strong></article>
-          <article class="metric"><span>Active Access</span><strong id="metric-active">0</strong></article>
-          <article class="metric"><span>RADIUS Queue</span><strong id="metric-pending">0</strong></article>
-          <article class="metric"><span>Failures</span><strong id="metric-failures">0</strong></article>
-          <article class="metric"><span>Revenue</span><strong id="metric-revenue">KSh 0</strong></article>
-          <article class="metric metric-expandable">
-            <span>Booked This Month</span>
-            <strong id="metric-booked-month">KSh 0</strong>
-            <details class="metric-more-info">
-              <summary>more info</summary>
-              <div class="table-wrap">
-                <table>
-                  <thead><tr><th>Month</th><th>Booked</th><th>Payments</th></tr></thead>
-                  <tbody id="booked-by-month-body"></tbody>
-                </table>
-              </div>
-            </details>
+          <article class="metric" data-accent="blue">
+            <div class="metric-icon" aria-hidden="true">&#127968;</div>
+            <div class="metric-body"><span>Sites</span><strong id="metric-sites">0</strong></div>
+          </article>
+          <article class="metric" data-accent="violet">
+            <div class="metric-icon" aria-hidden="true">&#128230;</div>
+            <div class="metric-body"><span>Packages</span><strong id="metric-plans">0</strong></div>
+          </article>
+          <article class="metric" data-accent="cyan">
+            <div class="metric-icon" aria-hidden="true">&#128204;</div>
+            <div class="metric-body">
+              <span>Published</span>
+              <strong id="metric-published">0</strong>
+              <p class="metric-detail">Live and visible to customers at checkout.</p>
+            </div>
+          </article>
+          <article class="metric" data-accent="amber">
+            <div class="metric-icon" aria-hidden="true">&#128225;</div>
+            <div class="metric-body">
+              <span>Active Access</span>
+              <strong id="metric-active">0</strong>
+              <p class="metric-detail" id="metric-active-detail"></p>
+            </div>
+          </article>
+          <article class="metric" data-accent="cyan">
+            <div class="metric-icon" aria-hidden="true">&#8987;</div>
+            <div class="metric-body"><span>RADIUS Queue</span><strong id="metric-pending">0</strong></div>
+          </article>
+          <article class="metric" data-accent="rose">
+            <div class="metric-icon" aria-hidden="true">&#9888;</div>
+            <div class="metric-body">
+              <span>Failures</span>
+              <strong id="metric-failures">0</strong>
+              <p class="metric-detail" id="metric-failures-detail"></p>
+            </div>
+          </article>
+          <article class="metric metric-money" data-accent="emerald">
+            <div class="metric-icon" aria-hidden="true">&#128176;</div>
+            <div class="metric-body">
+              <span>Revenue</span>
+              <strong id="metric-revenue" class="sensitive">KSh 0</strong>
+              <span id="metric-revenue-trend" class="trend-pill"></span>
+              <p class="metric-detail sensitive" id="metric-revenue-detail"></p>
+            </div>
+          </article>
+          <article class="metric metric-money" data-accent="emerald">
+            <div class="metric-icon" aria-hidden="true">&#128197;</div>
+            <div class="metric-body">
+              <span>Booked This Month</span>
+              <strong id="metric-booked-month" class="sensitive">KSh 0</strong>
+              <span id="metric-booked-month-trend" class="trend-pill"></span>
+              <p class="metric-detail sensitive" id="metric-booked-month-detail"></p>
+              <details class="metric-more-info">
+                <summary>Monthly breakdown</summary>
+                <div class="table-wrap sensitive">
+                  <table>
+                    <thead><tr><th>Month</th><th>Booked</th><th>Payments</th></tr></thead>
+                    <tbody id="booked-by-month-body"></tbody>
+                  </table>
+                </div>
+              </details>
+            </div>
           </article>
         </section>
 
@@ -346,6 +395,6 @@
       </section>
     </main>
 
-    <script src="admin.js?v=2026081801" defer data-cfasync="false"></script>
+    <script src="admin.js?v=2026091601" defer data-cfasync="false"></script>
   </body>
 </html>

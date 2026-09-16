@@ -54,17 +54,60 @@
 .nav-item.active { background: var(--brand-navy); border-color: var(--brand-navy); color: #fff; }
 .nav-item.active:hover { background: var(--brand-navy); color: #fff; }
 
-.metrics-grid { display: grid; grid-template-columns: repeat(8, minmax(120px, 1fr)); gap: 12px; }
-.metric { min-height: 96px; padding: 16px 18px; display: grid; align-content: space-between; box-shadow: var(--shadow-sm); }
+.metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.metric {
+  min-height: 96px; padding: 16px 18px; display: flex; align-items: flex-start; gap: 12px;
+  box-shadow: var(--shadow-sm); transition: transform .15s ease, box-shadow .15s ease;
+}
+.metric:hover { transform: translateY(-1px); box-shadow: var(--shadow-md); }
+.metric-body { display: grid; gap: 4px; min-width: 0; }
 .metric span { color: var(--muted); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
 .metric strong { font-family: var(--font-display); font-size: 27px; line-height: 1.1; color: var(--text-strong); overflow-wrap: anywhere; }
-.metric-expandable { align-content: start; gap: 6px; }
-.metric-more-info { margin-top: 2px; }
+
+.metric-icon {
+  flex: 0 0 auto; width: 40px; height: 40px; display: grid; place-items: center; border-radius: var(--radius-md);
+  font-size: 18px; line-height: 1; background: var(--surface-soft); box-shadow: var(--shadow-sm);
+}
+.metric[data-accent="blue"] .metric-icon { background: var(--brand-blue-soft); }
+.metric[data-accent="cyan"] .metric-icon { background: var(--brand-cyan-soft); }
+.metric[data-accent="emerald"] .metric-icon { background: var(--green-soft); }
+.metric[data-accent="amber"] .metric-icon { background: var(--amber-soft); }
+.metric[data-accent="rose"] .metric-icon { background: var(--red-soft); }
+.metric[data-accent="violet"] .metric-icon { background: color-mix(in srgb, var(--brand-blue) 22%, transparent); }
+
+.metric-detail { margin: 2px 0 0; color: var(--muted); font-size: 12.5px; font-weight: 600; line-height: 1.5; display: none; }
+body.show-more-info .metric-detail { display: block; }
+
+.trend-pill {
+  display: none; width: fit-content; align-items: center; gap: 4px; margin-top: 2px; padding: 2px 9px;
+  border-radius: 999px; font-size: 11.5px; font-weight: 800; background: var(--surface-soft); color: var(--muted);
+}
+.trend-pill:not(:empty) { display: inline-flex; }
+.trend-pill.positive { background: var(--green-soft); color: var(--green); }
+.trend-pill.negative { background: var(--red-soft); color: var(--red); }
+
+.sensitive { filter: blur(6px); user-select: none; transition: filter .15s ease; }
+body.show-sensitive .sensitive { filter: none; user-select: auto; }
+
+.metric-more-info { margin-top: 4px; }
 .metric-more-info summary { cursor: pointer; color: var(--muted); font-size: 11px; font-weight: 700; list-style: none; }
 .metric-more-info summary::-webkit-details-marker { display: none; }
 .metric-more-info[open] summary { color: var(--text-strong); }
 .metric-more-info .table-wrap { margin-top: 8px; max-height: 220px; overflow-y: auto; }
 .metric-more-info table { min-width: 0; font-size: 12.5px; }
+
+.status-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.status-pill {
+  display: inline-flex; align-items: center; gap: 7px; min-height: 26px; padding: 0 11px; border-radius: 999px;
+  font-size: 12px; font-weight: 700; background: var(--green-soft); color: var(--green);
+}
+.status-pill.warn { background: var(--amber-soft); color: var(--amber); }
+.status-pill.bad { background: var(--red-soft); color: var(--red); }
+.status-dot { width: 7px; height: 7px; border-radius: 999px; background: currentColor; }
+.status-chip {
+  display: inline-flex; align-items: center; min-height: 26px; padding: 0 11px; border-radius: 999px;
+  font-size: 12px; font-weight: 600; background: var(--surface-soft); color: var(--muted);
+}
 
 .page-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 14px; align-items: start; }
 .span-4 { grid-column: span 4; } .span-5 { grid-column: span 5; } .span-6 { grid-column: span 6; }
