@@ -54,7 +54,7 @@
 .nav-item.active { background: var(--brand-navy); border-color: var(--brand-navy); color: #fff; }
 .nav-item.active:hover { background: var(--brand-navy); color: #fff; }
 
-.metrics-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 12px; }
+.metrics-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 12px; align-items: start; }
 .metric {
   min-height: 96px; padding: 16px 18px; display: flex; align-items: flex-start; gap: 12px;
   box-shadow: var(--shadow-sm); transition: transform .15s ease, box-shadow .15s ease;
