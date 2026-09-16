@@ -396,12 +396,10 @@ function renderSummary(summary) {
     ? "RADIUS sync failures need review before customers are affected."
     : "No RADIUS sync failures right now.";
   document.getElementById("metric-revenue").textContent = fmtMoney(metrics.revenueKsh);
-  document.getElementById("metric-revenue-detail").textContent = `${fmtMoney(metrics.bookedThisMonthKsh)} of that was booked this month.`;
-  document.getElementById("metric-booked-month").textContent = fmtMoney(metrics.bookedThisMonthKsh);
-  document.getElementById("metric-booked-month-detail").textContent = `${text(metrics.bookedThisMonthCount, "0")} payments booked so far this month.`;
+  document.getElementById("metric-booked-month-detail").textContent =
+    `${fmtMoney(metrics.bookedThisMonthKsh)} booked this month (${text(metrics.bookedThisMonthCount, "0")} payments).`;
   const trendChange = monthOverMonthChange(monthlyBookings);
   renderTrendPill("metric-revenue-trend", trendChange);
-  renderTrendPill("metric-booked-month-trend", trendChange);
   renderRows("booked-by-month", monthlyBookings, (row) => [
     fmtMonth(row.month),
     fmtMoney(row.bookedKsh),

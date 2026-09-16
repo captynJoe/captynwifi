@@ -6,7 +6,7 @@
     <title>CAPTYN WiFi Admin</title>
     <script src="theme.js?v=2026080402"></script>
     <link rel="stylesheet" href="theme.css?v=2026080924" />
-    <link rel="stylesheet" href="admin.css?v=2026091601" />
+    <link rel="stylesheet" href="admin.css?v=2026091602" />
   </head>
   <body>
     <header class="topbar">
@@ -145,25 +145,15 @@
               <span>Revenue</span>
               <strong id="metric-revenue" class="sensitive">KSh 0</strong>
               <span id="metric-revenue-trend" class="trend-pill"></span>
-              <p class="metric-detail sensitive" id="metric-revenue-detail"></p>
-            </div>
-          </article>
-          <article class="metric metric-money" data-accent="emerald">
-            <div class="metric-icon" aria-hidden="true">&#128197;</div>
-            <div class="metric-body">
-              <span>Booked This Month</span>
-              <strong id="metric-booked-month" class="sensitive">KSh 0</strong>
-              <span id="metric-booked-month-trend" class="trend-pill"></span>
-              <p class="metric-detail sensitive" id="metric-booked-month-detail"></p>
-              <details class="metric-more-info">
-                <summary>Monthly breakdown</summary>
-                <div class="table-wrap sensitive">
+              <div class="metric-detail sensitive">
+                <p id="metric-booked-month-detail"></p>
+                <div class="table-wrap">
                   <table>
                     <thead><tr><th>Month</th><th>Booked</th><th>Payments</th></tr></thead>
                     <tbody id="booked-by-month-body"></tbody>
                   </table>
                 </div>
-              </details>
+              </div>
             </div>
           </article>
         </section>
@@ -395,6 +385,6 @@
       </section>
     </main>
 
-    <script src="admin.js?v=2026091601" defer data-cfasync="false"></script>
+    <script src="admin.js?v=2026091602" defer data-cfasync="false"></script>
   </body>
 </html>

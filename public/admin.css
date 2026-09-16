@@ -54,7 +54,7 @@
 .nav-item.active { background: var(--brand-navy); border-color: var(--brand-navy); color: #fff; }
 .nav-item.active:hover { background: var(--brand-navy); color: #fff; }
 
-.metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.metrics-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 12px; }
 .metric {
   min-height: 96px; padding: 16px 18px; display: flex; align-items: flex-start; gap: 12px;
   box-shadow: var(--shadow-sm); transition: transform .15s ease, box-shadow .15s ease;
@@ -76,6 +76,9 @@
 .metric[data-accent="violet"] .metric-icon { background: color-mix(in srgb, var(--brand-blue) 22%, transparent); }
 
 .metric-detail { margin: 2px 0 0; color: var(--muted); font-size: 12.5px; font-weight: 600; line-height: 1.5; display: none; }
+.metric-detail p { margin: 0 0 8px; }
+.metric-detail .table-wrap { max-height: 220px; overflow-y: auto; }
+.metric-detail table { min-width: 0; font-size: 12.5px; }
 body.show-more-info .metric-detail { display: block; }
 
 .trend-pill {
@@ -88,13 +91,6 @@ body.show-more-info .metric-detail { display: block; }
 
 .sensitive { filter: blur(6px); user-select: none; transition: filter .15s ease; }
 body.show-sensitive .sensitive { filter: none; user-select: auto; }
-
-.metric-more-info { margin-top: 4px; }
-.metric-more-info summary { cursor: pointer; color: var(--muted); font-size: 11px; font-weight: 700; list-style: none; }
-.metric-more-info summary::-webkit-details-marker { display: none; }
-.metric-more-info[open] summary { color: var(--text-strong); }
-.metric-more-info .table-wrap { margin-top: 8px; max-height: 220px; overflow-y: auto; }
-.metric-more-info table { min-width: 0; font-size: 12.5px; }
 
 .status-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
 .status-pill {
