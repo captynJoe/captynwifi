@@ -54,10 +54,17 @@
 .nav-item.active { background: var(--brand-navy); border-color: var(--brand-navy); color: #fff; }
 .nav-item.active:hover { background: var(--brand-navy); color: #fff; }
 
-.metrics-grid { display: grid; grid-template-columns: repeat(7, minmax(120px, 1fr)); gap: 12px; }
+.metrics-grid { display: grid; grid-template-columns: repeat(8, minmax(120px, 1fr)); gap: 12px; }
 .metric { min-height: 96px; padding: 16px 18px; display: grid; align-content: space-between; box-shadow: var(--shadow-sm); }
 .metric span { color: var(--muted); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
 .metric strong { font-family: var(--font-display); font-size: 27px; line-height: 1.1; color: var(--text-strong); overflow-wrap: anywhere; }
+.metric-expandable { align-content: start; gap: 6px; }
+.metric-more-info { margin-top: 2px; }
+.metric-more-info summary { cursor: pointer; color: var(--muted); font-size: 11px; font-weight: 700; list-style: none; }
+.metric-more-info summary::-webkit-details-marker { display: none; }
+.metric-more-info[open] summary { color: var(--text-strong); }
+.metric-more-info .table-wrap { margin-top: 8px; max-height: 220px; overflow-y: auto; }
+.metric-more-info table { min-width: 0; font-size: 12.5px; }
 
 .page-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 14px; align-items: start; }
 .span-4 { grid-column: span 4; } .span-5 { grid-column: span 5; } .span-6 { grid-column: span 6; }

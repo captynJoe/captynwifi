@@ -226,6 +226,8 @@ async function applyEntitlementRadius(
   });
 }
 
+const BOOKED_PAYMENT_STATUSES = Prisma.sql`('confirmed', 'paid_pending_activation', 'activated')`;
+
 adminRouter.get("/summary", async (_req, res, next) => {
   try {
     const now = new Date();
@@ -238,6 +240,8 @@ adminRouter.get("/summary", async (_req, res, next) => {
       failedProjectionCount,
       paymentCount,
       revenue,
+      bookedThisMonth,
+      monthlyBookingsRaw,
       recentPayments,
       recentEntitlements,
       recentProjections
@@ -257,6 +261,29 @@ adminRouter.get("/summary", async (_req, res, next) => {
         where: { status: { in: ["confirmed", "paid_pending_activation", "activated"] } },
         _sum: { amountKsh: true }
       }),
+      // "Booked this month" mirrors the all-time revenue aggregate above,
+      // scoped to the current calendar month, so the two numbers are always
+      // computed the same way (same status set) and stay comparable.
+      prisma.wifiPaymentIntent.aggregate({
+        where: {
+          status: { in: ["confirmed", "paid_pending_activation", "activated"] },
+          createdAt: { gte: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)) }
+        },
+        _sum: { amountKsh: true },
+        _count: true
+      }),
+      prisma.$queryRaw<Array<{ month: Date; bookedKsh: number; count: number }>>(
+        Prisma.sql`
+          SELECT date_trunc('month', "createdAt") as month,
+                 COALESCE(SUM("amountKsh"), 0)::int as "bookedKsh",
+                 COUNT(*)::int as count
+          FROM "WifiPaymentIntent"
+          WHERE status IN ${BOOKED_PAYMENT_STATUSES}
+            AND "createdAt" >= date_trunc('month', NOW()) - INTERVAL '11 months'
+          GROUP BY 1
+          ORDER BY 1 DESC
+        `
+      ),
       prisma.wifiPaymentIntent.findMany({
         orderBy: { createdAt: "desc" },
         take: 8,
@@ -274,6 +301,12 @@ adminRouter.get("/summary", async (_req, res, next) => {
       })
     ]);
 
+    const monthlyBookings = monthlyBookingsRaw.map((row) => ({
+      month: row.month.toISOString().slice(0, 7),
+      bookedKsh: row.bookedKsh,
+      count: row.count
+    }));
+
     return sendData(res, {
       generatedAt: now.toISOString(),
       metrics: {
@@ -284,8 +317,11 @@ adminRouter.get("/summary", async (_req, res, next) => {
         pendingProjectionCount,
         failedProjectionCount,
         paymentCount,
-        revenueKsh: revenue._sum.amountKsh ?? 0
+        revenueKsh: revenue._sum.amountKsh ?? 0,
+        bookedThisMonthKsh: bookedThisMonth._sum.amountKsh ?? 0,
+        bookedThisMonthCount: bookedThisMonth._count ?? 0
       },
+      monthlyBookings,
       recentPayments,
       recentEntitlements,
       recentProjections

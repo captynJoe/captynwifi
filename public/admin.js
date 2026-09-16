@@ -135,6 +135,11 @@ function fmtDate(value) {
   return date.toLocaleString();
 }
 function fmtMoney(value) { return `KSh ${Number(value || 0).toLocaleString()}`; }
+function fmtMonth(value) {
+  const [year, month] = String(value || "").split("-").map(Number);
+  if (!year || !month) return text(value);
+  return new Date(Date.UTC(year, month - 1, 1)).toLocaleString(undefined, { month: "long", year: "numeric", timeZone: "UTC" });
+}
 function durationLabel(seconds) {
   const value = Number(seconds || 0);
   if (!Number.isFinite(value) || value <= 0) return "-";
@@ -365,6 +370,12 @@ function renderSummary(summary) {
   const failures = Number(metrics.failedProjectionCount || 0) + Number(networkMetrics.appliedMissingRadiusRowsCount || 0);
   document.getElementById("metric-failures").textContent = String(failures);
   document.getElementById("metric-revenue").textContent = fmtMoney(metrics.revenueKsh);
+  document.getElementById("metric-booked-month").textContent = fmtMoney(metrics.bookedThisMonthKsh);
+  renderRows("booked-by-month", summary.monthlyBookings || [], (row) => [
+    fmtMonth(row.month),
+    fmtMoney(row.bookedKsh),
+    String(row.count)
+  ], 3);
   document.getElementById("published-count").textContent = String(published);
   document.getElementById("published-plural").textContent = published === 1 ? "" : "s";
   document.getElementById("radius-health-label").textContent = Number(metrics.failedProjectionCount || 0) > 0 ? "Needs review" : "Ready";
