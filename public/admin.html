@@ -6,7 +6,7 @@
     <title>CAPTYN WiFi Admin</title>
     <script src="theme.js?v=2026080402"></script>
     <link rel="stylesheet" href="theme.css?v=2026080924" />
-    <link rel="stylesheet" href="admin.css?v=2026091603" />
+    <link rel="stylesheet" href="admin.css?v=2026091604" />
   </head>
   <body>
     <header class="topbar">
@@ -147,12 +147,7 @@
               <span id="metric-revenue-trend" class="trend-pill"></span>
               <div class="metric-detail sensitive">
                 <p id="metric-booked-month-detail"></p>
-                <div class="table-wrap">
-                  <table>
-                    <thead><tr><th>Month</th><th>Booked</th><th>Payments</th></tr></thead>
-                    <tbody id="booked-by-month-body"></tbody>
-                  </table>
-                </div>
+                <ul class="metric-month-list" id="booked-by-month-list"></ul>
               </div>
             </div>
           </article>
@@ -385,6 +380,6 @@
       </section>
     </main>
 
-    <script src="admin.js?v=2026091602" defer data-cfasync="false"></script>
+    <script src="admin.js?v=2026091604" defer data-cfasync="false"></script>
   </body>
 </html>

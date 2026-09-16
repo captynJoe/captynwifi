@@ -400,11 +400,17 @@ function renderSummary(summary) {
     `${fmtMoney(metrics.bookedThisMonthKsh)} booked this month (${text(metrics.bookedThisMonthCount, "0")} payments).`;
   const trendChange = monthOverMonthChange(monthlyBookings);
   renderTrendPill("metric-revenue-trend", trendChange);
-  renderRows("booked-by-month", monthlyBookings, (row) => [
-    fmtMonth(row.month),
-    fmtMoney(row.bookedKsh),
-    String(row.count)
-  ], 3);
+  const monthListEl = document.getElementById("booked-by-month-list");
+  if (monthListEl) {
+    monthListEl.innerHTML = monthlyBookings.length
+      ? monthlyBookings.map((row) => `
+          <li>
+            <span class="month-label">${escapeHtml(fmtMonth(row.month))}</span>
+            <span class="month-figures"><strong>${escapeHtml(fmtMoney(row.bookedKsh))}</strong> &middot; ${row.count} payment${row.count === 1 ? "" : "s"}</span>
+          </li>
+        `).join("")
+      : `<li class="muted">No bookings recorded yet.</li>`;
+  }
   document.getElementById("published-count").textContent = String(published);
   document.getElementById("published-plural").textContent = published === 1 ? "" : "s";
   document.getElementById("radius-health-label").textContent = failures > 0 ? "Needs review" : "Ready";
