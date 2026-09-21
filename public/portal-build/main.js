@@ -5,7 +5,7 @@ function requireElement(id) {
         throw new Error(`Missing portal element #${id}`);
     return element;
 }
-const state = { plans: [], selectedPlanId: "", paymentId: "", pollTimer: null, hotspot: null, expiryTimer: null, activeNeed: "all" };
+const state = { plans: [], selectedPlanId: "", paymentId: "", pollTimer: null, hotspot: null, expiryTimer: null, activeNeed: "all", currentEntitlement: null };
 const plansEl = requireElement("plans");
 const checkoutTitle = requireElement("checkout-title");
 const checkoutPrice = requireElement("checkout-price");
@@ -32,6 +32,12 @@ const accessPassword = requireElement("access-password");
 const accessRecovery = requireElement("access-recovery");
 const accessExpires = requireElement("access-expires");
 const accessOutageNote = requireElement("access-outage-note");
+const accessDevices = requireElement("access-devices");
+const accessDevicesCount = requireElement("access-devices-count");
+const accessDevicesNotice = requireElement("access-devices-notice");
+const accessDevicesList = requireElement("access-devices-list");
+const accessDevicesAddBtn = requireElement("access-devices-add-btn");
+const accessDevicesFeedback = requireElement("access-devices-feedback");
 const extendPeriodBtn = requireElement("extend-period-btn");
 const workspaceEl = document.querySelector(".workspace");
 const introRowEl = document.querySelector(".intro-row");
@@ -604,6 +610,88 @@ function renderOutageNote(entitlement) {
     accessOutageNote.classList.add("hidden");
     accessOutageNote.classList.remove("paused", "credited");
 }
+// Renders the customer's registered-device list (see WifiEntitlementDevice
+// on the backend). This is separate from RADIUS's own Simultaneous-Use
+// concurrent-session cap -- that keeps working regardless of what's shown
+// here -- this list only controls whether a device gets remembered for
+// frictionless auto-reconnect next time.
+function renderDeviceList(entitlement) {
+    const devices = entitlement.devices || [];
+    const limit = Number(entitlement.deviceLimit || 1);
+    accessDevices.classList.remove("hidden");
+    accessDevicesFeedback.classList.add("hidden");
+    accessDevicesCount.textContent = `${devices.length}/${limit}`;
+    accessDevicesList.innerHTML = devices.length
+        ? devices
+            .map((device) => {
+            const isThisDevice = state.hotspot?.mac && device.deviceMac === state.hotspot.mac;
+            return `<div class="device-row">
+            <span class="mono">${esc(device.deviceMac)}</span>
+            ${isThisDevice ? '<span class="device-tag">This device</span>' : ""}
+            <button class="link-btn" type="button" data-remove-device-mac="${esc(device.deviceMac)}">Remove</button>
+          </div>`;
+        })
+            .join("")
+        : '<div class="device-row-empty">No devices registered yet.</div>';
+}
+function hideDeviceLimitNotice() {
+    accessDevicesNotice.classList.add("hidden");
+    accessDevicesNotice.textContent = "";
+    accessDevices.classList.remove("at-limit");
+}
+// state.currentEntitlement is normally set by showConnectedPanel, but
+// rememberDeviceForEntitlement can also fire from flows that haven't shown
+// that panel yet (manual login, receipt code, promo claim) -- synthesize a
+// minimal placeholder in that case so the device list still has
+// username/password to act on (e.g. for the Remove button).
+function showDeviceLimitNotice(message, devices, deviceLimit, username, password) {
+    if (!state.currentEntitlement) {
+        state.currentEntitlement = { username, password, expiresAt: "" };
+    }
+    state.currentEntitlement.devices = devices;
+    if (deviceLimit)
+        state.currentEntitlement.deviceLimit = deviceLimit;
+    accessDevices.classList.remove("hidden");
+    accessDevices.classList.add("at-limit");
+    accessDevicesNotice.textContent = message;
+    accessDevicesNotice.classList.remove("hidden");
+    renderDeviceList(state.currentEntitlement);
+}
+async function removeDevice(mac) {
+    const entitlement = state.currentEntitlement;
+    if (!entitlement)
+        return;
+    try {
+        const response = await fetch(api("/entitlements/remove-device"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username: entitlement.username, password: entitlement.password, deviceMac: mac })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok)
+            throw new Error(payload.error || "Unable to remove device.");
+        entitlement.devices = (entitlement.devices || []).filter((device) => device.deviceMac !== mac);
+        entitlement.deviceCount = entitlement.devices.length;
+        hideDeviceLimitNotice();
+        renderDeviceList(entitlement);
+        // Freed a slot -- claim it for this device right away so the customer
+        // doesn't have to reload or re-enter credentials to benefit.
+        await rememberDeviceForEntitlement(entitlement.username, entitlement.password);
+    }
+    catch (error) {
+        showError(error instanceof Error ? error.message : "Unable to remove device.");
+    }
+}
+document.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement))
+        return;
+    const button = target.closest("[data-remove-device-mac]");
+    if (!(button instanceof HTMLElement))
+        return;
+    event.preventDefault();
+    void removeDevice(button.dataset.removeDeviceMac || "");
+});
 function updateAccessTimeLeft(remainingMs, deviceLimit) {
     if (!accessTimeLeft)
         return;
@@ -642,16 +730,79 @@ function startExpiryWatch(expiresAt, deviceLimit) {
     tick();
     state.expiryTimer = setInterval(tick, 1000);
 }
-function rememberDeviceForEntitlement(username, password) {
-    const mac = state.hotspot?.mac;
-    if (!mac)
-        return;
-    fetch(api("/entitlements/link-device"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password, deviceMac: mac })
-    }).catch(() => { });
+function setDeviceFeedback(message, tone) {
+    accessDevicesFeedback.textContent = message;
+    accessDevicesFeedback.className = `access-devices-feedback ${tone}`;
+    accessDevicesFeedback.classList.remove("hidden");
 }
+// Called two ways: silently after a device is already online (see
+// attemptAutoConnect below -- MikroTik/RADIUS grants network access first,
+// gated only by Simultaneous-Use, completely independent of this) so
+// returning devices keep reconnecting automatically, and explicitly when
+// the customer taps "+ Add this device" (announce: true) for a visible,
+// deliberate registration with clear before/after feedback. A 409 here
+// never means "you're offline" -- it's surfaced as a dismissible notice,
+// not an error that blocks anything.
+async function rememberDeviceForEntitlement(username, password, { announce = false } = {}) {
+    const mac = state.hotspot?.mac;
+    if (!mac) {
+        if (announce)
+            setDeviceFeedback("Connect to the CAPTYN WiFi network first, then try again.", "bad");
+        return;
+    }
+    if (announce) {
+        accessDevicesFeedback.classList.add("hidden");
+        accessDevicesAddBtn.disabled = true;
+        accessDevicesAddBtn.textContent = "Adding...";
+    }
+    try {
+        const response = await fetch(api("/entitlements/link-device"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password, deviceMac: mac })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (response.status === 409) {
+            showDeviceLimitNotice(payload.message || "You've reached your device limit. Remove a device to keep using this one automatically.", payload.data?.devices || [], payload.data?.deviceLimit, username, password);
+            if (announce)
+                setDeviceFeedback(payload.message || "You're already at your device limit. Remove one below first.", "bad");
+            return;
+        }
+        hideDeviceLimitNotice();
+        if (response.ok && payload.data?.devices) {
+            if (!state.currentEntitlement)
+                state.currentEntitlement = { username, password, expiresAt: "" };
+            state.currentEntitlement.devices = payload.data.devices;
+            if (payload.data.deviceLimit)
+                state.currentEntitlement.deviceLimit = payload.data.deviceLimit;
+            renderDeviceList(state.currentEntitlement);
+            if (announce) {
+                setDeviceFeedback(payload.data.status === "already_registered"
+                    ? "This device is already registered."
+                    : "Device added — it's permanently registered on this plan until you remove it.", "ok");
+            }
+        }
+    }
+    catch (_error) {
+        // Best-effort on the silent path -- never block the already-successful
+        // connection on this. The explicit path still owes the customer a
+        // response either way.
+        if (announce)
+            setDeviceFeedback("Couldn't reach the server. Try again.", "bad");
+    }
+    finally {
+        if (announce) {
+            accessDevicesAddBtn.disabled = false;
+            accessDevicesAddBtn.textContent = "+ Add this device";
+        }
+    }
+}
+accessDevicesAddBtn.addEventListener("click", () => {
+    const entitlement = state.currentEntitlement;
+    if (!entitlement)
+        return;
+    void rememberDeviceForEntitlement(entitlement.username, entitlement.password, { announce: true });
+});
 async function attemptAutoConnect(username, password, statusEl, formEl, { freshGrant = false } = {}) {
     let alreadyOnline = false;
     if (freshGrant) {
@@ -679,18 +830,28 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
     const ok = alreadyOnline || (await waitForConnection(8, 450, 900));
     if (ok) {
         hideManualConnectFallback();
-        rememberDeviceForEntitlement(username, password);
+        await rememberDeviceForEntitlement(username, password);
         let expiresAt = null;
         let deviceLimit;
+        let devices = [];
         try {
-            const response = await fetch(api(`/entitlements/${encodeURIComponent(username)}/status`));
-            const data = response.ok ? (await response.json())?.data : null;
+            const [statusResponse, devicesResponse] = await Promise.all([
+                fetch(api(`/entitlements/${encodeURIComponent(username)}/status`)),
+                fetch(api("/entitlements/devices/list"), {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ username, password })
+                })
+            ]);
+            const data = statusResponse.ok ? (await statusResponse.json())?.data : null;
             expiresAt = data?.expiresAt || null;
             deviceLimit = data?.deviceLimit;
+            const devicesData = devicesResponse.ok ? (await devicesResponse.json())?.data : null;
+            devices = devicesData?.devices || [];
         }
         catch (_error) { }
         if (expiresAt) {
-            showConnectedPanel({ username, password, expiresAt, deviceLimit }, { heading: "You're connected", message: "You're all set. You can browse now.", skipAutoConnect: true });
+            showConnectedPanel({ username, password, expiresAt, deviceLimit, devices }, { heading: "You're connected", message: "You're all set. You can browse now.", skipAutoConnect: true });
         }
         else {
             hideManualConnectFallback();
@@ -699,7 +860,11 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
     }
     else {
         updateAccessCopy("Access active");
-        setConnectState(statusEl, formEl, "failed", "Automatic confirmation is taking longer than expected. Tap Connect to finish.");
+        // Was "...is taking longer than expected" -- misleading when the retry
+        // loop actually fails fast (a walled garden that resets blocked traffic
+        // immediately rather than timing out silently makes this happen in a
+        // couple seconds, not "longer"). Say what's actually true instead.
+        setConnectState(statusEl, formEl, "failed", "Automatic sign-in didn't go through. Tap Connect below to finish.");
         showManualConnectFallback(username, password, {
             placement: manualConnectPlacement(),
             message: "Your access is active. Tap Connect to complete WiFi sign-in on this device.",
@@ -1119,6 +1284,16 @@ function placeManualConnectFallback(placement = "default") {
         access.insertBefore(manualConnectFallback, extendPeriodBtn);
         return;
     }
+    // "default" is a fixed, centered modal overlay (see portal.css) rather
+    // than an inline page element -- previously it was inserted as a normal
+    // sibling, which meant it silently rendered *behind* the mobile checkout
+    // bottom sheet (position: fixed; z-index: 40) whenever a login attempt
+    // failed mid-checkout, since a hidden-but-present element isn't visible
+    // just because it's unhidden. Being a fixed overlay in front of
+    // everything (and living outside .checkout-panel, so that panel's
+    // transform can't turn it into a new containing block) means DOM
+    // placement doesn't matter for visibility anymore -- it always appears
+    // centered on top, regardless of what panel is open underneath it.
     const portalApp = document.querySelector(".portal-app");
     if (portalApp && manualConnectFallback.parentElement !== portalApp) {
         portalApp.insertBefore(manualConnectFallback, errorText);
@@ -1178,6 +1353,9 @@ function showConnectedPanel(entitlement, { heading, skipAutoConnect, freshGrant,
     accessRecoveryCard?.classList.toggle("hidden", !recoveryReference);
     accessExpires.textContent = new Date(entitlement.expiresAt).toLocaleString();
     renderOutageNote(entitlement);
+    state.currentEntitlement = entitlement;
+    hideDeviceLimitNotice();
+    renderDeviceList(entitlement);
     void loadNotifications(entitlement.username);
     access.classList.remove("hidden");
     setStep("access");
@@ -1201,7 +1379,7 @@ function showConnectedPanel(entitlement, { heading, skipAutoConnect, freshGrant,
     else {
         updateAccessCopy("Access active");
         setConnectState(paymentStatus, null, "failed", "This device still needs to complete WiFi sign-in before internet is available.");
-        showManualConnectFallback(entitlement.username, entitlement.password);
+        showManualConnectFallback(entitlement.username, entitlement.password, { placement: manualConnectPlacement() });
     }
 }
 extendPeriodBtn?.addEventListener("click", () => {
@@ -1469,7 +1647,7 @@ voucherLoginForm?.addEventListener("submit", async (event) => {
         return;
     if (!state.hotspot?.login) {
         setConnectState(voucherLoginStatus, null, "failed", "Connect to this WiFi network first, then reopen this page to redeem your code.");
-        showManualConnectFallback(code, code);
+        showManualConnectFallback(code, code, { placement: manualConnectPlacement() });
         return;
     }
     setConnectState(voucherLoginStatus, voucherLoginForm, "connecting", "Checking your voucher and activating WiFi...");
@@ -1547,10 +1725,14 @@ async function attemptReturningDeviceAutoConnect() {
     const remembered = loadRememberedAccess();
     if (remembered) {
         showError("");
+        // Was hideCredentials: true -- but that left someone who'd genuinely
+        // forgotten their password with no way to see it again short of the
+        // M-PESA receipt lookup, even though they're looking right at their own
+        // valid session. Showing it here lets them copy it straight to a 2nd
+        // device instead.
         showConnectedPanel(remembered, {
             heading: "Welcome back",
-            message: "You already have WiFi access saved in this browser. Reconnecting you now.",
-            hideCredentials: true
+            message: "You already have WiFi access saved in this browser. Reconnecting you now."
         });
         return true;
     }
@@ -1671,10 +1853,14 @@ async function bootstrap() {
     if (!reconnectedViaDevice) {
         const remembered = loadRememberedAccess();
         if (remembered) {
+            // This is also reachable outside the captive-portal redirect (e.g. a
+            // bookmarked visit from a device that's already fully connected) --
+            // showing credentials here is what makes it possible to grab your
+            // password to sign in a 2nd device without needing the M-PESA receipt
+            // recovery flow.
             showConnectedPanel(remembered, {
                 heading: "Access active",
-                skipAutoConnect: !state.hotspot?.login,
-                hideCredentials: true
+                skipAutoConnect: !state.hotspot?.login
             });
         }
     }

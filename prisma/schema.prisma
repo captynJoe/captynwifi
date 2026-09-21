@@ -122,12 +122,33 @@ model WifiEntitlement {
   plan             WifiPlan              @relation(fields: [planId], references: [id], onDelete: Restrict)
   paymentIntent    WifiPaymentIntent     @relation(fields: [paymentIntentId], references: [id], onDelete: Cascade)
   projection       WifiRadiusProjection?
+  devices          WifiEntitlementDevice[]
 
   @@index([siteId, status, expiresAt])
   @@index([username])
   @@index([deviceMac, status, expiresAt])
   @@index([outagePausedAt])
   @@index([promoPausedAt])
+}
+
+// The real "list of devices" backing self-service add/remove. `deviceMac` on
+// WifiEntitlement itself stays a single most-recently-active cache (used by
+// the by-device auto-reconnect lookup); this table is the source of truth
+// for the registered set and for enforcing deviceLimit at the app layer --
+// RADIUS's own Simultaneous-Use check still runs independently as a
+// concurrent-session backstop, blind to which MAC is which.
+model WifiEntitlementDevice {
+  id            String          @id @default(uuid())
+  entitlementId String
+  deviceMac     String
+  label         String?
+  addedAt       DateTime        @default(now())
+  lastSeenAt    DateTime?
+  entitlement   WifiEntitlement @relation(fields: [entitlementId], references: [id], onDelete: Cascade)
+
+  @@unique([entitlementId, deviceMac])
+  @@index([entitlementId])
+  @@index([deviceMac])
 }
 
 // A time-boxed free-access campaign an admin can launch: everyone who hits

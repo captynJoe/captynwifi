@@ -784,13 +784,45 @@ adminRouter.get("/entitlements/:id", async (req, res, next) => {
     });
     if (!entitlement) return res.status(404).json({ error: "Access record not found" });
 
-    const [accounting, radcheck, radreply] = await Promise.all([
+    const [accounting, radcheck, radreply, devices] = await Promise.all([
       prisma.wifiAccountingSession.findMany({ where: { username: entitlement.username }, orderBy: { updatedAt: "desc" }, take: 5 }),
       prisma.$queryRaw<Array<{ attribute: string; op: string; value: string }>>`select attribute, op, value from radcheck where username = ${entitlement.username} order by id`,
-      prisma.$queryRaw<Array<{ attribute: string; op: string; value: string }>>`select attribute, op, value from radreply where username = ${entitlement.username} order by id`
+      prisma.$queryRaw<Array<{ attribute: string; op: string; value: string }>>`select attribute, op, value from radreply where username = ${entitlement.username} order by id`,
+      prisma.wifiEntitlementDevice.findMany({ where: { entitlementId: entitlement.id }, orderBy: { addedAt: "asc" } })
     ]);
 
-    return sendData(res, { entitlement, accounting, radcheck, radreply });
+    return sendData(res, { entitlement, accounting, radcheck, radreply, devices });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// Support-facing force-remove (e.g. a customer lost a phone and needs their
+// slot freed without waiting for self-service). Distinct from the
+// state-only /actions enum below since it's parameterized by a target MAC,
+// not just an entitlement-wide status change.
+adminRouter.delete("/entitlements/:id/devices/:mac", async (req, res, next) => {
+  try {
+    const mac = normalizeDeviceMac(req.params.mac);
+    if (!mac) return res.status(400).json({ error: "Device MAC required" });
+
+    const entitlement = await prisma.wifiEntitlement.findUnique({ where: { id: req.params.id } });
+    if (!entitlement) return res.status(404).json({ error: "Access record not found" });
+
+    const deleted = await prisma.wifiEntitlementDevice.deleteMany({
+      where: { entitlementId: entitlement.id, deviceMac: mac }
+    });
+    if (deleted.count === 0) return res.status(404).json({ error: "Device not registered on this access record." });
+
+    if (entitlement.deviceMac === mac) {
+      await prisma.wifiEntitlement.update({ where: { id: entitlement.id }, data: { deviceMac: null } });
+    }
+
+    const devices = await prisma.wifiEntitlementDevice.findMany({
+      where: { entitlementId: entitlement.id },
+      orderBy: { addedAt: "asc" }
+    });
+    return sendData(res, { removed: true, devices });
   } catch (error) {
     return next(error);
   }

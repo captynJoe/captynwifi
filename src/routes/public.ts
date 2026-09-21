@@ -46,6 +46,22 @@ const publicDeviceLookupLimit = clientRateLimit({
   message: "Too many reconnect attempts. Try again shortly."
 });
 
+const publicDeviceListLimit = clientRateLimit({
+  name: "wifi-public-device-list",
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  key: ipKey,
+  message: "Too many requests. Try again shortly."
+});
+
+const publicDeviceRemoveLimit = clientRateLimit({
+  name: "wifi-public-device-remove",
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  key: ipKey,
+  message: "Too many requests. Try again shortly."
+});
+
 const publicReceiptLookupLimit = clientRateLimit({
   name: "wifi-public-receipt-lookup",
   windowMs: 15 * 60 * 1000,
@@ -174,7 +190,10 @@ async function publicEntitlement(entitlement: {
   rateLimit: string | null;
   outagePausedAt: Date | null;
 }) {
-  const totalCreditedSeconds = await sumOutageCreditSeconds(entitlement.id);
+  const [totalCreditedSeconds, devices] = await Promise.all([
+    sumOutageCreditSeconds(entitlement.id),
+    prisma.wifiEntitlementDevice.findMany({ where: { entitlementId: entitlement.id }, orderBy: { addedAt: "asc" } })
+  ]);
   return {
     username: entitlement.username,
     password: entitlement.cleartextSecret,
@@ -182,8 +201,27 @@ async function publicEntitlement(entitlement: {
     deviceLimit: entitlement.deviceLimit,
     rateLimit: entitlement.rateLimit,
     pausedSince: entitlement.outagePausedAt,
-    totalCreditedSeconds
+    totalCreditedSeconds,
+    deviceCount: devices.length,
+    devices: devices.map((device) => ({
+      deviceMac: device.deviceMac,
+      label: device.label,
+      addedAt: device.addedAt,
+      lastSeenAt: device.lastSeenAt
+    }))
   };
+}
+
+// Re-validates ownership of a shared username/password pair the same way
+// link-device/remove-device already did inline before this was factored
+// out -- these device-management endpoints all need the identical check.
+async function authenticateEntitlementOwner(username: string, password: string) {
+  const entitlement = await prisma.wifiEntitlement.findFirst({
+    where: { username, ...activeAccessWhere(new Date()) },
+    orderBy: { createdAt: "desc" }
+  });
+  if (!entitlement || entitlement.cleartextSecret !== password) return null;
+  return entitlement;
 }
 
 // An entitlement paused for outage credit (see outageCredit.ts) or paused
@@ -817,24 +855,156 @@ const linkDeviceSchema = z.object({
 // or receipt code) so this device is remembered against the entitlement and
 // can be silently reconnected next time it hits the captive portal, instead
 // of prompting for credentials again.
+//
+// Used to just overwrite a single WifiEntitlement.deviceMac scalar -- so a
+// 2nd device linking silently evicted the 1st with no record of it ever
+// happening. Now upserts into WifiEntitlementDevice (the real registered
+// list) and enforces deviceLimit here at the app layer. This is layered on
+// top of, not instead of, RADIUS's own Simultaneous-Use check: that keeps
+// capping concurrent sessions by username regardless of this table, so a
+// device can still get *network* access past its owner's registered-device
+// count until a session naturally expires -- this endpoint only controls
+// whether the device gets remembered for frictionless auto-reconnect.
 publicRouter.post("/entitlements/link-device", publicCredentialLinkLimit, async (req, res, next) => {
   try {
     const parsed = linkDeviceSchema.parse(req.body);
     const mac = normalizeDeviceMac(parsed.deviceMac);
     if (!mac) return res.status(400).json({ error: "Device MAC required" });
 
-    const entitlement = await prisma.wifiEntitlement.findFirst({
-      where: { username: parsed.username, ...activeAccessWhere(new Date()) },
-      orderBy: { createdAt: "desc" }
-    });
-    if (!entitlement || entitlement.cleartextSecret !== parsed.password) {
+    const entitlement = await authenticateEntitlementOwner(parsed.username, parsed.password);
+    if (!entitlement) {
       return res.status(404).json({ error: "No matching active access record" });
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      // Locks the entitlement row so concurrent link-device calls for the
+      // SAME entitlement serialize instead of racing: without this, two
+      // requests arriving together can both read "count is still under the
+      // limit" before either has committed its insert, and both proceed --
+      // verified this actually happens (6 concurrent requests against a
+      // deviceLimit: 2 entitlement produced 4 registered devices). Postgres
+      // blocks the second FOR UPDATE until the first transaction commits,
+      // so by the time it runs its own count, the first insert is visible.
+      await tx.$queryRaw`SELECT id FROM "WifiEntitlement" WHERE id = ${entitlement.id} FOR UPDATE`;
+
+      const existing = await tx.wifiEntitlementDevice.findUnique({
+        where: { entitlementId_deviceMac: { entitlementId: entitlement.id, deviceMac: mac } }
+      });
+      if (existing) {
+        await tx.wifiEntitlementDevice.update({ where: { id: existing.id }, data: { lastSeenAt: new Date() } });
+        return "already_registered" as const;
+      }
+
+      const registeredCount = await tx.wifiEntitlementDevice.count({ where: { entitlementId: entitlement.id } });
+      if (registeredCount >= entitlement.deviceLimit) {
+        return "at_limit" as const;
+      }
+
+      await tx.wifiEntitlementDevice.create({ data: { entitlementId: entitlement.id, deviceMac: mac } });
+      return "added" as const;
+    });
+
+    if (result === "at_limit") {
+      const devices = await prisma.wifiEntitlementDevice.findMany({
+        where: { entitlementId: entitlement.id },
+        orderBy: { addedAt: "asc" }
+      });
+      return res.status(409).json({
+        error: "DEVICE_LIMIT_REACHED",
+        message: `You've registered the maximum of ${entitlement.deviceLimit} device${entitlement.deviceLimit === 1 ? "" : "s"} on this plan. Remove one to add this device.`,
+        data: {
+          deviceLimit: entitlement.deviceLimit,
+          devices: devices.map((device) => ({ deviceMac: device.deviceMac, label: device.label, addedAt: device.addedAt }))
+        }
+      });
     }
 
     if (entitlement.deviceMac !== mac) {
       await prisma.wifiEntitlement.update({ where: { id: entitlement.id }, data: { deviceMac: mac } });
     }
-    return res.json({ data: { linked: true } });
+    const devices = await prisma.wifiEntitlementDevice.findMany({
+      where: { entitlementId: entitlement.id },
+      orderBy: { addedAt: "asc" }
+    });
+    return res.json({
+      data: {
+        linked: true,
+        status: result,
+        deviceLimit: entitlement.deviceLimit,
+        devices: devices.map((device) => ({ deviceMac: device.deviceMac, label: device.label, addedAt: device.addedAt, lastSeenAt: device.lastSeenAt }))
+      }
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+const deviceListSchema = z.object({
+  username: z.string().trim().min(1),
+  password: z.string().min(1)
+});
+
+// POST (not GET+query) so the password never lands in a query string or
+// access log the way `/entitlements/by-device/:mac` deliberately avoids too.
+publicRouter.post("/entitlements/devices/list", publicDeviceListLimit, async (req, res, next) => {
+  try {
+    const parsed = deviceListSchema.parse(req.body);
+    const entitlement = await authenticateEntitlementOwner(parsed.username, parsed.password);
+    if (!entitlement) return res.status(404).json({ error: "No matching active access record" });
+
+    const devices = await prisma.wifiEntitlementDevice.findMany({
+      where: { entitlementId: entitlement.id },
+      orderBy: { addedAt: "asc" }
+    });
+    return res.json({
+      data: {
+        deviceLimit: entitlement.deviceLimit,
+        deviceCount: devices.length,
+        devices: devices.map((device) => ({
+          deviceMac: device.deviceMac,
+          label: device.label,
+          addedAt: device.addedAt,
+          lastSeenAt: device.lastSeenAt
+        }))
+      }
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+const removeDeviceSchema = z.object({
+  username: z.string().trim().min(1),
+  password: z.string().min(1),
+  deviceMac: z.string().trim().min(1)
+});
+
+// Customer self-service removal, freeing a slot without waiting for a stale
+// RADIUS session to naturally time out.
+publicRouter.post("/entitlements/remove-device", publicDeviceRemoveLimit, async (req, res, next) => {
+  try {
+    const parsed = removeDeviceSchema.parse(req.body);
+    const mac = normalizeDeviceMac(parsed.deviceMac);
+    if (!mac) return res.status(400).json({ error: "Device MAC required" });
+
+    const entitlement = await authenticateEntitlementOwner(parsed.username, parsed.password);
+    if (!entitlement) return res.status(404).json({ error: "No matching active access record" });
+
+    const deleted = await prisma.wifiEntitlementDevice.deleteMany({
+      where: { entitlementId: entitlement.id, deviceMac: mac }
+    });
+    if (deleted.count === 0) {
+      return res.status(404).json({ error: "That device isn't registered on this account." });
+    }
+
+    if (entitlement.deviceMac === mac) {
+      // Clear the last-active-device cache so a removed device doesn't keep
+      // silently auto-reconnecting via /entitlements/by-device.
+      await prisma.wifiEntitlement.update({ where: { id: entitlement.id }, data: { deviceMac: null } });
+    }
+
+    const deviceCount = await prisma.wifiEntitlementDevice.count({ where: { entitlementId: entitlement.id } });
+    return res.json({ data: { removed: true, deviceCount } });
   } catch (error) {
     return next(error);
   }
@@ -880,7 +1050,15 @@ publicRouter.get("/entitlements/:username/status", async (req, res, next) => {
     if (!username) return res.status(400).json({ error: "Username required" });
     const entitlement = await findCurrentEntitlementForUsername(username);
     if (!entitlement) return res.status(404).json({ error: "Not found" });
-    return res.json({ data: toJsonSafe({ status: entitlement.status, expiresAt: entitlement.expiresAt, deviceLimit: entitlement.deviceLimit }) });
+    const deviceCount = await prisma.wifiEntitlementDevice.count({ where: { entitlementId: entitlement.id } });
+    return res.json({
+      data: toJsonSafe({
+        status: entitlement.status,
+        expiresAt: entitlement.expiresAt,
+        deviceLimit: entitlement.deviceLimit,
+        deviceCount
+      })
+    });
   } catch (error) {
     return next(error);
   }

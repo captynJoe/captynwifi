@@ -502,6 +502,17 @@ function renderAccountingRows(rows) {
     : '<tr><td colspan="6" class="muted">No accounting sessions yet.</td></tr>';
 }
 
+function renderDeviceRows(devices) {
+  return devices?.length
+    ? devices.map((device) => `<tr>${cells([
+        `<span class="mono">${escapeHtml(device.deviceMac)}</span>`,
+        fmtDate(device.addedAt),
+        device.lastSeenAt ? fmtDate(device.lastSeenAt) : "-",
+        `<button type="button" class="device-remove-btn" data-remove-device-mac="${escapeHtml(device.deviceMac)}">Remove</button>`
+      ])}</tr>`).join("")
+    : '<tr><td colspan="4" class="muted">No devices registered.</td></tr>';
+}
+
 function renderAccessDetail(message = state.accessActionMessage || "") {
   if (!state.selectedEntitlementId) {
     accessDetailPanel?.classList.add("hidden");
@@ -531,7 +542,7 @@ function renderAccessDetail(message = state.accessActionMessage || "") {
   accessDetailBody.innerHTML = `
     <div class="access-detail-grid">
       ${accessStat("Status", status(entitlement.status))}
-      ${accessStat("Customer", `<span class="mono">${escapeHtml(entitlement.username)}</span>`, escapeHtml(entitlement.deviceMac || "No device lock"))}
+      ${accessStat("Customer", `<span class="mono">${escapeHtml(entitlement.username)}</span>`, `${escapeHtml(detail.devices?.length || 0)}/${escapeHtml(entitlement.deviceLimit || 1)} devices registered`)}
       ${accessStat("Current access", accessMeta)}
       ${accessStat("Current package", packageMeta, snapshotState(entitlement) === "synced" ? "settings synced" : "package changed")}
       ${accessStat("Starts", fmtDate(entitlement.startsAt))}
@@ -556,6 +567,7 @@ function renderAccessDetail(message = state.accessActionMessage || "") {
       <button type="button" data-access-action="update_limits">Save custom limits</button>
     </div>
     <div class="access-technical">
+      <details open><summary>Registered devices (${escapeHtml(detail.devices?.length || 0)}/${escapeHtml(entitlement.deviceLimit || 1)})</summary><div class="table-wrap"><table><thead><tr><th>MAC</th><th>Added</th><th>Last seen</th><th></th></tr></thead><tbody>${renderDeviceRows(detail.devices)}</tbody></table></div></details>
       <details open><summary>RADIUS reply rows</summary><div class="table-wrap"><table><thead><tr><th>Attribute</th><th>Op</th><th>Value</th></tr></thead><tbody>${renderAttributeRows(detail.radreply)}</tbody></table></div></details>
       <details><summary>RADIUS check rows</summary><div class="table-wrap"><table><thead><tr><th>Attribute</th><th>Op</th><th>Value</th></tr></thead><tbody>${renderAttributeRows(detail.radcheck)}</tbody></table></div></details>
       <details><summary>Recent accounting</summary><div class="table-wrap"><table><thead><tr><th>Session</th><th>Device</th><th>IP</th><th>Seconds</th><th>Traffic</th><th>Updated</th></tr></thead><tbody>${renderAccountingRows(detail.accounting)}</tbody></table></div></details>
@@ -1393,6 +1405,16 @@ copyPortalBtn.addEventListener("click", async () => {
   }
 });
 
+async function removeEntitlementDevice(entitlementId, mac) {
+  if (!window.confirm(`Remove device ${mac} from this customer's account? They'll need to re-enter their password on that device to reconnect.`)) return;
+  try {
+    await api(adminApi(`/entitlements/${encodeURIComponent(entitlementId)}/devices/${encodeURIComponent(mac)}`), { method: "DELETE" });
+    await selectAccess(entitlementId, true);
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : "Unable to remove device.");
+  }
+}
+
 document.addEventListener("click", (event) => {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
@@ -1402,6 +1424,8 @@ document.addEventListener("click", (event) => {
   if (deleteId) void deletePlan(deleteId);
   const action = target.dataset.accessAction;
   if (action) void runAccessAction(action);
+  const removeMac = target.dataset.removeDeviceMac;
+  if (removeMac && state.selectedEntitlementId) void removeEntitlementDevice(state.selectedEntitlementId, removeMac);
   const row = target.closest("[data-entitlement-id]");
   if (row instanceof HTMLElement && !target.closest("button, a, select, input")) void selectAccess(row.dataset.entitlementId || "");
 });

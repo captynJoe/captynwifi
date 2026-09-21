@@ -123,6 +123,17 @@
           <div class="credential static expires-card"><span>Expires</span><strong id="access-expires"></strong></div>
         </div>
         <p id="access-outage-note" class="access-outage-note hidden"></p>
+        <div id="access-devices" class="access-devices hidden">
+          <div class="access-devices-head">
+            <span>Your devices</span>
+            <strong id="access-devices-count"></strong>
+          </div>
+          <p id="access-devices-notice" class="access-devices-notice hidden"></p>
+          <div id="access-devices-list"></div>
+          <button id="access-devices-add-btn" type="button" class="link-btn access-devices-add-btn">+ Add this device</button>
+          <p id="access-devices-feedback" class="access-devices-feedback hidden"></p>
+          <a class="access-devices-manage-link" href="devices.html">Manage devices from any browser &rarr;</a>
+        </div>
         <details id="access-login-details" class="login-details">
           <summary>Connection details</summary>
           <div class="credential-grid compact">
@@ -136,14 +147,16 @@
       </section>
 
       <div id="manual-connect-fallback" class="manual-connect hidden">
-        <p id="manual-connect-message">Your access is active, but this device couldn't confirm it automatically.</p>
-        <a id="manual-connect-open-btn" class="primary hidden" href="http://neverssl.com/">Open WiFi login</a>
-        <form id="manual-connect-form" class="hidden" method="get">
-          <input type="hidden" name="username" />
-          <input type="hidden" name="password" />
-          <input type="hidden" name="dst" />
-          <button id="manual-connect-submit-btn" type="button" class="primary">Tap to connect</button>
-        </form>
+        <div class="manual-connect-card">
+          <p id="manual-connect-message">Your access is active, but this device couldn't confirm it automatically.</p>
+          <a id="manual-connect-open-btn" class="primary hidden" href="http://neverssl.com/">Open WiFi login</a>
+          <form id="manual-connect-form" class="hidden" method="get">
+            <input type="hidden" name="username" />
+            <input type="hidden" name="password" />
+            <input type="hidden" name="dst" />
+            <button id="manual-connect-submit-btn" type="button" class="primary">Tap to connect</button>
+          </form>
+        </div>
       </div>
 
       <footer class="portal-footer" aria-label="CAPTYN WiFi footer"><span>CAPTYN WiFi</span><a class="sponsor-link" href="https://captyn.shop/" target="_blank" rel="noopener">captyn.shop</a><a href="tel:+254711635755">+254711635755</a></footer>

@@ -138,6 +138,23 @@
 }
 .access-outage-note.paused { background: var(--red-soft); color: var(--red); border: 1px solid rgba(220, 38, 38, .18); }
 .access-outage-note.credited { background: var(--green-soft); color: var(--green); border: 1px solid rgba(16, 185, 129, .18); }
+.access-devices { margin: 0 20px 14px; padding: 12px 14px; border-radius: 9px; border: 1px solid var(--line); background: var(--surface-soft); }
+.access-devices.at-limit { border-color: color-mix(in srgb, var(--red) 35%, var(--line)); background: var(--red-soft); }
+.access-devices-head { display: flex; align-items: center; justify-content: space-between; font-size: 11px; font-weight: 850; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.access-devices.at-limit .access-devices-head { color: var(--red); }
+.access-devices-notice { margin: 8px 0 0; font-size: 12.5px; font-weight: 700; line-height: 1.4; color: var(--red); }
+.access-devices-list { display: grid; gap: 6px; margin-top: 8px; }
+.device-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: var(--surface); border: 1px solid var(--line); font-size: 12.5px; }
+.device-row .mono { font-family: var(--font-mono, monospace); color: var(--text-strong); flex: 1; overflow-wrap: anywhere; }
+.device-tag { font-size: 10px; font-weight: 800; color: var(--brand-blue); background: var(--brand-blue-soft); border-radius: 999px; padding: 2px 8px; }
+.device-row-empty { font-size: 12.5px; color: var(--muted); padding: 4px 2px; }
+.access-devices-add-btn { margin-top: 8px; display: inline-block; }
+.access-devices-add-btn:disabled { color: var(--muted); cursor: default; }
+.access-devices-feedback { margin: 8px 0 0; font-size: 12.5px; font-weight: 700; line-height: 1.4; }
+.access-devices-feedback.ok { color: var(--green); }
+.access-devices-feedback.bad { color: var(--red); }
+.link-btn { border: none; background: none; padding: 0; color: var(--brand-blue); font-size: 12px; font-weight: 800; cursor: pointer; }
+.link-btn:hover { color: var(--brand-blue-hover); }
 .credential em { color: var(--brand-blue); font-style: normal; font-size: 11px; font-weight: 850; }
 
 /* Promo panel: a one-day free-access event, not another status readout --
@@ -217,15 +234,39 @@
 .payment-modal-message { margin: 0; color: var(--muted); font-weight: 600; line-height: 1.5; }
 .payment-modal-cancel, .payment-modal-retry { width: 100%; }
 
+/* A centered, fixed overlay (matching .payment-modal) rather than an inline
+   page element -- it used to render as a normal sibling, which put it
+   *behind* the mobile checkout bottom sheet (position: fixed; z-index: 40)
+   whenever a login attempt failed mid-checkout, since "not hidden" doesn't
+   mean "visible" for an element sitting underneath another fixed panel.
+   Living outside .checkout-panel (so that panel's own transform can't turn
+   it into a new containing block) plus a higher z-index means it always
+   appears front-and-center regardless of what's open underneath it. */
 .manual-connect {
-  margin-top: 16px; padding: 18px; border-radius: var(--radius-lg); text-align: center;
-  background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow-md);
+  position: fixed; inset: 0; z-index: 61; display: grid; place-items: center; padding: 20px;
+  background: rgba(9, 13, 22, .55); backdrop-filter: blur(2px);
+  opacity: 1; transition: opacity .18s ease;
 }
-.manual-connect p { margin: 0 0 12px; color: var(--muted); font-weight: 600; }
-.manual-connect form button, .manual-connect a.primary { width: 100%; min-height: 42px; display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
-.access-panel .manual-connect { margin: 0 20px 16px; padding: 0; border: 0; box-shadow: none; background: transparent; }
-.access-panel .manual-connect p { margin-bottom: 10px; font-size: 13px; }
-.access-panel .manual-connect form button { min-height: 48px; border-radius: 12px; font-weight: 850; }
+.manual-connect.hidden { opacity: 0; pointer-events: none; }
+.manual-connect-card {
+  width: min(360px, 100%); text-align: center; border-radius: var(--radius-lg);
+  background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow-lg);
+  padding: 28px 24px;
+}
+.manual-connect-card p { margin: 0 0 14px; color: var(--muted); font-weight: 600; }
+.manual-connect-card form button, .manual-connect-card a.primary { width: 100%; min-height: 42px; display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+
+/* Inside the already-visible "you're connected" panel, this isn't a modal
+   interrupting something else -- it's just the next thing on the page the
+   customer is already looking at, so it stays a plain inline block instead
+   of a floating overlay. */
+.access-panel .manual-connect {
+  position: static; inset: auto; z-index: auto; display: block; padding: 0;
+  background: none; backdrop-filter: none; margin: 0 20px 16px;
+}
+.access-panel .manual-connect-card { width: auto; padding: 0; border: 0; box-shadow: none; background: transparent; }
+.access-panel .manual-connect-card p { margin-bottom: 10px; font-size: 13px; }
+.access-panel .manual-connect-card form button { min-height: 48px; border-radius: 12px; font-weight: 850; }
 .expiry-banner #expiry-countdown { font-family: var(--font-mono); color: #ffd166; }
 .expiry-banner button { min-height: 36px; padding: 0 14px; font-size: 12.5px; white-space: nowrap; }
 .expiry-banner.expired { background: var(--red); }
@@ -376,7 +417,7 @@
 :root[data-theme="dark"] .plans-panel,
 :root[data-theme="dark"] .checkout-panel,
 :root[data-theme="dark"] .access-panel,
-:root[data-theme="dark"] .manual-connect,
+:root[data-theme="dark"] .manual-connect-card,
 :root[data-theme="dark"] .payment-modal-card {
   background: rgba(0, 0, 0, .74);
   border-color: rgba(32, 245, 154, .16);

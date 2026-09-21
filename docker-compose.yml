@@ -22,6 +22,9 @@ services:
 
   wifi_api:
     image: node:22-alpine
+    networks:
+      - default
+      - dataproxy_net
     working_dir: /app
     command: sh -lc "npm ci --include=dev && npm run prisma:deploy && npm run build && npm start"
     env_file:
@@ -146,3 +149,9 @@ volumes:
   wifi_api_node_modules:
   radius_worker_node_modules:
   wifi_governor_node_modules:
+
+networks:
+  default: {}
+  dataproxy_net:
+    external: true
+    name: captyn_vps6_edge_captyn_network
