@@ -59,6 +59,7 @@ interface Entitlement {
   totalCreditedSeconds?: number;
   deviceCount?: number;
   devices?: EntitlementDevice[];
+  connectCode?: string;
 }
 
 interface NotificationData {
@@ -141,6 +142,8 @@ const accessDevicesNotice = requireElement<HTMLElement>("access-devices-notice")
 const accessDevicesList = requireElement<HTMLElement>("access-devices-list");
 const accessDevicesAddBtn = requireElement<HTMLButtonElement>("access-devices-add-btn");
 const accessDevicesFeedback = requireElement<HTMLElement>("access-devices-feedback");
+const accessConnectCode = requireElement<HTMLButtonElement>("access-connect-code");
+const accessConnectCodeValue = requireElement<HTMLElement>("access-connect-code-value");
 const extendPeriodBtn = requireElement<HTMLButtonElement>("extend-period-btn");
 const workspaceEl = document.querySelector<HTMLElement>(".workspace");
 const introRowEl = document.querySelector<HTMLElement>(".intro-row");
@@ -698,6 +701,8 @@ function renderDeviceList(entitlement: Entitlement) {
         })
         .join("")
     : '<div class="device-row-empty">No devices registered yet.</div>';
+  accessConnectCodeValue.textContent = entitlement.connectCode || "";
+  accessConnectCode.classList.toggle("hidden", !entitlement.connectCode);
 }
 function hideDeviceLimitNotice() {
   accessDevicesNotice.classList.add("hidden");
@@ -892,6 +897,7 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
     let expiresAt = null;
     let deviceLimit;
     let devices: EntitlementDevice[] = [];
+    let connectCode: string | undefined;
     try {
       const [statusResponse, devicesResponse] = await Promise.all([
         fetch(api(`/entitlements/${encodeURIComponent(username)}/status`)),
@@ -906,10 +912,11 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
       deviceLimit = data?.deviceLimit;
       const devicesData = devicesResponse.ok ? (await devicesResponse.json())?.data : null;
       devices = devicesData?.devices || [];
+      connectCode = devicesData?.connectCode;
     } catch (_error) {}
     if (expiresAt) {
       showConnectedPanel(
-        { username, password, expiresAt, deviceLimit, devices },
+        { username, password, expiresAt, deviceLimit, devices, connectCode },
         { heading: "You're connected", message: "You're all set. You can browse now.", skipAutoConnect: true }
       );
     } else {
@@ -1623,7 +1630,15 @@ expiryRenewBtn?.addEventListener("click", () => {
 });
 
 state.hotspot = readHotspotParams();
-if (state.hotspot?.error) showError(decodeURIComponent(state.hotspot.error));
+// FreeRADIUS rejects a login past the plan's Simultaneous-Use limit with
+// "You are already logged in - access denied" -- reword it for customers.
+function friendlyHotspotError(raw: string): string {
+  if (/already logged in|simultaneous/i.test(raw)) {
+    return "All devices on this plan are already online. Disconnect one, then try again.";
+  }
+  return raw;
+}
+if (state.hotspot?.error) showError(friendlyHotspotError(decodeURIComponent(state.hotspot.error)));
 
 voucherLoginToggle?.addEventListener("click", () => {
   voucherLoginForm.classList.toggle("hidden");
@@ -1651,6 +1666,29 @@ voucherLoginForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const code = voucherCodeInput.value.trim().toUpperCase();
   if (!code) return;
+  // Device codes (shown on an already-connected device) are 6 characters;
+  // vouchers are 8+, so length alone tells them apart.
+  const deviceCode = code.replace(/[\s-]/g, "");
+  if (deviceCode.length === 6) {
+    if (!state.hotspot?.login) {
+      setConnectState(voucherLoginStatus, null, "failed", "Connect to this WiFi network first, then reopen this page to enter your code.");
+      return;
+    }
+    setConnectState(voucherLoginStatus, voucherLoginForm, "connecting", "Checking your code...");
+    try {
+      const response = await fetch(api("/entitlements/connect-code/redeem"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: deviceCode })
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.data?.username) throw new Error(payload.error || "That code isn't valid.");
+      await attemptAutoConnect(payload.data.username, payload.data.password, voucherLoginStatus, voucherLoginForm);
+    } catch (error) {
+      setConnectState(voucherLoginStatus, voucherLoginForm, "failed", error instanceof Error ? error.message : "That code isn't valid.");
+    }
+    return;
+  }
   if (!state.hotspot?.login) {
     setConnectState(voucherLoginStatus, null, "failed", "Connect to this WiFi network first, then reopen this page to redeem your code.");
     showManualConnectFallback(code, code, { placement: manualConnectPlacement() });

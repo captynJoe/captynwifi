@@ -106,6 +106,9 @@ model WifiEntitlement {
   customerPhone    String
   username         String
   cleartextSecret  String
+  // Short code shown on a connected device so another device can sign in
+  // without the long password (see /entitlements/connect-code).
+  connectCode      String?               @unique
   deviceMac        String?
   status           WifiEntitlementStatus @default(pending_activation)
   startsAt         DateTime

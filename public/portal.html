@@ -74,10 +74,10 @@
           </form>
           <p id="payment-status" class="status-text"></p>
 
-          <button id="voucher-login-toggle" class="ghost existing-login-toggle" type="button">Redeem voucher</button>
+          <button id="voucher-login-toggle" class="ghost existing-login-toggle" type="button">Enter a code</button>
           <form id="voucher-login-form" class="payment-form existing-login-form hidden">
-            <label class="field" for="voucher-code-input"><span>Voucher code</span><input id="voucher-code-input" name="code" type="text" autocapitalize="characters" autocomplete="off" placeholder="e.g. 7QK4M9PX" required /></label>
-            <button id="voucher-login-submit" class="secondary" type="submit">Redeem</button>
+            <label class="field" for="voucher-code-input"><span>Voucher or device code</span><input id="voucher-code-input" name="code" type="text" autocapitalize="characters" autocomplete="off" placeholder="e.g. K7P2QX" required /></label>
+            <button id="voucher-login-submit" class="secondary" type="submit">Connect</button>
           </form>
           <p id="voucher-login-status" class="status-text"></p>
 
@@ -132,6 +132,7 @@
           <div id="access-devices-list"></div>
           <button id="access-devices-add-btn" type="button" class="link-btn access-devices-add-btn">+ Add this device</button>
           <p id="access-devices-feedback" class="access-devices-feedback hidden"></p>
+          <button id="access-connect-code" type="button" class="credential access-connect-code hidden" data-copy-target="access-connect-code-value"><span>Code for another device</span><strong id="access-connect-code-value" class="mono"></strong><em>Copy</em></button>
           <a class="access-devices-manage-link" href="devices.html">Manage devices from any browser &rarr;</a>
         </div>
         <details id="access-login-details" class="login-details">

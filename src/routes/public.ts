@@ -11,6 +11,7 @@ import { applyRadiusProjectionRows } from "../services/radiusSqlApply.js";
 import { claimPromoGrant, getLivePromo } from "../services/promo.js";
 import { formatCreditDuration } from "../services/credits.js";
 import { bodyFieldKey, clientRateLimit, ipKey } from "../middleware/rateLimitGuard.js";
+import { ensureConnectCode, normalizeConnectCode } from "../services/connectCode.js";
 
 export const publicRouter = Router();
 
@@ -60,6 +61,16 @@ const publicDeviceRemoveLimit = clientRateLimit({
   max: 20,
   key: ipKey,
   message: "Too many requests. Try again shortly."
+});
+
+// Tight on purpose: a 6-character code is only safe against guessing while
+// each IP gets a handful of tries.
+const publicConnectCodeLimit = clientRateLimit({
+  name: "wifi-public-connect-code",
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  key: ipKey,
+  message: "Too many code attempts. Try again shortly."
 });
 
 const publicReceiptLookupLimit = clientRateLimit({
@@ -956,9 +967,11 @@ publicRouter.post("/entitlements/devices/list", publicDeviceListLimit, async (re
       where: { entitlementId: entitlement.id },
       orderBy: { addedAt: "asc" }
     });
+    const connectCode = await ensureConnectCode(prisma, entitlement);
     return res.json({
       data: {
         deviceLimit: entitlement.deviceLimit,
+        connectCode,
         deviceCount: devices.length,
         devices: devices.map((device) => ({
           deviceMac: device.deviceMac,
@@ -966,6 +979,35 @@ publicRouter.post("/entitlements/devices/list", publicDeviceListLimit, async (re
           addedAt: device.addedAt,
           lastSeenAt: device.lastSeenAt
         }))
+      }
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+const redeemConnectCodeSchema = z.object({ code: z.string().trim().min(1).max(32) });
+
+// A device that isn't remembered signs in with the short code shown on an
+// already-connected device. Returns the entitlement's own RADIUS
+// credentials, so the new device still counts against Simultaneous-Use.
+publicRouter.post("/entitlements/connect-code/redeem", publicConnectCodeLimit, async (req, res, next) => {
+  try {
+    const parsed = redeemConnectCodeSchema.parse(req.body);
+    const code = normalizeConnectCode(parsed.code);
+    if (!code) return res.status(404).json({ error: "That code isn't valid. Check it on your connected device." });
+
+    const entitlement = await prisma.wifiEntitlement.findFirst({
+      where: { connectCode: code, ...activeAccessWhere(new Date()) }
+    });
+    if (!entitlement) return res.status(404).json({ error: "That code isn't valid or the access has expired." });
+
+    return res.json({
+      data: {
+        username: entitlement.username,
+        password: entitlement.cleartextSecret,
+        expiresAt: entitlement.expiresAt,
+        deviceLimit: entitlement.deviceLimit
       }
     });
   } catch (error) {
