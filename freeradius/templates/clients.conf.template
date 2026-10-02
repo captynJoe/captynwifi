@@ -5,7 +5,11 @@ client captyn_private_network {
   ipaddr = 10.8.0.0
   netmask = 24
   secret = __CAPTYN_WIFI_RADIUS_SECRET__
-  nas_type = mikrotik
+  # "other", not "mikrotik": at the Simultaneous-Use limit FreeRADIUS asks
+  # checkrad to confirm each open session with the NAS, and this image has
+  # no checkrad (or perl) -- the check failed and every extra device was let
+  # in. "other" trusts radacct, which radiusSqlWorker keeps free of stale rows.
+  nas_type = other
   require_message_authenticator = auto
 }
 

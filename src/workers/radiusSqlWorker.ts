@@ -122,6 +122,21 @@ async function endExpiredPromo() {
   console.log(`Promo ended: resumed ${result.resumed} paused entitlement(s)`);
 }
 
+// Simultaneous-Use counts radacct rows with no stop time, so a session the
+// router never closed (power cut, no Accounting-Stop) would hold a device
+// slot for good. Close sessions that have missed several interim updates --
+// only while other sessions are still reporting, so a network outage that
+// silences everything doesn't mass-close live sessions.
+async function closeStaleSessions() {
+  return prisma.$executeRaw`
+    UPDATE radacct
+    SET acctstoptime = coalesce(acctupdatetime, acctstarttime), acctterminatecause = 'Stale-Session'
+    WHERE acctstoptime IS NULL
+      AND coalesce(acctupdatetime, acctstarttime) < now() - interval '10 minutes'
+      AND EXISTS (SELECT 1 FROM radacct WHERE coalesce(acctupdatetime, acctstarttime) > now() - interval '5 minutes')
+  `;
+}
+
 async function tick() {
   await expireEntitlements();
   const timedOutPayments = await expireStalePaymentIntents();
@@ -130,6 +145,8 @@ async function tick() {
   await touchOutageHeartbeat(prisma);
   await activateScheduledPromo();
   await endExpiredPromo();
+  const staleClosed = await closeStaleSessions();
+  if (staleClosed > 0) console.log(`Closed ${staleClosed} stale RADIUS session(s)`);
 
   const accounting = await evaluateAccountingOutage(prisma);
   if (accounting.paused) {
