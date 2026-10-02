@@ -315,6 +315,15 @@ export class WifiDynamicGovernor {
     if (config.governor.dryRun || !config.governor.applyRadiusSql) return;
 
     await applyRadiusRateLimit(sample.username, targetRateLimit);
-    if (config.governor.kickOnChange) await kickHotspotUser(sample.username);
+    if (config.governor.kickOnChange) {
+      // The router only reads Mikrotik-Rate-Limit at login, so a failed kick
+      // leaves the device on its old speed until it reconnects on its own.
+      const kick = await kickHotspotUser(sample.username);
+      if (kick.error || kick.skippedReason || kick.removed === 0) {
+        console.warn(
+          `[WifiGovernor] kick ${sample.username} did not apply ${targetRateLimit}: ${kick.error || kick.skippedReason || "no active router session found"}`
+        );
+      }
+    }
   }
 }
