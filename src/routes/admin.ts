@@ -40,7 +40,9 @@ const mikrotikRateLimit = z.preprocess(
   z
     .string()
     .trim()
-    .regex(/^\d+(?:[kKmM])?\/\d+(?:[kKmM])?$/, "Use MikroTik upload/download format, for example 5M/10M or 512k/2M.")
+    // Unit is required: MikroTik reads a bare number as bits/sec, so "10/10"
+    // silently becomes 10 bps (and our governor floors it to 1M/1M).
+    .regex(/^\d+[kKmM]\/\d+[kKmM]$/, "Use MikroTik upload/download format with units, for example 5M/10M or 512k/2M.")
     .optional()
 );
 
@@ -86,7 +88,9 @@ const nullableMikrotikRateLimit = z.preprocess(
   z
     .string()
     .trim()
-    .regex(/^\d+(?:[kKmM])?\/\d+(?:[kKmM])?$/, "Use MikroTik upload/download format, for example 5M/10M or 512k/2M.")
+    // Unit is required: MikroTik reads a bare number as bits/sec, so "10/10"
+    // silently becomes 10 bps (and our governor floors it to 1M/1M).
+    .regex(/^\d+[kKmM]\/\d+[kKmM]$/, "Use MikroTik upload/download format with units, for example 5M/10M or 512k/2M.")
     .nullable()
     .optional()
 );
@@ -1200,7 +1204,7 @@ const startPromoSchema = z.object({
   message: z.string().trim().min(1).max(500).optional(),
   startsAt: z.coerce.date().optional(),
   endsAt: z.coerce.date(),
-  rateLimit: z.string().trim().min(1).optional(),
+  rateLimit: mikrotikRateLimit,
   deviceLimit: z.coerce.number().int().positive().max(10).optional(),
   pauseExisting: z.boolean().optional()
 });

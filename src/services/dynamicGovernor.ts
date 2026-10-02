@@ -183,7 +183,7 @@ function durationForState(state: PressureState): number {
 }
 
 export class WifiDynamicGovernor {
-  private previousSamples = new Map<string, AccountingSample>();
+  private previousSamples = new Map<string, ThroughputSample>();
   private state: PressureState = "GREEN";
   private candidateState: PressureState = "GREEN";
   private candidateSince = Date.now();
@@ -224,7 +224,6 @@ export class WifiDynamicGovernor {
       await this.applyDecision(sample, nextState, samples.length, activeDemandMbps, utilizationScore);
     }
 
-    this.previousSamples = new Map(samples.map((sample) => [sample.acctUniqueId, sample]));
     console.log(
       `[WifiGovernor] state=${nextState} active=${samples.length} down=${activeDemandMbps.toFixed(2)}Mbps util=${utilizationScore.toFixed(2)} dryRun=${config.governor.dryRun}`
     );
@@ -232,27 +231,39 @@ export class WifiDynamicGovernor {
     return { utilizationScore };
   }
 
+  // Accounting only moves when the router sends an interim update (~120s),
+  // while we tick every 15s. Diffing against the previous *tick* made every
+  // session read 0 bps on 7 of 8 ticks, under-reporting utilization ~8x.
+  // Instead, diff against the last sample whose updatedAt actually changed,
+  // and carry that measured rate forward until the next update lands.
   private calculateThroughput(samples: AccountingSample[]): ThroughputSample[] {
     const result: ThroughputSample[] = [];
+    const nextBaselines = new Map<string, ThroughputSample>();
 
     for (const sample of samples) {
       const previous = this.previousSamples.get(sample.acctUniqueId);
+      let measured: ThroughputSample;
+
       if (!previous) {
-        result.push({ ...sample, uploadBps: 0, downloadBps: 0 });
-        continue;
+        measured = { ...sample, uploadBps: 0, downloadBps: 0 };
+      } else if (sample.updatedAt.getTime() <= previous.updatedAt.getTime()) {
+        measured = { ...sample, uploadBps: previous.uploadBps, downloadBps: previous.downloadBps };
+      } else {
+        const elapsedSeconds = Math.max(1, (sample.updatedAt.getTime() - previous.updatedAt.getTime()) / 1000);
+        const inputDelta = sample.inputOctets > previous.inputOctets ? sample.inputOctets - previous.inputOctets : 0n;
+        const outputDelta = sample.outputOctets > previous.outputOctets ? sample.outputOctets - previous.outputOctets : 0n;
+        measured = {
+          ...sample,
+          uploadBps: (toNumber(inputDelta) * 8) / elapsedSeconds,
+          downloadBps: (toNumber(outputDelta) * 8) / elapsedSeconds
+        };
       }
 
-      const elapsedSeconds = Math.max(1, (sample.updatedAt.getTime() - previous.updatedAt.getTime()) / 1000);
-      const inputDelta = sample.inputOctets > previous.inputOctets ? sample.inputOctets - previous.inputOctets : 0n;
-      const outputDelta = sample.outputOctets > previous.outputOctets ? sample.outputOctets - previous.outputOctets : 0n;
-
-      result.push({
-        ...sample,
-        uploadBps: (toNumber(inputDelta) * 8) / elapsedSeconds,
-        downloadBps: (toNumber(outputDelta) * 8) / elapsedSeconds
-      });
+      result.push(measured);
+      nextBaselines.set(sample.acctUniqueId, measured);
     }
 
+    this.previousSamples = nextBaselines;
     return result;
   }
 
