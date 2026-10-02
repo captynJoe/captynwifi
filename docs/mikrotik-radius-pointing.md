@@ -79,3 +79,24 @@ Then run on RouterOS:
 ```
 
 A paid WiFi entitlement should create rows in `radcheck` and `radreply`; FreeRADIUS should then return `Access-Accept` with attributes such as `Mikrotik-Rate-Limit` and `Session-Timeout`.
+
+## Short Portal Address (wifi.captyn.shop)
+
+Customers whose captive portal doesn't pop up open `wifi.captyn.shop`, which
+lands on the hotspot login page and forwards into the portal with the
+device's MAC and login link. The portal shows this address next to each
+access record's 6-character device code.
+
+```routeros
+/ip hotspot profile set default dns-name=wifi.captyn.shop hotspot-address=192.168.88.1
+```
+
+Cloudflare: `A wifi -> 192.168.88.1`, DNS only (not proxied), so it also
+resolves for phones using Private DNS instead of the router.
+
+The RouterOS API must accept the VPS for governor kicks:
+
+```routeros
+/ip service set api disabled=no address=10.8.0.0/24
+/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept place-before=0 comment="CAPTYN governor API"
+```
