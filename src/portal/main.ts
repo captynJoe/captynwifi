@@ -144,6 +144,7 @@ const accessDevicesAddBtn = requireElement<HTMLButtonElement>("access-devices-ad
 const accessDevicesFeedback = requireElement<HTMLElement>("access-devices-feedback");
 const accessConnectCode = requireElement<HTMLButtonElement>("access-connect-code");
 const accessConnectCodeValue = requireElement<HTMLElement>("access-connect-code-value");
+const accessConnectCodeHint = requireElement<HTMLElement>("access-connect-code-hint");
 const extendPeriodBtn = requireElement<HTMLButtonElement>("extend-period-btn");
 const workspaceEl = document.querySelector<HTMLElement>(".workspace");
 const introRowEl = document.querySelector<HTMLElement>(".intro-row");
@@ -703,6 +704,7 @@ function renderDeviceList(entitlement: Entitlement) {
     : '<div class="device-row-empty">No devices registered yet.</div>';
   accessConnectCodeValue.textContent = entitlement.connectCode || "";
   accessConnectCode.classList.toggle("hidden", !entitlement.connectCode);
+  accessConnectCodeHint.classList.toggle("hidden", !entitlement.connectCode);
 }
 function hideDeviceLimitNotice() {
   accessDevicesNotice.classList.add("hidden");
