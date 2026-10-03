@@ -855,11 +855,13 @@ function renderPromo() {
     `;
     endBtn.textContent = isLive ? "End promo now" : "Cancel scheduled promo";
     endBtn.classList.remove("hidden");
+    document.getElementById("promo-end-mode-field")?.classList.toggle("hidden", !isLive);
   } else {
     pill.className = "pill muted";
     pill.textContent = "Off";
     summary.innerHTML = '<div class="empty-state">No promo running. Fill in the form to launch one.</div>';
     endBtn.classList.add("hidden");
+    document.getElementById("promo-end-mode-field")?.classList.add("hidden");
   }
 }
 
@@ -1363,13 +1365,16 @@ promoForm?.addEventListener("submit", async (event) => {
 promoEndBtn?.addEventListener("click", async () => {
   const promo = state.cache.promo;
   const isLive = Boolean(promo?.activatedAt) && new Date(promo.startsAt).getTime() <= Date.now();
-  const prompt = isLive
-    ? "End the promo now? Everyone's free access stops and paused packages resume immediately."
-    : "Cancel this scheduled promo?";
+  const mode = isLive ? document.getElementById("promo-end-mode")?.value || "new_claims" : "everyone";
+  const prompt = !isLive
+    ? "Cancel this scheduled promo?"
+    : mode === "everyone"
+      ? "End the promo for everyone now? All free access stops and paused packages resume immediately."
+      : `Stop new devices claiming the promo? Devices that already claimed keep free access until ${fmtDate(promo.endsAt)}. Paused packages resume immediately.`;
   if (!window.confirm(prompt)) return;
   promoEndBtn.disabled = true;
   try {
-    await writeApi(adminApi("/promo/end"), "POST", {});
+    await writeApi(adminApi("/promo/end"), "POST", { mode });
     await loadDashboard();
     setPage("promo");
   } catch (error) {

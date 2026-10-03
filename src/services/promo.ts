@@ -1,6 +1,7 @@
 import type { Prisma, PrismaClient, WifiPromo } from "@prisma/client";
 import { buildRadiusProjection, createRadiusSecret, normalizeDeviceMac } from "./radiusProjection.js";
 import { applyRadiusProjectionRows, hasOtherActiveEntitlement } from "./radiusSqlApply.js";
+import { kickHotspotUser } from "./routeros.js";
 
 const PROMO_PLAN_SOURCE = "captyn_wifi_promo";
 const PROMO_PLAN_EXTERNAL_ID = "free-surfing-promo";
@@ -98,10 +99,17 @@ export async function startPromo(prisma: PrismaClient, input: StartPromoInput): 
 // frozen duration, same math as outage credit's resume) and deactivates the
 // promo. Safe to call even if pauseExisting was false -- the updateMany
 // simply matches zero rows.
-export async function endPromo(prisma: PrismaClient, promoId: string): Promise<{ resumed: number }> {
+// revokeExisting: false = stop new claims only; devices that already claimed
+// keep access until the promo's scheduled endsAt (their grants expire then).
+// true = end free access for everyone right now.
+export async function endPromo(
+  prisma: PrismaClient,
+  promoId: string,
+  { revokeExisting = false }: { revokeExisting?: boolean } = {}
+): Promise<{ resumed: number; revoked: number }> {
   const now = new Date();
 
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     const paused = await tx.wifiEntitlement.findMany({
       where: { promoPausedAt: { not: null } },
       select: {
@@ -174,9 +182,31 @@ export async function endPromo(prisma: PrismaClient, promoId: string): Promise<{
       });
     }
 
+    // Free grants were issued to expire at the promo's scheduled endsAt.
+    // Ending for everyone cuts them to now; expireEntitlements removes the
+    // RADIUS rows on its next tick, and the kicks below drop the sessions
+    // already online.
+    const revoked = !revokeExisting ? [] : await tx.wifiEntitlement.findMany({
+      where: { status: "active", expiresAt: { gt: now }, paymentIntent: { source: PROMO_PLAN_SOURCE } },
+      select: { id: true, username: true }
+    });
+    if (revoked.length > 0) {
+      await tx.wifiEntitlement.updateMany({ where: { id: { in: revoked.map((grant) => grant.id) } }, data: { expiresAt: now } });
+    }
+
+    if (revokeExisting) {
+      await tx.wifiPromo.updateMany({ where: { id: promoId, endsAt: { gt: now } }, data: { endsAt: now } });
+    }
     await tx.wifiPromo.update({ where: { id: promoId }, data: { active: false } });
-    return { resumed: paused.length };
+    return { resumed: paused.length, revoked: revoked.map((grant) => grant.username) };
   });
+
+  for (const username of result.revoked) {
+    const kick = await kickHotspotUser(username);
+    if (kick.error) console.warn(`[Promo] kick ${username} failed: ${kick.error}`);
+  }
+
+  return { resumed: result.resumed, revoked: result.revoked.length };
 }
 
 async function ensurePromoPlan(tx: Prisma.TransactionClient, siteId: string, promo: WifiPromo) {

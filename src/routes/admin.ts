@@ -1224,11 +1224,14 @@ adminRouter.post("/promo/start", async (req, res, next) => {
   }
 });
 
-adminRouter.post("/promo/end", async (_req, res, next) => {
+const endPromoSchema = z.object({ mode: z.enum(["new_claims", "everyone"]).default("new_claims") });
+
+adminRouter.post("/promo/end", async (req, res, next) => {
   try {
     const promo = await getActivePromo(prisma);
     if (!promo) return res.status(404).json({ error: "No active or scheduled promo." });
-    const result = await endPromo(prisma, promo.id);
+    const { mode } = endPromoSchema.parse(req.body ?? {});
+    const result = await endPromo(prisma, promo.id, { revokeExisting: mode === "everyone" });
     return sendData(res, result);
   } catch (error) {
     return next(error);
