@@ -4,6 +4,7 @@ import { prisma } from "../prisma.js";
 import { applyRadiusProjectionRows, hasOtherActiveEntitlement } from "../services/radiusSqlApply.js";
 import { applyOutageCredit, evaluateAccountingOutage, resumePausedEntitlements, touchOutageHeartbeat } from "../services/outageCredit.js";
 import { activateDuePromos, endPromo, getActivePromo } from "../services/promo.js";
+import { kickHotspotUser } from "../services/routeros.js";
 
 async function applyProjection(id: string) {
   await prisma.$transaction(async (tx) => {
@@ -122,6 +123,42 @@ async function endExpiredPromo() {
   console.log(`Promo ended: resumed ${result.resumed} paused entitlement(s)`);
 }
 
+// Expiring an entitlement deletes its radcheck rows, which only blocks new
+// logins -- a device already online kept browsing until its Session-Timeout,
+// which is the *full* plan duration from whenever that session started
+// (measured: 12% of paid sessions ran past expiry, up to ~10h). Disconnect
+// any open session whose username no longer has RADIUS credentials. Retried
+// at most once a minute per user, so a failed kick is retried without
+// hammering the router.
+const lastKickAttempt = new Map<string, number>();
+const KICK_RETRY_MS = 60_000;
+
+async function kickSessionsWithoutCredentials() {
+  const rows = await prisma.$queryRaw<{ username: string }[]>`
+    SELECT DISTINCT r.username
+    FROM radacct r
+    WHERE r.acctstoptime IS NULL
+      AND r.username IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM radcheck c WHERE c.username = r.username)
+  `;
+  const now = Date.now();
+  const open = new Set(rows.map((row) => row.username));
+  for (const username of lastKickAttempt.keys()) {
+    if (!open.has(username)) lastKickAttempt.delete(username);
+  }
+
+  let kicked = 0;
+  for (const { username } of rows) {
+    if (now - (lastKickAttempt.get(username) ?? 0) < KICK_RETRY_MS) continue;
+    lastKickAttempt.set(username, now);
+    const result = await kickHotspotUser(username);
+    if (result.skippedReason) return kicked; // RouterOS API not configured -- nothing to retry
+    if (result.error) console.warn(`Expired-session kick ${username} failed: ${result.error}`);
+    kicked += result.removed;
+  }
+  return kicked;
+}
+
 // Simultaneous-Use counts radacct rows with no stop time, so a session the
 // router never closed (power cut, no Accounting-Stop) would hold a device
 // slot for good. Close sessions that have missed several interim updates --
@@ -145,6 +182,8 @@ async function tick() {
   await touchOutageHeartbeat(prisma);
   await activateScheduledPromo();
   await endExpiredPromo();
+  const expiredKicked = await kickSessionsWithoutCredentials();
+  if (expiredKicked > 0) console.log(`Disconnected ${expiredKicked} session(s) whose access has ended`);
   const staleClosed = await closeStaleSessions();
   if (staleClosed > 0) console.log(`Closed ${staleClosed} stale RADIUS session(s)`);
 
