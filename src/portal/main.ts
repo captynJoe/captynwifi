@@ -1118,7 +1118,7 @@ function upgradeReason(plan: PortalPlan, upgrade: PortalPlan) {
   const nextRate = rateParts(upgrade.rateLimit);
   if (nextRate.download > currentRate.download) return `faster ↓ ${nextRate.download} Mbps`;
   if (Number(upgrade.deviceLimit || 0) > Number(plan.deviceLimit || 0)) return `${upgrade.deviceLimit} devices`;
-  if (Number(upgrade.durationSeconds || 0) > Number(plan.durationSeconds || 0)) return `more time`;
+  if (Number(upgrade.durationSeconds || 0) > Number(plan.durationSeconds || 0)) return `${duration(upgrade.durationSeconds)} instead of ${duration(plan.durationSeconds)}`;
   return "a stronger option";
 }
 function upgradeCard(plan: PortalPlan) {
@@ -1126,14 +1126,11 @@ function upgradeCard(plan: PortalPlan) {
   if (!upgrade) return "";
   const extra = Number(upgrade.priceKsh || 0) - Number(plan.priceKsh || 0);
   if (extra <= 0) return "";
-  const tier = speedTierForPlan(upgrade);
-  const viewTier = tier ? `<button type="button" class="upgrade-view" data-view-speed-key="${esc(tier.key)}">View ${esc(tier.range)}</button>` : "";
   return `<div class="upgrade-card">
     <button type="button" class="upgrade-main" data-plan-id="${esc(upgrade.id)}">
       <span><em>Compare</em><strong>${esc(displayPlanName(upgrade))}</strong></span>
       <span>+${money(extra)} for ${esc(upgradeReason(plan, upgrade))}</span>
     </button>
-    ${viewTier}
   </div>`;
 }
 function renderSelectedPlan() {
