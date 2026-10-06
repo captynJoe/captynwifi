@@ -661,9 +661,14 @@ adminRouter.patch("/plans/:id", async (req, res, next) => {
       // showing (and stay purchasable) at its last auto-flexed price
       // alongside the admin's new pinned price. deleteMany is a safe no-op
       // when no mirror exists.
+      // Unpublished rather than deleted: a mirror customers have bought is
+      // referenced by their payments/entitlements (onDelete: Restrict), so
+      // deleting it failed for any package that had ever sold. Unticking
+      // Manual price re-publishes it via refreshMirrorForBaseline below.
       if (updated.manualPricing) {
-        await tx.wifiPlan.deleteMany({
-          where: { siteId: updated.siteId, source: "captyn_dynamic", externalPackageId: updated.id }
+        await tx.wifiPlan.updateMany({
+          where: { siteId: updated.siteId, source: DYNAMIC_PLAN_SOURCE, externalPackageId: updated.id },
+          data: { enabled: false }
         });
       }
 
@@ -671,6 +676,35 @@ adminRouter.patch("/plans/:id", async (req, res, next) => {
     });
     await refreshMirrorForBaseline(plan.id);
     return sendData(res, plan);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+const pricingModeSchema = z.object({ mode: z.enum(["manual", "dynamic"]) });
+
+// One switch for the whole menu. Manual: every paid package sells exactly as
+// set (its live mirror is unpublished). Dynamic: the engine prices them
+// again -- existing mirrors are re-scaled now, new ones at the next rotation.
+adminRouter.post("/plans/pricing-mode", async (req, res, next) => {
+  try {
+    const { mode } = pricingModeSchema.parse(req.body);
+    const manual = mode === "manual";
+    const baselines = await prisma.wifiPlan.findMany({
+      where: { source: "captyn_admin", priceKsh: { gt: 0 } },
+      select: { id: true }
+    });
+    const ids = baselines.map((plan) => plan.id);
+    await prisma.$transaction([
+      prisma.wifiPlan.updateMany({ where: { id: { in: ids } }, data: { manualPricing: manual } }),
+      ...(manual
+        ? [prisma.wifiPlan.updateMany({ where: { source: DYNAMIC_PLAN_SOURCE, externalPackageId: { in: ids } }, data: { enabled: false } })]
+        : [])
+    ]);
+    if (!manual) {
+      for (const id of ids) await refreshMirrorForBaseline(id);
+    }
+    return sendData(res, { mode, packages: ids.length });
   } catch (error) {
     return next(error);
   }

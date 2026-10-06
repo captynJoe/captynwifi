@@ -661,6 +661,19 @@ function renderPlanCards() {
   const empty = '<div class="empty-state">No published packages.</div>';
   preview.innerHTML = published.length ? published.map((plan) => rateCard(plan)).join("") : empty;
   cards.innerHTML = published.length ? published.map((plan) => rateCard(plan, true)).join("") : empty;
+  renderPricingMode();
+}
+
+function currentPricingMode() {
+  const paid = (state.cache.plans || []).filter((plan) => plan.source === "captyn_admin" && Number(plan.priceKsh) > 0);
+  const manual = paid.filter((plan) => plan.manualPricing).length;
+  if (manual === 0) return "dynamic";
+  return manual === paid.length ? "manual" : "mixed";
+}
+
+function renderPricingMode() {
+  const select = document.getElementById("pricing-mode-select");
+  if (select) select.value = currentPricingMode();
 }
 
 
@@ -1468,3 +1481,26 @@ async function bootstrapAdmin() {
   if (state.trustedDeviceToken) await restoreTrustedSession();
 }
 void bootstrapAdmin();
+
+document.getElementById("pricing-mode-select")?.addEventListener("change", async (event) => {
+  const select = event.target;
+  const mode = select.value;
+  const prompt = mode === "manual"
+    ? "Switch every paid package to manual pricing? Customers will see exactly the prices, times and speeds you set, with no automatic adjustment."
+    : "Switch every paid package to dynamic pricing? Prices, times and speeds will adjust automatically with network traffic.";
+  if (!window.confirm(prompt)) {
+    renderPricingMode();
+    return;
+  }
+  select.disabled = true;
+  try {
+    await writeApi(adminApi("/plans/pricing-mode"), "POST", { mode });
+    await loadDashboard();
+    setPage("packages");
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : "Failed to change pricing mode");
+    renderPricingMode();
+  } finally {
+    select.disabled = false;
+  }
+});
