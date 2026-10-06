@@ -811,29 +811,38 @@ accessDevicesAddBtn.addEventListener("click", () => {
         return;
     void rememberDeviceForEntitlement(entitlement.username, entitlement.password, { announce: true });
 });
-async function attemptAutoConnect(username, password, statusEl, formEl, { freshGrant = false } = {}) {
-    let alreadyOnline = false;
-    if (freshGrant) {
-        setConnectState(statusEl, formEl, "connecting", "Package active. Authenticating this device...");
-        autoCompleteHotspotLogin(username, password);
-        showManualConnectFallback(username, password, {
-            placement: manualConnectPlacement(),
-            message: "Connecting automatically. If your device still says Sign in required, tap to connect now.",
-            buttonLabel: "Tap to connect now"
-        });
+// Saved before leaving for the router, so the page the router sends the
+// device back to (/wifi/, no hotspot params) opens on the connected screen.
+async function saveAccessBeforeLeaving(username, password) {
+    try {
+        const response = await fetch(api(`/entitlements/${encodeURIComponent(username)}/status`));
+        const data = response.ok ? (await response.json())?.data : null;
+        if (data?.expiresAt)
+            saveRememberedAccess({ username, password, expiresAt: data.expiresAt, deviceLimit: data.deviceLimit });
     }
-    else {
-        setConnectState(statusEl, formEl, "connecting", "Checking this device...");
-        alreadyOnline = await checkInternetReachable(900);
-        if (!alreadyOnline) {
-            setConnectState(statusEl, formEl, "connecting", "Reconnecting this device...");
-            autoCompleteHotspotLogin(username, password);
+    catch (_error) { }
+}
+async function attemptAutoConnect(username, password, statusEl, formEl, { freshGrant = false } = {}) {
+    const alreadyOnline = freshGrant ? false : await checkInternetReachable(900);
+    // The router's login page is plain http and this portal is https, so a
+    // hidden-iframe login is blocked as mixed content by browsers and
+    // captive-portal webviews -- it never reached the router, and customers
+    // only got online by finding "Tap to connect". Go to the router for real:
+    // it signs the device in and redirects back to /wifi/. The fallback button
+    // still appears if the navigation hasn't happened after a few seconds.
+    if (!alreadyOnline && state.hotspot?.login) {
+        setConnectState(statusEl, formEl, "connecting", "Signing this device in...");
+        await rememberDeviceForEntitlement(username, password);
+        await saveAccessBeforeLeaving(username, password);
+        setTimeout(() => {
             showManualConnectFallback(username, password, {
                 placement: manualConnectPlacement(),
-                message: "Reconnecting automatically. If the WiFi screen still says Action needed, tap to connect.",
+                message: "If this device didn't connect, tap below.",
                 buttonLabel: "Tap to connect"
             });
-        }
+        }, 4000);
+        autoCompleteHotspotLogin(username, password, { topLevel: true });
+        return;
     }
     const ok = alreadyOnline || (await waitForConnection(8, 450, 900));
     if (ok) {
@@ -1414,14 +1423,8 @@ function showConnectedPanel(entitlement, { heading, skipAutoConnect, freshGrant,
     if (skipAutoConnect)
         return;
     if (state.hotspot?.login) {
-        // Used to do a real top-level navigation away to MikroTik and back for
-        // a fresh grant (payment/free-access/voucher), on the theory that the
-        // hidden-iframe path needed a visible browser tab to survive Chrome's
-        // "not secure" form warning. That's no longer true now that the login
-        // itself is a plain GET (see autoCompleteHotspotLogin) rather than a
-        // <form> submission, so it's not subject to that warning either way --
-        // and the hidden path is much faster to land on, since it never leaves
-        // this already-loaded page for a full navigate-away-and-back round trip.
+        // attemptAutoConnect navigates to the router's login page (a hidden
+        // iframe login is blocked as mixed content -- see there).
         void attemptAutoConnect(entitlement.username, entitlement.password, paymentStatus, null, { freshGrant: Boolean(freshGrant) });
     }
     else {
