@@ -553,6 +553,7 @@ function renderAccessDetail(message = state.accessActionMessage || "") {
       ${accessStat("Starts", fmtDate(entitlement.startsAt))}
       ${accessStat("Expires", fmtDate(entitlement.expiresAt))}
       ${accessStat("Payment", `<span class="mono">${escapeHtml(reference)}</span>`, fmtMoney(payment.amountKsh || 0))}
+      ${detail.connectCode ? accessStat("Device code", `<span class="mono sensitive">${escapeHtml(detail.connectCode)}</span>`, "Connects another device") : ""}
       ${accessStat("RADIUS", status(entitlement.projection?.status || "missing"), fmtDate(entitlement.projection?.appliedAt))}
     </div>
     <div class="access-actions">

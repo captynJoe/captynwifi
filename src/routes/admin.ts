@@ -17,6 +17,7 @@ import { issueVoucher } from "../services/voucherIssuance.js";
 import { normalizeKenyaPhone } from "../lib/phone.js";
 import { endPromo, getActivePromo, startPromo } from "../services/promo.js";
 import { DYNAMIC_PLAN_SOURCE, refreshMirrorForBaseline } from "../services/dynamicPlanEngine.js";
+import { ensureConnectCode } from "../services/connectCode.js";
 import { CREDIT_REASONS, availableCreditSeconds, grantWifiCredit } from "../services/credits.js";
 
 export const adminRouter = Router();
@@ -842,7 +843,11 @@ adminRouter.get("/entitlements/:id", async (req, res, next) => {
       prisma.wifiEntitlementDevice.findMany({ where: { entitlementId: entitlement.id }, orderBy: { addedAt: "asc" } })
     ]);
 
-    return sendData(res, { entitlement, accounting, radcheck, radreply, devices });
+    // Lets support read a customer their device code when they're already
+    // online and can't reach the connected screen on a second device.
+    const connectCode = await ensureConnectCode(prisma, entitlement);
+
+    return sendData(res, { entitlement, accounting, radcheck, radreply, devices, connectCode });
   } catch (error) {
     return next(error);
   }
