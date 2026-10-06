@@ -100,10 +100,25 @@ themeToggleBtn.addEventListener("click", () => {
 });
 syncThemeToggleLabel();
 
+const manageCode = document.getElementById("devices-manage-code") as HTMLElement;
+const manageCodeValue = document.getElementById("devices-manage-code-value") as HTMLElement;
+manageCode.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(manageCodeValue.textContent || "");
+    const label = manageCode.querySelector("em");
+    if (label) {
+      label.textContent = "Copied";
+      setTimeout(() => { label.textContent = "Copy"; }, 1200);
+    }
+  } catch (_error) {}
+});
+
 let session: { username: string; password: string } | null = null;
 
-function renderDevices(deviceLimit: number, devices: DeviceRow[]) {
+function renderDevices(deviceLimit: number, devices: DeviceRow[], connectCode?: string) {
   manageLimit.textContent = `${devices.length}/${deviceLimit} devices`;
+  manageCode.classList.toggle("hidden", !connectCode);
+  manageCodeValue.textContent = connectCode || "";
   manageList.innerHTML = devices.length
     ? devices
         .map(
@@ -129,7 +144,7 @@ async function loadDevices() {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || "Unable to load your devices.");
     manageStatus.textContent = "";
-    renderDevices(payload.data?.deviceLimit || 1, payload.data?.devices || []);
+    renderDevices(payload.data?.deviceLimit || 1, payload.data?.devices || [], payload.data?.connectCode);
   } catch (error) {
     manageStatus.textContent = error instanceof Error ? error.message : "Unable to load your devices.";
   }
@@ -188,7 +203,7 @@ loginForm.addEventListener("submit", async (event) => {
     loginStatus.textContent = "";
     loginSection.classList.add("hidden");
     manageSection.classList.remove("hidden");
-    renderDevices(payload.data?.deviceLimit || 1, payload.data?.devices || []);
+    renderDevices(payload.data?.deviceLimit || 1, payload.data?.devices || [], payload.data?.connectCode);
   } catch (error) {
     loginStatus.textContent = error instanceof Error ? error.message : "Unable to check that account.";
   } finally {

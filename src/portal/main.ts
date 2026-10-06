@@ -1383,6 +1383,21 @@ function updateAccessCopy(heading) {
   if (heading) accessHeading.textContent = heading;
 }
 
+async function loadConnectCode(entitlement: Entitlement) {
+  try {
+    const response = await fetch(api("/entitlements/devices/list"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: entitlement.username, password: entitlement.password })
+    });
+    const data = response.ok ? (await response.json())?.data : null;
+    if (!data || state.currentEntitlement !== entitlement) return;
+    entitlement.connectCode = data.connectCode;
+    entitlement.devices = data.devices || entitlement.devices;
+    if (data.deviceLimit) entitlement.deviceLimit = data.deviceLimit;
+    renderDeviceList(entitlement);
+  } catch (_error) {}
+}
 function showConnectedPanel(entitlement: Entitlement, { heading, skipAutoConnect, freshGrant, recoveryReference, hideCredentials }: ConnectedPanelOptions = {}) {
   if (workspaceEl) workspaceEl.classList.add("hidden");
   hideManualConnectFallback();
@@ -1401,6 +1416,9 @@ function showConnectedPanel(entitlement: Entitlement, { heading, skipAutoConnect
   state.currentEntitlement = entitlement;
   hideDeviceLimitNotice();
   renderDeviceList(entitlement);
+  // Remembered access (a later visit on this device) doesn't carry the
+  // device code -- fetch it so "Code for another device" always shows.
+  if (!entitlement.connectCode && entitlement.password) void loadConnectCode(entitlement);
   void loadNotifications(entitlement.username);
   access.classList.remove("hidden");
   setStep("access");
