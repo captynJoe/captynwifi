@@ -99,6 +99,8 @@ body.show-more-info .metric-detail { display: block; }
 
 .sensitive { filter: blur(6px); user-select: none; transition: filter .15s ease; }
 body.show-sensitive .sensitive { filter: none; user-select: auto; }
+.sensitive { cursor: pointer; }
+.sensitive.revealed { filter: none; user-select: auto; }
 
 .status-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
 .status-pill {

@@ -231,8 +231,16 @@ button.credential:hover { border-color: var(--brand-blue); transform: none; box-
 .promo-countdown-label { font-size: 12px; font-weight: 800; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
 .promo-countdown { font-family: var(--font-mono); font-size: 30px; color: var(--text-strong); }
 
-/* ---------- Manual connect fallback ---------- */
-.manual-connect { display: grid; }
+/* ---------- Manual connect fallback ----------
+   Outside the connected panel it's a centred overlay above everything --
+   inline, it sat behind the mobile checkout sheet, so "Tap to connect" was
+   unreachable after entering a code or paying and the device never signed
+   in. Inside the connected panel it stays inline. */
+.portal-app > .manual-connect {
+  position: fixed; inset: 0; z-index: 55; display: grid; place-items: center; padding: 16px; background: rgba(0, 0, 0, .55);
+}
+.portal-app > .manual-connect .manual-connect-card { width: min(380px, 100%); background: var(--surface); box-shadow: var(--shadow-lg); }
+.access-panel .manual-connect { display: grid; }
 .manual-connect-card {
   display: grid; gap: 10px; padding: 14px; border: 1px solid var(--amber); border-radius: var(--radius-md); background: var(--amber-soft);
 }

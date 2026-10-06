@@ -1520,3 +1520,10 @@ document.addEventListener("click", (event) => {
     menu.removeAttribute("open");
   }
 });
+
+// Tap a blurred value to reveal just that one -- the menu's "Show sensitive"
+// was hard to reach on phones.
+document.addEventListener("click", (event) => {
+  const target = event.target instanceof Element ? event.target.closest(".sensitive") : null;
+  if (target) target.classList.toggle("revealed");
+});

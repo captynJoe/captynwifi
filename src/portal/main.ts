@@ -527,7 +527,9 @@ function readHotspotParams() {
   };
 }
 function portalReturnUrl() {
-  const path = window.location.pathname.startsWith("/wifi") ? "/wifi/portal/" : "/portal/";
+  // nginx already maps /wifi/ onto the API's /portal/, so "/wifi/portal/"
+  // became /portal/portal/ -- a 404 right after a successful login.
+  const path = window.location.pathname.startsWith("/wifi") ? "/wifi/" : "/portal/";
   return new URL(path, window.location.origin).toString();
 }
 // For the hidden auto-connect attempt, redirecting to the OS's own original
