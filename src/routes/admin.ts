@@ -16,6 +16,7 @@ import { kickHotspotUser } from "../services/routeros.js";
 import { issueVoucher } from "../services/voucherIssuance.js";
 import { normalizeKenyaPhone } from "../lib/phone.js";
 import { endPromo, getActivePromo, startPromo } from "../services/promo.js";
+import { DYNAMIC_PLAN_SOURCE, refreshMirrorForBaseline } from "../services/dynamicPlanEngine.js";
 import { CREDIT_REASONS, availableCreditSeconds, grantWifiCredit } from "../services/credits.js";
 
 export const adminRouter = Router();
@@ -627,9 +628,14 @@ adminRouter.post("/plans", async (req, res, next) => {
 adminRouter.patch("/plans/:id", async (req, res, next) => {
   try {
     const data = planUpdateSchema.parse(req.body);
+    // A captyn_dynamic row is regenerated from its baseline every rotation,
+    // so an edit saved on it silently reverted within the hour. Apply the
+    // edit to the baseline instead.
+    const target = await prisma.wifiPlan.findUnique({ where: { id: req.params.id }, select: { source: true, externalPackageId: true } });
+    const planId = target?.source === DYNAMIC_PLAN_SOURCE && target.externalPackageId ? target.externalPackageId : req.params.id;
     const plan = await prisma.$transaction(async (tx) => {
       const updated = await tx.wifiPlan.update({
-        where: { id: req.params.id },
+        where: { id: planId },
         data: {
           ...(data.siteId !== undefined ? { siteId: data.siteId } : {}),
           ...(data.source !== undefined ? { source: data.source } : {}),
@@ -663,6 +669,7 @@ adminRouter.patch("/plans/:id", async (req, res, next) => {
 
       return updated;
     });
+    await refreshMirrorForBaseline(plan.id);
     return sendData(res, plan);
   } catch (error) {
     return next(error);
@@ -732,6 +739,12 @@ adminRouter.post("/plans/:id/image", planImageUpload.single("image"), async (req
 adminRouter.delete("/plans/:id", async (req, res, next) => {
   try {
     const deleted = await prisma.wifiPlan.delete({ where: { id: req.params.id } });
+    // Its mirror carries the purchase history (so it can't be deleted) and
+    // isn't a FK child -- unpublish it now rather than at the next rotation.
+    await prisma.wifiPlan.updateMany({
+      where: { siteId: deleted.siteId, source: DYNAMIC_PLAN_SOURCE, externalPackageId: deleted.id },
+      data: { enabled: false }
+    });
     if (deleted.imageFile) {
       await fs.rm(path.join(planImagesDir, deleted.imageFile), { force: true });
     }

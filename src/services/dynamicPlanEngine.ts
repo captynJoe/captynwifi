@@ -186,6 +186,31 @@ export function scaleBaselinePlan(baseline: BaselinePlan, tier: Tier): ScaledSpe
 
 export const DYNAMIC_PLAN_SOURCE = "captyn_dynamic";
 
+// The admin edits the baseline (captyn_admin) row, but customers see its
+// captyn_dynamic mirror, which otherwise only catches up at the next hourly
+// rotation. Re-scale that one mirror now at the site's current tier, or
+// unpublish it if the baseline is no longer mirrorable (disabled/free).
+// manualPricing baselines have their mirror deleted by the PATCH route.
+export async function refreshMirrorForBaseline(baselineId: string) {
+  const baseline = await prisma.wifiPlan.findUnique({ where: { id: baselineId } });
+  if (!baseline || baseline.source !== "captyn_admin" || baseline.manualPricing) return;
+
+  const mirrorWhere = {
+    siteId_source_externalPackageId: { siteId: baseline.siteId, source: DYNAMIC_PLAN_SOURCE, externalPackageId: baseline.id }
+  };
+  const mirror = await prisma.wifiPlan.findUnique({ where: mirrorWhere, select: { id: true } });
+  if (!mirror) return; // engine hasn't mirrored it yet -- the next rotation will
+
+  if (!baseline.enabled || baseline.priceKsh <= 0) {
+    await prisma.wifiPlan.update({ where: { id: mirror.id }, data: { enabled: false } });
+    return;
+  }
+
+  const latest = await prisma.wifiDynamicPlanEvent.findFirst({ where: { siteId: baseline.siteId }, orderBy: { createdAt: "desc" }, select: { state: true } });
+  const tier = (latest?.state as Tier | undefined) ?? "GREEN";
+  await prisma.wifiPlan.update({ where: { id: mirror.id }, data: scaleBaselinePlan(baseline, tier) });
+}
+
 export class DynamicPlanEngine {
   private samples: number[] = [];
   private windowStartedAt = Date.now();
@@ -237,6 +262,16 @@ export class DynamicPlanEngine {
         where: { siteId: site.id, source: "captyn_admin", enabled: true, priceKsh: { gt: 0 }, manualPricing: false },
         select: { id: true, name: true, durationSeconds: true, priceKsh: true, rateLimit: true, category: true, deviceLimit: true }
       });
+
+      // Mirrors whose baseline was disabled or made free since it was
+      // mirrored would otherwise stay published forever -- the loop below
+      // only ever touches currently-mirrorable baselines.
+      if (!config.dynamicPlan.dryRun) {
+        await prisma.wifiPlan.updateMany({
+          where: { siteId: site.id, source: DYNAMIC_PLAN_SOURCE, enabled: true, externalPackageId: { notIn: baselines.map((b) => b.id) } },
+          data: { enabled: false }
+        });
+      }
 
       for (const baseline of baselines) {
         const spec = scaleBaselinePlan(baseline, tier);

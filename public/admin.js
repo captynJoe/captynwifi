@@ -1023,8 +1023,20 @@ function resetPlanForm() {
   renderSiteOptions();
 }
 
+// Package cards show captyn_dynamic mirrors, which the engine regenerates
+// from their captyn_admin baseline every rotation. Edit/delete the baseline
+// -- editing the mirror's tier-scaled values reverted within the hour.
+function editablePlan(planId) {
+  const plans = state.cache.plans || [];
+  const plan = plans.find((item) => item.id === planId);
+  if (plan?.source === "captyn_dynamic" && plan.externalPackageId) {
+    return plans.find((item) => item.id === plan.externalPackageId) || plan;
+  }
+  return plan;
+}
+
 function editPlan(planId) {
-  const plan = (state.cache.plans || []).find((item) => item.id === planId);
+  const plan = editablePlan(planId);
   if (!plan) return;
   const duration = durationParts(plan.durationSeconds);
   state.editingPlanId = plan.id;
@@ -1057,12 +1069,12 @@ function newPlan() {
 }
 
 async function deletePlan(planId) {
-  const plan = (state.cache.plans || []).find((item) => item.id === planId);
+  const plan = editablePlan(planId);
   if (!plan) return;
   if (!window.confirm(`Delete "${plan.name}"? This can't be undone.`)) return;
   try {
-    await api(adminApi(`/plans/${encodeURIComponent(planId)}`), { method: "DELETE" });
-    if (state.editingPlanId === planId) resetPlanForm();
+    await api(adminApi(`/plans/${encodeURIComponent(plan.id)}`), { method: "DELETE" });
+    if (state.editingPlanId === plan.id) resetPlanForm();
     await loadDashboard();
   } catch (error) {
     // The API returns a 409 with a clear message when a package has real
