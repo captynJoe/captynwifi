@@ -2810,3 +2810,25 @@
 @media (max-width: 560px) {
   .plan-section.fast { margin: 0 -6px; padding: 12px 10px; }
 }
+
+
+/* Compact package card: details left, price right, whole card is the tap target. */
+.plan-sections .plan-card { min-height: 0; }
+.plan-card .plan-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 12px 14px;
+}
+.plan-main { display: grid; gap: 4px; min-width: 0; justify-items: start; }
+.plan-main h3 { margin: 0; font-size: 15px; line-height: 1.2; color: var(--text-strong); }
+.plan-facts { color: var(--muted); font-size: 12.5px; font-weight: 700; }
+.plan-row .plan-speed { padding: 3px 8px; border: 1px solid; border-radius: 999px; font-size: 11px; letter-spacing: .02em; }
+.plan-side { display: grid; gap: 2px; justify-items: end; text-align: right; }
+.plan-row .plan-price { font-size: 21px; line-height: 1.1; }
+.plan-value { color: var(--muted); font-size: 11.5px; font-weight: 700; white-space: nowrap; }
+.plan-row .plan-badge { margin: 0 0 2px; font-size: 10px; padding: 2px 7px; }
+.plan-section.fast .plan-value { color: #7fa2ff; }
+:root[data-theme="light"] .plan-section.fast .plan-value { color: #2454e6; }
+.plan-sections .intent-grid { gap: 8px; }
+@media (max-width: 560px) {
+  .plan-sections .intent-grid { grid-template-columns: 1fr; }
+  .plan-sections { gap: 18px; }
+}

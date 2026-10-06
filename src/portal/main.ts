@@ -1065,19 +1065,17 @@ function planCard(plan) {
     : "";
   return `<button type="button" class="plan-card ${selected ? "selected" : ""} ${planCategory(plan) === "limited" ? "limited" : "standard"} ${isWelcomePlan(plan) ? "welcome" : ""}" data-plan-id="${esc(plan.id)}">
     ${imageHtml}
-    <span class="plan-card-body">
-      <span class="plan-top">
-        <span><h3>${esc(displayPlanName(plan))}</h3></span>
-        <span class="plan-top-badges">
-          <span class="plan-duration">${duration(plan.durationSeconds)}</span>
-          <span class="plan-devices">${esc(plan.deviceLimit)} device${Number(plan.deviceLimit) === 1 ? "" : "s"}</span>
-        </span>
+    <span class="plan-card-body plan-row">
+      <span class="plan-main">
+        <h3>${esc(displayPlanName(plan))}</h3>
+        <span class="plan-facts">${duration(plan.durationSeconds)} · ${esc(plan.deviceLimit)} device${Number(plan.deviceLimit) === 1 ? "" : "s"}</span>
+        <span class="plan-speed ${speedTierClass(plan)}">${friendlyRate(plan.rateLimit)}</span>
       </span>
-      ${badgeHtml}
-      <span><strong class="plan-price">${money(plan.priceKsh)}</strong></span>
-      <span class="plan-caption">${esc(planCategory(plan) === "limited" ? tone.pitch : planValueLine(plan) || tone.pitch)}</span>
-      <span class="plan-meta"><span class="plan-speed ${speedTierClass(plan)}">${friendlyRate(plan.rateLimit)}</span></span>
-      <span class="plan-cta">Get ${duration(plan.durationSeconds)} →</span>
+      <span class="plan-side">
+        ${badgeHtml}
+        <strong class="plan-price">${money(plan.priceKsh)}</strong>
+        <span class="plan-value">${esc(planValueLine(plan))}</span>
+      </span>
     </span>
   </button>`;
 }
