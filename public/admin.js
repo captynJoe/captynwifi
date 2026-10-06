@@ -145,7 +145,10 @@ function durationLabel(seconds) {
   if (!Number.isFinite(value) || value <= 0) return "-";
   if (value % 86400 === 0) return `${value / 86400} day${value / 86400 === 1 ? "" : "s"}`;
   if (value % 3600 === 0) return `${value / 3600} hour${value / 3600 === 1 ? "" : "s"}`;
-  return `${Math.round(value / 60)} minutes`;
+  const totalMinutes = Math.round(value / 60);
+  const hours = Math.floor(totalMinutes / 60);
+  if (hours === 0) return `${totalMinutes} minutes`;
+  return `${hours}h ${totalMinutes % 60}m`;
 }
 function shortDuration(seconds) {
   const value = Number(seconds || 0);

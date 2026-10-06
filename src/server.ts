@@ -9,7 +9,7 @@ import { requireAdminSession, requireIntegrationToken } from "./auth.js";
 import { integrationRouter } from "./routes/integration.js";
 import { adminRouter } from "./routes/admin.js";
 import { adminAuthRouter } from "./routes/adminAuth.js";
-import { publicRouter } from "./routes/public.js";
+import { publicRouter, reconcilePendingMpesaPayments } from "./routes/public.js";
 
 const app = express();
 const publicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
@@ -61,3 +61,11 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
 app.listen(config.port, () => {
   console.log(`CAPTYN Wi-Fi API running on port ${config.port}`);
 });
+
+setInterval(() => {
+  reconcilePendingMpesaPayments()
+    .then(({ activated, failed }) => {
+      if (activated || failed) console.log(`M-PESA reconcile: activated ${activated}, failed ${failed}`);
+    })
+    .catch((error) => console.error("M-PESA reconcile error:", error));
+}, 2 * 60 * 1000).unref();

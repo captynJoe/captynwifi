@@ -167,6 +167,7 @@ function toJsonSafe<T>(value: T): T {
 const MPESA_FAILURE_MESSAGES: Record<number, string> = {
   1: "M-PESA said the balance is insufficient for this payment.",
   1032: "The M-PESA prompt was cancelled or ignored. Tap Pay Now to try again.",
+  2001: "Wrong M-PESA PIN. Tap Pay Now to try again.",
   1037: "The M-PESA prompt could not reach your phone in time. Check your signal and dial *334# to clear any pending M-PESA session, then try again.",
   9999: "M-PESA had a temporary error sending the prompt. Please try again in a moment."
 };
@@ -1206,6 +1207,12 @@ publicRouter.post("/payments/mpesa/callback", async (req, res, next) => {
       return res.json({ data: { accepted: true, matched: false } });
     }
 
+    // Already settled (a repeated callback, or the reconciler below got there
+    // first): activating again would extend a top-up's access twice.
+    if (intent.status === "activated" || intent.status === "confirmed") {
+      return res.json({ data: { accepted: true, matched: true, activated: intent.status === "activated", duplicate: true } });
+    }
+
     const expectedMerchantRequestId = rawPayloadMerchantRequestId(intent.rawPayload);
     if (expectedMerchantRequestId && callback.MerchantRequestID !== expectedMerchantRequestId) {
       console.warn("M-PESA STK callback rejected: merchant request id mismatch for checkoutRequestId=" + checkoutRequestId);
@@ -1395,3 +1402,62 @@ publicRouter.post("/notifications/:id/read", async (req, res, next) => {
     return next(error);
   }
 });
+
+// The callback refuses to activate until an STK query confirms the payment,
+// and answers 503 when that query isn't conclusive yet -- but Safaricom
+// doesn't resend callbacks, so such a payment sat pending until the worker
+// marked it failed, even when the customer had paid. Ask M-PESA directly
+// about payments still pending after the prompt should have been answered.
+const RECONCILE_AFTER_MS = 90_000;
+const RECONCILE_WINDOW_MS = 2 * 60 * 60 * 1000;
+
+export async function reconcilePendingMpesaPayments(): Promise<{ activated: number; failed: number }> {
+  const now = Date.now();
+  const pending = await prisma.wifiPaymentIntent.findMany({
+    where: {
+      provider: "mpesa",
+      status: "pending_confirmation",
+      providerReference: { not: null },
+      createdAt: { lt: new Date(now - RECONCILE_AFTER_MS), gt: new Date(now - RECONCILE_WINDOW_MS) }
+    },
+    orderBy: { createdAt: "asc" },
+    take: 20
+  });
+
+  let activated = 0;
+  let failed = 0;
+  for (const intent of pending) {
+    const checkoutRequestId = intent.providerReference as string;
+    let query: Awaited<ReturnType<typeof queryWifiStkPush>>;
+    try {
+      query = await queryWifiStkPush(checkoutRequestId);
+    } catch {
+      continue; // still processing, or Daraja unreachable -- try next round
+    }
+    if (query?.CheckoutRequestID !== checkoutRequestId || query.ResultCode === undefined || query.ResultCode === null || query.ResultCode === "") continue;
+
+    const resultCode = Number(query.ResultCode);
+    const rawPayload = {
+      source: "stk-query",
+      Body: { stkCallback: { CheckoutRequestID: checkoutRequestId, ResultCode: resultCode, ResultDesc: query.ResultDesc } }
+    } as Prisma.InputJsonValue;
+
+    if (isSuccessfulStkQuery(query, checkoutRequestId)) {
+      const confirmedAt = new Date();
+      const claimed = await prisma.wifiPaymentIntent.updateMany({
+        where: { id: intent.id, status: "pending_confirmation" },
+        data: { status: "confirmed", confirmedAt, rawPayload }
+      });
+      if (claimed.count === 0) continue; // the callback settled it meanwhile
+      await activatePaymentIntent(intent, confirmedAt);
+      activated += 1;
+    } else {
+      const updated = await prisma.wifiPaymentIntent.updateMany({
+        where: { id: intent.id, status: "pending_confirmation" },
+        data: { status: "failed", rawPayload }
+      });
+      failed += updated.count;
+    }
+  }
+  return { activated, failed };
+}
