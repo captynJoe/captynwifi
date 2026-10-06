@@ -1955,7 +1955,28 @@ async function checkPromo(): Promise<boolean> {
   return true;
 }
 
+// The router's own Sign out (status page) only ends the router session. Its
+// "See you soon" page sends the device here with ?signedOut=1&mac=..., so
+// the sign-out sticks like the portal's button: the device is marked signed
+// out on the package and this browser forgets the access, instead of being
+// signed straight back in on its next visit.
+async function finishRouterSignOut() {
+  const params = new URLSearchParams(window.location.search);
+  if (!params.has("signedOut")) return;
+  const remembered = loadRememberedAccess();
+  const deviceMac = params.get("mac") || remembered?.deviceMac || "";
+  clearRememberedAccess();
+  if (!remembered || !deviceMac) return;
+  try {
+    await fetch(api("/entitlements/sign-out-device"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: remembered.username, password: remembered.password, deviceMac })
+    });
+  } catch (_error) {}
+}
 async function bootstrap() {
+  await finishRouterSignOut();
   const loadPlansPromise = loadPlans().catch((error) => showError(error instanceof Error ? error.message : "Unable to load packages."));
 
   const promoActive = await checkPromo();

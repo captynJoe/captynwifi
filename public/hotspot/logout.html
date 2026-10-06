@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#020403">
+<meta http-equiv="refresh" content="3;url=https://captyn.shop/wifi/?signedOut=1&amp;mac=$(mac)">
 <title>Signed out</title>
 <style>
   :root { --bg: #020403; --card: rgba(9, 18, 13, .74); --line: rgba(32, 245, 154, .18); --text: #e6fff1; --muted: #8fb5a1; --green: #20f59a; --cyan: #23ddff; --amber: #ffd166; }
@@ -115,8 +116,17 @@
     <div class="stat"><small>Online for</small><b>$(uptime)</b></div>
     <div class="stat"><small>Downloaded</small><b>$(bytes-out-nice)</b></div>
   </div>
-  <a class="btn" href="$(link-login)">Get back online</a>
+  <a class="btn" href="https://captyn.shop/wifi/?signedOut=1&amp;mac=$(mac)">Get back online</a>
   <a class="powered" href="https://captyn.shop/">Powered by <b>captyn.shop</b></a>
 </main>
+<div hidden id="hs" data-mac="$(mac)"></div>
+<script>
+  // Hand the device to the portal so the sign-out sticks (it marks this
+  // device signed out and clears its saved access) -- see finishRouterSignOut.
+  setTimeout(function () {
+    var params = new URLSearchParams({ signedOut: "1", mac: document.getElementById("hs").dataset.mac || "" });
+    window.location.replace("https://captyn.shop/wifi/?" + params.toString());
+  }, 3000);
+</script>
 </body>
 </html>
