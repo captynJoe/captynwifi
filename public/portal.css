@@ -2780,3 +2780,33 @@
   background: rgba(255, 255, 255, .72);
   border-color: rgba(36, 84, 230, .12);
 }
+
+
+/* Package sections: by the hour / by the day / faster speeds. */
+.plan-sections { display: grid; gap: 22px; }
+.plan-section { display: grid; gap: 12px; }
+.plan-section-title {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.plan-section.fast {
+  padding: 16px;
+  border: 1px solid rgba(70, 125, 255, .34);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(70, 125, 255, .10), rgba(35, 221, 255, .04));
+}
+.plan-section.fast .plan-section-title { color: #7fa2ff; }
+.plan-section.fast .plan-caption { color: #7fa2ff; font-weight: 800; }
+:root[data-theme="light"] .plan-section.fast {
+  border-color: rgba(36, 84, 230, .24);
+  background: linear-gradient(180deg, rgba(36, 84, 230, .07), rgba(35, 221, 255, .04));
+}
+:root[data-theme="light"] .plan-section.fast .plan-section-title,
+:root[data-theme="light"] .plan-section.fast .plan-caption { color: #2454e6; }
+@media (max-width: 560px) {
+  .plan-section.fast { margin: 0 -6px; padding: 12px 10px; }
+}

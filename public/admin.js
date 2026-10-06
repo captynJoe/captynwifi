@@ -214,7 +214,7 @@ function adminRateParts(plan) {
 function speedTierClass(plan) {
   const { download } = adminRateParts(plan);
   if (download <= 5) return "speed-starter";
-  if (download <= 12) return "speed-cruise";
+  if (download <= 10) return "speed-cruise"; // anything above 10 Mbps reads as a faster tier
   if (download <= 20) return "speed-highspeed";
   return "speed-gulfstream";
 }
@@ -226,7 +226,7 @@ function status(value) {
   return `<span class="status ${escapeHtml(normalized)}">${escapeHtml(normalized.replaceAll("_", " "))}</span>`;
 }
 function cells(values) { return values.map((value) => `<td>${value}</td>`).join(""); }
-function setHealth(kind, label) { healthPill.className = `pill ${kind}`; healthPill.textContent = label; }
+function setHealth(kind, label) { healthPill.className = `brand-status ${kind}`; healthPill.textContent = label; }
 function setAuthError(message) { authError.textContent = message; authError.classList.toggle("hidden", !message); }
 function setInlineStatus(element, message, kind = "") { if (element) { element.textContent = message; element.className = kind; } }
 
@@ -426,6 +426,8 @@ function renderSummary(summary) {
 
 function renderSiteOptions() {
   const sites = state.cache.sites || [];
+  const siteTitle = document.getElementById("site-title");
+  if (siteTitle) siteTitle.textContent = sites.length === 1 ? `${sites[0].name} WiFi` : "CAPTYN WiFi";
   const current = planSiteSelect.value;
   planSiteSelect.innerHTML = sites.length
     ? sites.map((site) => `<option value="${escapeHtml(site.id)}">${escapeHtml(site.name)}</option>`).join("")
@@ -1017,6 +1019,9 @@ async function loadDashboard() {
 
 function setPage(page) {
   state.activePage = page || "overview";
+  // The overview metric cards only belong on Overview; the sidebar carries
+  // the at-a-glance status everywhere else.
+  document.body.dataset.page = state.activePage;
   document.querySelectorAll(".nav-item").forEach((button) => button.classList.toggle("active", button.dataset.page === state.activePage));
   document.querySelectorAll("[data-page-panel]").forEach((panel) => panel.classList.toggle("hidden", panel.dataset.pagePanel !== state.activePage));
 }
@@ -1432,7 +1437,7 @@ copyPortalBtn.addEventListener("click", async () => {
   try {
     await navigator.clipboard.writeText(PORTAL_URL);
     copyPortalBtn.textContent = "Copied";
-    setTimeout(() => { copyPortalBtn.textContent = "Copy URL"; }, 1200);
+    setTimeout(() => { copyPortalBtn.textContent = "Copy portal URL"; }, 1200);
   } catch (_error) {
     window.prompt("Client portal", PORTAL_URL);
   }
@@ -1502,5 +1507,15 @@ document.getElementById("pricing-mode-select")?.addEventListener("change", async
     renderPricingMode();
   } finally {
     select.disabled = false;
+  }
+});
+
+// Close the top-bar menu once one of its actions is used, or on an outside click.
+document.addEventListener("click", (event) => {
+  const menu = document.querySelector(".topbar-menu");
+  if (!menu?.hasAttribute("open")) return;
+  const target = event.target;
+  if (!(target instanceof Node) || !menu.contains(target) || (target instanceof Element && target.closest(".topbar-menu-panel button"))) {
+    menu.removeAttribute("open");
   }
 });

@@ -6,24 +6,37 @@
     <title>CAPTYN WiFi Admin</title>
     <script src="theme.js?v=2026080402"></script>
     <link rel="stylesheet" href="theme.css?v=2026080924" />
-    <link rel="stylesheet" href="admin.css?v=2026091604" />
+    <link rel="stylesheet" href="admin.css?v=2026100601" />
   </head>
   <body>
     <header class="topbar">
-      <a class="brand" href="/wifi-admin/" aria-label="CAPTYN WiFi Admin">
+      <a class="brand" href="/wifi-admin/" aria-label="WiFi admin home">
         <span class="brand-mark">C</span>
-        <span>
-          <span class="eyebrow">CAPTYN</span>
-          <span class="brand-title">WiFi Admin</span>
+        <span class="brand-text">
+          <span id="site-title" class="brand-title">WiFi</span>
+          <span id="health-pill" class="brand-status muted">Checking</span>
         </span>
       </a>
       <div class="topbar-actions">
-        <a class="button-link secondary" href="/wifi/" target="_blank" rel="noreferrer">Client Portal</a>
-        <span id="admin-user-pill" class="pill muted hidden"></span>
-        <span id="health-pill" class="pill muted">Checking</span>
-        <button id="theme-toggle-btn" class="theme-toggle" type="button" aria-label="Toggle dark mode">Dark</button>
-        <button id="refresh-btn" class="secondary" type="button">Refresh</button>
-        <button id="logout-btn" class="secondary hidden" type="button">Sign out</button>
+        <a class="icon-btn" href="/wifi/" target="_blank" rel="noreferrer" aria-label="Open client portal" title="Open client portal">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>
+        </a>
+        <button id="refresh-btn" class="icon-btn" type="button" aria-label="Refresh" title="Refresh">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/></svg>
+        </button>
+        <details class="topbar-menu">
+          <summary class="icon-btn" aria-label="Menu" title="Menu">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+          </summary>
+          <div class="topbar-menu-panel">
+            <span id="admin-user-pill" class="menu-user hidden"></span>
+            <button id="copy-portal-btn" type="button">Copy portal URL</button>
+            <button id="toggle-sensitive-btn" type="button" aria-pressed="false">Show sensitive</button>
+            <button id="more-info-btn" type="button" aria-expanded="false">More info</button>
+            <button id="theme-toggle-btn" type="button" aria-label="Toggle dark mode">Dark</button>
+            <button id="logout-btn" class="menu-danger hidden" type="button">Sign out</button>
+          </div>
+        </details>
       </div>
     </header>
 
@@ -69,38 +82,28 @@
       </section>
 
       <section id="dashboard" class="dashboard hidden">
-        <section class="command-strip">
-          <div>
-            <div class="status-row">
+        <div class="workspace">
+          <aside class="sidebar" aria-label="WiFi admin">
+            <nav class="page-nav" aria-label="WiFi admin pages">
+              <button class="nav-item active" type="button" data-page="overview">Overview</button>
+              <button class="nav-item" type="button" data-page="setup">Setup</button>
+              <button class="nav-item" type="button" data-page="packages">Packages</button>
+              <button class="nav-item" type="button" data-page="vouchers">Vouchers</button>
+              <button class="nav-item" type="button" data-page="payments">Payments</button>
+              <button class="nav-item" type="button" data-page="access">Access</button>
+              <button class="nav-item" type="button" data-page="radius">RADIUS</button>
+              <button class="nav-item" type="button" data-page="governor">Governor</button>
+              <button class="nav-item" type="button" data-page="dynamic-plan">Dynamic Plan</button>
+              <button class="nav-item" type="button" data-page="outage-credits">Outage Credits</button>
+              <button class="nav-item" type="button" data-page="promo">Promo</button>
+              <button class="nav-item" type="button" data-page="accounting">Accounting</button>
+            </nav>
+            <section class="side-block">
               <span id="ops-health-pill" class="status-pill ok"><span class="status-dot"></span>Ops health stable</span>
-              <span class="status-chip">Tracking live RADIUS &amp; payment queue</span>
-            </div>
-            <p class="eyebrow">WIFI OPERATIONS</p>
-            <h1>Control live customer access</h1>
-            <p class="supporting"><span id="published-count">0</span> enabled package<span id="published-plural">s</span> live at <strong>captyn.shop/wifi</strong>, with vouchers, RADIUS limits, and access actions managed here.</p>
-          </div>
-          <div class="command-actions">
-            <button id="more-info-btn" class="secondary" type="button" aria-expanded="false">More info</button>
-            <button id="toggle-sensitive-btn" class="secondary" type="button" aria-pressed="false">Show sensitive</button>
-            <button id="copy-portal-btn" class="secondary" type="button">Copy URL</button>
-            <a class="button-link" href="/wifi/" target="_blank" rel="noreferrer">Open Client Portal</a>
-          </div>
-        </section>
-
-        <nav class="page-nav" aria-label="WiFi admin pages">
-          <button class="nav-item active" type="button" data-page="overview">Overview</button>
-          <button class="nav-item" type="button" data-page="setup">Setup</button>
-          <button class="nav-item" type="button" data-page="packages">Packages</button>
-          <button class="nav-item" type="button" data-page="vouchers">Vouchers</button>
-          <button class="nav-item" type="button" data-page="payments">Payments</button>
-          <button class="nav-item" type="button" data-page="access">Access</button>
-          <button class="nav-item" type="button" data-page="radius">RADIUS</button>
-          <button class="nav-item" type="button" data-page="governor">Governor</button>
-          <button class="nav-item" type="button" data-page="dynamic-plan">Dynamic Plan</button>
-          <button class="nav-item" type="button" data-page="outage-credits">Outage Credits</button>
-          <button class="nav-item" type="button" data-page="promo">Promo</button>
-          <button class="nav-item" type="button" data-page="accounting">Accounting</button>
-        </nav>
+              <p class="side-note"><strong id="published-count">0</strong> package<span id="published-plural">s</span> live at captyn.shop/wifi</p>
+            </section>
+          </aside>
+          <div class="workspace-main">
 
         <section class="metrics-grid" aria-label="WiFi metrics">
           <article class="metric" data-accent="blue">
@@ -378,9 +381,11 @@
             <div class="table-wrap"><table><thead><tr><th>Username</th><th>Session</th><th>Device</th><th>Router</th><th>IP</th><th>Time</th><th>Traffic</th><th>Updated</th></tr></thead><tbody id="accounting-body"></tbody></table></div>
           </article>
         </section>
+          </div>
+        </div>
       </section>
     </main>
 
-    <script src="admin.js?v=2026091604" defer data-cfasync="false"></script>
+    <script src="admin.js?v=2026100601" defer data-cfasync="false"></script>
   </body>
 </html>

@@ -476,7 +476,7 @@ function friendlyRate(rateLimit) {
 function speedTierClass(plan: { rateLimit: string | null }) {
   const { download } = rateParts(plan.rateLimit);
   if (download <= 5) return "speed-starter";
-  if (download <= 12) return "speed-cruise";
+  if (download <= 10) return "speed-cruise"; // anything above 10 Mbps reads as a faster tier
   if (download <= 20) return "speed-highspeed";
   return "speed-gulfstream";
 }
@@ -1034,6 +1034,21 @@ function planTone(plan) {
   if (name.includes("monthly")) return { badge, pitch: `${speedTierPitch(plan)} Billed for the full month.` };
   return { badge, pitch: speedTierPitch(plan) };
 }
+function formatKsh(value: number) {
+  return value < 10 ? String(Math.round(value * 10) / 10) : String(Math.round(value));
+}
+// The line under the price says what the money buys, so cards can be
+// compared at a glance: cost per hour (or per day), and for faster
+// packages how much faster than standard.
+function planValueLine(plan) {
+  const hours = Number(plan.durationSeconds || 0) / 3600;
+  const price = Number(plan.priceKsh || 0);
+  if (!hours || !price) return "";
+  const rate = hours >= 24 ? `KSh ${formatKsh(price / (hours / 24))}/day` : `KSh ${formatKsh(price / hours)}/hr`;
+  if (!isFastPlan(plan)) return rate;
+  const multiple = rateParts(plan.rateLimit).download / standardDownloadMbps();
+  return `${formatKsh(multiple)}× standard speed · ${rate}`;
+}
 function planCard(plan) {
   const selected = plan.id === state.selectedPlanId;
   const tone = planTone(plan);
@@ -1060,7 +1075,7 @@ function planCard(plan) {
       </span>
       ${badgeHtml}
       <span><strong class="plan-price">${money(plan.priceKsh)}</strong></span>
-      <span class="plan-caption">${esc(tone.pitch)}</span>
+      <span class="plan-caption">${esc(planCategory(plan) === "limited" ? tone.pitch : planValueLine(plan) || tone.pitch)}</span>
       <span class="plan-meta"><span class="plan-speed ${speedTierClass(plan)}">${friendlyRate(plan.rateLimit)}</span></span>
       <span class="plan-cta">Get ${duration(plan.durationSeconds)} →</span>
     </span>
@@ -1196,23 +1211,31 @@ function speedTierForPlan(plan: PortalPlan) {
   const key = family === "occasion" ? "everyday" : family;
   return SPEED_TIERS.find((tier) => tier.key === key) || null;
 }
-function plansForSpeedTier(tier: ReturnType<typeof activeSpeedTierConfig>) {
-  const plans = customerPlans();
-  if (tier.key === "all") return plans;
-  return plans.filter((plan) => speedTierForPlan(plan)?.key === tier.key);
-}
-function visibleSpeedTiers() {
-  // Every plan's speed moves together with traffic now, so a tab that's
-  // populated today can go empty tomorrow (e.g. everything getting faster in
-  // a quiet spell can empty out "Basic" entirely) -- don't show a tab that
-  // currently has nothing in it.
-  return SPEED_TIERS.filter((tier) => tier.key === "all" || plansForSpeedTier(tier).length > 0);
-}
-function renderNeedTabs() {
-  return visibleSpeedTiers().map((tier) => `<button type="button" class="speed-tab ${tier.key === state.activeNeed ? "active" : ""}" data-speed-key="${esc(tier.key)}"><span>${esc(tier.label)}</span><small>${esc(tier.range)}</small></button>`).join("");
-}
 function renderPlanGrid(plans: PortalPlan[]) {
   return plans.length ? plans.map(planCard).join("") : '<div class="empty-state">No packages in this group yet.</div>';
+}
+// Packages are grouped by what actually drives their price -- time and
+// speed -- instead of by name, so a pricier card never sits unexplained
+// between cheaper ones: hourly and multi-day packages each get their own
+// section, and anything faster than standard gets its own space below.
+const FAST_DOWNLOAD_MBPS = 10;
+function isFastPlan(plan: PortalPlan) {
+  return rateParts(plan.rateLimit).download > FAST_DOWNLOAD_MBPS;
+}
+function standardDownloadMbps() {
+  const speeds = customerPlans()
+    .filter((plan) => !isFastPlan(plan))
+    .map((plan) => rateParts(plan.rateLimit).download)
+    .filter((mbps) => mbps > 0)
+    .sort((a, b) => a - b);
+  return speeds.length ? speeds[Math.floor(speeds.length / 2)] : FAST_DOWNLOAD_MBPS;
+}
+function renderPlanSection(title: string, plans: PortalPlan[], variant = "") {
+  if (!plans.length) return "";
+  return `<section class="plan-section ${variant}">
+    <h3 class="plan-section-title">${esc(title)}</h3>
+    <div class="intent-grid">${renderPlanGrid(plans)}</div>
+  </section>`;
 }
 function renderPackageBrowser() {
   const visiblePlans = customerPlans();
@@ -1221,17 +1244,14 @@ function renderPackageBrowser() {
     renderSelectedPlan();
     return;
   }
-  if (!visibleSpeedTiers().some((candidate) => candidate.key === state.activeNeed)) state.activeNeed = "all";
-  const tier = activeSpeedTierConfig();
-  const focusedPlans = plansForSpeedTier(tier);
+  const standard = visiblePlans.filter((plan) => !isFastPlan(plan));
+  const fast = visiblePlans.filter(isFastPlan);
   plansEl.innerHTML = `
-    <section class="speed-browser" aria-label="Browse packages by speed">
-      <div class="speed-rail" role="tablist" aria-label="Speed tiers">${renderNeedTabs()}</div>
-      <div class="intent-block focused-block speed-tier-block">
-        <div class="intent-head speed-tier-copy"><span>${esc(tier.range)}</span><h3>${esc(tier.title)}</h3></div>
-        <div class="intent-grid">${renderPlanGrid(focusedPlans)}</div>
-      </div>
-    </section>
+    <div class="plan-sections">
+      ${renderPlanSection("By the hour", standard.filter((plan) => Number(plan.durationSeconds) < 86400))}
+      ${renderPlanSection("By the day", standard.filter((plan) => Number(plan.durationSeconds) >= 86400))}
+      ${renderPlanSection("Faster speeds", fast, "fast")}
+    </div>
   `;
   renderSelectedPlan();
 }

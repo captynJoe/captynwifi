@@ -396,3 +396,81 @@ td { max-width: 260px; overflow-wrap: anywhere; }
 @media (max-width: 760px) { .governor-summary { grid-template-columns: 1fr; } }
 .pricing-mode { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; font-size: 12px; font-weight: 800; color: var(--muted); }
 .pricing-mode select { min-height: 34px; width: auto; }
+
+
+/* ---------- Workspace shell (top bar + sidebar), after the landlord layout ---------- */
+.topbar { min-height: 58px; padding: 8px clamp(12px, 3vw, 28px); }
+.brand-text { display: grid; gap: 2px; min-width: 0; }
+.brand-title { font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.brand-status { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700; color: var(--muted); }
+.brand-status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.brand-status.ok::before { background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
+.brand-status.warn::before { background: var(--amber); }
+.brand-status.bad { color: var(--red); }
+.brand-status.bad::before { background: var(--red); }
+.topbar-actions { flex-wrap: nowrap; gap: 6px; }
+
+.icon-btn {
+  width: 38px; height: 38px; min-width: 0; min-height: 0; padding: 0; display: inline-grid; place-items: center;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text);
+  box-shadow: none; cursor: pointer; list-style: none;
+}
+.icon-btn::-webkit-details-marker { display: none; }
+.icon-btn:hover { background: var(--brand-blue-soft); transform: none; box-shadow: none; }
+.icon-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+.topbar-menu { position: relative; }
+.topbar-menu-panel {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 50; width: 220px; display: grid; gap: 2px; padding: 6px;
+  border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-lg);
+}
+.topbar-menu-panel > button {
+  width: 100%; min-height: 38px; padding: 8px 10px; justify-content: flex-start; text-align: left;
+  border: 0; border-radius: 8px; background: transparent; color: var(--text); box-shadow: none; font-size: 13.5px; font-weight: 650;
+}
+.topbar-menu-panel > button:hover { background: var(--brand-blue-soft); transform: none; box-shadow: none; }
+.topbar-menu-panel > .menu-danger { color: var(--red); }
+.menu-user { padding: 6px 10px 8px; border-bottom: 1px solid var(--line); margin-bottom: 4px; font-size: 12px; font-weight: 700; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+
+.workspace { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 18px; align-items: start; }
+.workspace-main { display: grid; gap: 18px; min-width: 0; }
+.sidebar { position: sticky; top: 74px; display: grid; gap: 12px; max-height: calc(100vh - 90px); overflow-y: auto; scrollbar-width: thin; }
+.sidebar .page-nav { display: grid; gap: 2px; width: auto; padding: 0; background: transparent; border: 0; overflow: visible; }
+.sidebar .nav-item { width: 100%; min-width: 0; min-height: 36px; padding: 0 12px; justify-content: flex-start; text-align: left; border-radius: 9px; font-size: 13.5px; font-weight: 650; }
+.side-block { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); }
+.side-note { margin: 0; color: var(--muted); font-size: 12.5px; font-weight: 600; line-height: 1.4; }
+.side-note strong { color: var(--text-strong); }
+
+body[data-page]:not([data-page="overview"]) .metrics-grid { display: none; }
+
+@media (max-width: 980px) {
+  .shell { padding: 0 12px 40px; }
+  .workspace { display: block; }
+  /* Sidebar collapses to a sticky, swipeable section strip. */
+  .sidebar {
+    position: sticky; top: 58px; z-index: 9; display: block; max-height: none; overflow: visible;
+    margin: 0 -12px 14px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--bg, var(--surface-soft));
+  }
+  .sidebar .page-nav { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; scroll-snap-type: x proximity; }
+  .sidebar .page-nav::-webkit-scrollbar { display: none; }
+  .sidebar .nav-item {
+    flex: 0 0 auto; width: auto; min-height: 34px; padding: 0 14px; border: 1px solid var(--line); border-radius: 999px;
+    background: var(--surface); font-size: 13px; scroll-snap-align: start;
+  }
+  .sidebar .nav-item.active { border-color: var(--brand-navy); }
+  .side-block { display: none; }
+  .metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .metric { min-height: 0; padding: 12px; }
+}
+@media (max-width: 760px) {
+  .topbar { flex-direction: row; align-items: center; }
+  .topbar-actions { width: auto; justify-content: flex-end; }
+}
+@media (max-width: 520px) {
+  /* The legacy rule above makes every button full-width on phones; keep
+     icon buttons, nav pills and card actions compact. */
+  .topbar-actions, .topbar-actions .icon-btn, .sidebar .nav-item { width: auto; }
+  .icon-btn { width: 38px; }
+  .action-row { display: flex; flex-wrap: wrap; gap: 6px; }
+  .action-row button, .action-row .button-link { width: auto; flex: 1 1 auto; min-height: 36px; }
+}
