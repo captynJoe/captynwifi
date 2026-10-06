@@ -321,3 +321,69 @@ button.credential:hover { border-color: var(--brand-blue); transform: none; box-
   .credit-offer { flex-direction: column; align-items: stretch; }
   .expiry-banner { bottom: 10px; }
 }
+
+
+/* ---------- Neon layer: same language as the router pages ---------- */
+@property --orbit { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
+body::before, body::after { content: ""; position: fixed; z-index: -1; pointer-events: none; }
+body::before {
+  inset: -30%; filter: blur(40px); opacity: .55;
+  background:
+    radial-gradient(36% 32% at 20% 18%, color-mix(in srgb, var(--brand-blue) 34%, transparent), transparent 70%),
+    radial-gradient(32% 28% at 82% 70%, color-mix(in srgb, var(--brand-cyan) 30%, transparent), transparent 70%),
+    radial-gradient(26% 26% at 64% 12%, rgba(70, 125, 255, .22), transparent 70%);
+  animation: portal-drift 16s ease-in-out infinite alternate;
+}
+body::after {
+  inset: 0; opacity: .5;
+  background-image: linear-gradient(color-mix(in srgb, var(--brand-blue) 9%, transparent) 1px, transparent 1px), linear-gradient(90deg, color-mix(in srgb, var(--brand-blue) 9%, transparent) 1px, transparent 1px);
+  background-size: 44px 44px;
+  -webkit-mask-image: radial-gradient(circle at 50% 0%, #000 0, transparent 70%); mask-image: radial-gradient(circle at 50% 0%, #000 0, transparent 70%);
+}
+:root[data-theme="light"] body::before { opacity: .35; }
+@keyframes portal-drift { to { transform: translate3d(5%, -3%, 0) rotate(10deg) scale(1.08); } }
+
+.topbar { background: color-mix(in srgb, var(--bg) 72%, transparent); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+.brand-mark { box-shadow: 0 0 18px color-mix(in srgb, var(--brand-blue) 55%, transparent); }
+
+.intro-row h1 {
+  background: linear-gradient(90deg, var(--text-strong) 0%, var(--text-strong) 35%, var(--brand-blue) 50%, var(--brand-cyan) 60%, var(--text-strong) 75%);
+  background-size: 250% 100%; -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: portal-shimmer 4s ease-in-out infinite;
+}
+@keyframes portal-shimmer { 0% { background-position: 100% 0; } 100% { background-position: -50% 0; } }
+
+.plans-panel, .checkout-panel, .access-panel, .promo-panel {
+  background: color-mix(in srgb, var(--surface) 78%, transparent); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+}
+.plan-card { position: relative; background: color-mix(in srgb, var(--surface-soft) 80%, transparent); transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease; }
+.plan-card:hover { border-color: color-mix(in srgb, var(--brand-blue) 45%, var(--line)); box-shadow: 0 0 22px color-mix(in srgb, var(--brand-blue) 14%, transparent); transform: translateY(-1px); }
+/* The picked package gets the racing neon border. */
+.plan-card.selected { border-color: transparent; box-shadow: 0 0 28px color-mix(in srgb, var(--brand-blue) 22%, transparent); }
+.plan-card.selected::before {
+  content: ""; position: absolute; inset: -1px; border-radius: inherit; padding: 1.5px; pointer-events: none;
+  background: conic-gradient(from var(--orbit), var(--brand-blue), var(--brand-cyan), rgba(70, 125, 255, .9), var(--brand-blue));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  animation: portal-orbit 3s linear infinite;
+}
+@keyframes portal-orbit { to { --orbit: 360deg; } }
+
+#pay-button, .extend-period-btn, .manual-connect-card .primary, .manual-connect-card form button, .credit-activate-btn {
+  border: 0; background: linear-gradient(135deg, var(--brand-blue), var(--brand-cyan)); color: #00140a;
+  box-shadow: 0 10px 26px color-mix(in srgb, var(--brand-blue) 28%, transparent);
+}
+:root[data-theme="light"] #pay-button, :root[data-theme="light"] .extend-period-btn { color: #fff; }
+
+.plan-section.fast { box-shadow: 0 0 40px rgba(70, 125, 255, .12), inset 0 0 30px rgba(70, 125, 255, .06); }
+
+.access-time-left { box-shadow: 0 0 30px color-mix(in srgb, var(--brand-blue) 12%, transparent); }
+
+.portal-footer .powered { color: var(--muted); text-decoration: none; }
+.portal-footer .powered b { color: var(--text); }
+
+@media (prefers-reduced-motion: reduce) {
+  body::before, .intro-row h1, .plan-card.selected::before { animation: none; }
+  .intro-row h1 { color: var(--text-strong); background: none; }
+}
+.intro-row h1 .emoji { -webkit-text-fill-color: initial; color: var(--text-strong); background: none; }
