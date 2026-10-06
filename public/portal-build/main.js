@@ -840,6 +840,7 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
     // still appears if the navigation hasn't happened after a few seconds.
     if (!alreadyOnline && state.hotspot?.login) {
         setConnectState(statusEl, formEl, "connecting", "Signing this device in...");
+        noteAutoSignIn();
         await rememberDeviceForEntitlement(username, password);
         await saveAccessBeforeLeaving(username, password);
         setTimeout(() => {
@@ -1692,9 +1693,32 @@ state.hotspot = readHotspotParams();
 // "You are already logged in - access denied" -- reword it for customers.
 function friendlyHotspotError(raw) {
     if (/already logged in|simultaneous/i.test(raw)) {
-        return "All devices on this plan are already online. Disconnect one, then try again.";
+        return "Your package is already in use on its other device. Sign that device out, or buy a package for this one with a different M-PESA number.";
     }
     return raw;
+}
+// The router just turned this device away (the error param is only set on
+// a failed sign-in). Auto-signing in again would bounce straight back here
+// -- a device on a full package reloaded the portal every few seconds and
+// could never reach the packages to buy. So: no automatic sign-in after a
+// refusal, and never more than once per 2 minutes on this device.
+const AUTO_SIGN_IN_KEY = "captynWifiAutoSignInAt";
+function autoSignInAllowed() {
+    if (state.hotspot?.error)
+        return false;
+    try {
+        const last = Number(sessionStorage.getItem(AUTO_SIGN_IN_KEY) || 0);
+        return Date.now() - last > 2 * 60 * 1000;
+    }
+    catch (_error) {
+        return true;
+    }
+}
+function noteAutoSignIn() {
+    try {
+        sessionStorage.setItem(AUTO_SIGN_IN_KEY, String(Date.now()));
+    }
+    catch (_error) { }
 }
 if (state.hotspot?.error)
     showError(friendlyHotspotError(decodeURIComponent(state.hotspot.error)));
@@ -1827,7 +1851,7 @@ receiptLoginForm?.addEventListener("submit", async (event) => {
     }
 });
 async function attemptReturningDeviceAutoConnect() {
-    if (!state.hotspot?.login)
+    if (!state.hotspot?.login || !autoSignInAllowed())
         return false;
     const remembered = loadRememberedAccess();
     if (remembered) {
@@ -1965,10 +1989,14 @@ async function bootstrap() {
             // showing credentials here is what makes it possible to grab your
             // password to sign in a 2nd device without needing the M-PESA receipt
             // recovery flow.
-            showConnectedPanel(remembered, {
-                heading: "Access active",
-                skipAutoConnect: !state.hotspot?.login
-            });
+            // After a refusal, leave the packages on screen so this device can
+            // still buy; the error above says why it was turned away.
+            if (!state.hotspot?.error) {
+                showConnectedPanel(remembered, {
+                    heading: "Access active",
+                    skipAutoConnect: !state.hotspot?.login || !autoSignInAllowed()
+                });
+            }
         }
     }
     await loadPlansPromise;
