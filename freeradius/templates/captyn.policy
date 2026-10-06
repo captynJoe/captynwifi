@@ -1,0 +1,23 @@
+# CAPTYN device ledger and switch cap (see the wifi_device_ledger migration).
+
+# authorize: turn away a new device once the package has used its allowance
+# of different devices. Devices already used on the package always get in.
+captyn_device_cap {
+	if (&User-Name && &Calling-Station-Id) {
+		if ("%{sql:SELECT captyn_device_over_cap('%{User-Name}', '%{Calling-Station-Id}')}" == "1") {
+			update reply {
+				&Reply-Message := "This package has reached its device limit. Use a device you've signed in with before, or buy a new package."
+			}
+			reject
+		}
+	}
+}
+
+# post-auth (accepted logins only): record the device against the package.
+captyn_record_device {
+	if (&User-Name && &Calling-Station-Id) {
+		update control {
+			&Tmp-String-0 := "%{sql:SELECT captyn_record_device('%{User-Name}', '%{Calling-Station-Id}')}"
+		}
+	}
+}

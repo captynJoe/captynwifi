@@ -147,6 +147,9 @@ model WifiEntitlementDevice {
   label         String?
   addedAt       DateTime        @default(now())
   lastSeenAt    DateTime?
+  // Set by "Sign out this device"; the row stays so the device still counts
+  // toward the package's switch cap (see captyn_device_over_cap).
+  signedOutAt   DateTime?
   entitlement   WifiEntitlement @relation(fields: [entitlementId], references: [id], onDelete: Cascade)
 
   @@unique([entitlementId, deviceMac])

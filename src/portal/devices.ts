@@ -31,6 +31,7 @@ interface DeviceRow {
   label?: string | null;
   addedAt: string;
   lastSeenAt?: string | null;
+  signedOut?: boolean;
 }
 
 function requireElement<T extends HTMLElement>(id: string): T {
@@ -115,8 +116,8 @@ manageCode.addEventListener("click", async () => {
 
 let session: { username: string; password: string } | null = null;
 
-function renderDevices(deviceLimit: number, devices: DeviceRow[], connectCode?: string) {
-  manageLimit.textContent = `${devices.length}/${deviceLimit} devices`;
+function renderDevices(deviceLimit: number, devices: DeviceRow[], connectCode?: string, deviceCap?: number) {
+  manageLimit.textContent = `${devices.length}/${deviceCap || deviceLimit} devices used`;
   manageCode.classList.toggle("hidden", !connectCode);
   manageCodeValue.textContent = connectCode || "";
   manageList.innerHTML = devices.length
@@ -124,8 +125,10 @@ function renderDevices(deviceLimit: number, devices: DeviceRow[], connectCode?: 
         .map(
           (device) => `<div class="device-row">
             <span class="mono">${esc(device.deviceMac)}</span>
-            <span class="device-tag">Added ${esc(fmtDate(device.addedAt))}</span>
-            <button class="link-btn" type="button" data-remove-device-mac="${esc(device.deviceMac)}">Remove</button>
+            ${device.signedOut
+              ? '<span class="device-tag signed-out">Signed out</span>'
+              : `<span class="device-tag">Added ${esc(fmtDate(device.addedAt))}</span>
+            <button class="link-btn" type="button" data-remove-device-mac="${esc(device.deviceMac)}">Sign out</button>`}
           </div>`
         )
         .join("")
@@ -144,7 +147,7 @@ async function loadDevices() {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || "Unable to load your devices.");
     manageStatus.textContent = "";
-    renderDevices(payload.data?.deviceLimit || 1, payload.data?.devices || [], payload.data?.connectCode);
+    renderDevices(payload.data?.deviceLimit || 1, payload.data?.devices || [], payload.data?.connectCode, payload.data?.deviceCap);
   } catch (error) {
     manageStatus.textContent = error instanceof Error ? error.message : "Unable to load your devices.";
   }
@@ -152,7 +155,7 @@ async function loadDevices() {
 
 async function removeDevice(mac: string) {
   if (!session) return;
-  manageStatus.textContent = "Removing...";
+  manageStatus.textContent = "Signing out...";
   try {
     const response = await fetch(api("/entitlements/remove-device"), {
       method: "POST",
@@ -160,11 +163,11 @@ async function removeDevice(mac: string) {
       body: JSON.stringify({ ...session, deviceMac: mac })
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || "Unable to remove that device.");
-    manageStatus.textContent = "Device removed.";
+    if (!response.ok) throw new Error(payload.error || "Couldn't sign that device out.");
+    manageStatus.textContent = "Device signed out.";
     await loadDevices();
   } catch (error) {
-    manageStatus.textContent = error instanceof Error ? error.message : "Unable to remove that device.";
+    manageStatus.textContent = error instanceof Error ? error.message : "Couldn't sign that device out.";
   }
 }
 
@@ -203,7 +206,7 @@ loginForm.addEventListener("submit", async (event) => {
     loginStatus.textContent = "";
     loginSection.classList.add("hidden");
     manageSection.classList.remove("hidden");
-    renderDevices(payload.data?.deviceLimit || 1, payload.data?.devices || [], payload.data?.connectCode);
+    renderDevices(payload.data?.deviceLimit || 1, payload.data?.devices || [], payload.data?.connectCode, payload.data?.deviceCap);
   } catch (error) {
     loginStatus.textContent = error instanceof Error ? error.message : "Unable to check that account.";
   } finally {

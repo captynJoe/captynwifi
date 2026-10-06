@@ -83,16 +83,18 @@ manageCode.addEventListener("click", async () => {
     catch (_error) { }
 });
 let session = null;
-function renderDevices(deviceLimit, devices, connectCode) {
-    manageLimit.textContent = `${devices.length}/${deviceLimit} devices`;
+function renderDevices(deviceLimit, devices, connectCode, deviceCap) {
+    manageLimit.textContent = `${devices.length}/${deviceCap || deviceLimit} devices used`;
     manageCode.classList.toggle("hidden", !connectCode);
     manageCodeValue.textContent = connectCode || "";
     manageList.innerHTML = devices.length
         ? devices
             .map((device) => `<div class="device-row">
             <span class="mono">${esc(device.deviceMac)}</span>
-            <span class="device-tag">Added ${esc(fmtDate(device.addedAt))}</span>
-            <button class="link-btn" type="button" data-remove-device-mac="${esc(device.deviceMac)}">Remove</button>
+            ${device.signedOut
+            ? '<span class="device-tag signed-out">Signed out</span>'
+            : `<span class="device-tag">Added ${esc(fmtDate(device.addedAt))}</span>
+            <button class="link-btn" type="button" data-remove-device-mac="${esc(device.deviceMac)}">Sign out</button>`}
           </div>`)
             .join("")
         : '<div class="device-row-empty">No devices registered yet.</div>';
@@ -111,7 +113,7 @@ async function loadDevices() {
         if (!response.ok)
             throw new Error(payload.error || "Unable to load your devices.");
         manageStatus.textContent = "";
-        renderDevices(payload.data?.deviceLimit || 1, payload.data?.devices || [], payload.data?.connectCode);
+        renderDevices(payload.data?.deviceLimit || 1, payload.data?.devices || [], payload.data?.connectCode, payload.data?.deviceCap);
     }
     catch (error) {
         manageStatus.textContent = error instanceof Error ? error.message : "Unable to load your devices.";
@@ -120,7 +122,7 @@ async function loadDevices() {
 async function removeDevice(mac) {
     if (!session)
         return;
-    manageStatus.textContent = "Removing...";
+    manageStatus.textContent = "Signing out...";
     try {
         const response = await fetch(api("/entitlements/remove-device"), {
             method: "POST",
@@ -129,12 +131,12 @@ async function removeDevice(mac) {
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok)
-            throw new Error(payload.error || "Unable to remove that device.");
-        manageStatus.textContent = "Device removed.";
+            throw new Error(payload.error || "Couldn't sign that device out.");
+        manageStatus.textContent = "Device signed out.";
         await loadDevices();
     }
     catch (error) {
-        manageStatus.textContent = error instanceof Error ? error.message : "Unable to remove that device.";
+        manageStatus.textContent = error instanceof Error ? error.message : "Couldn't sign that device out.";
     }
 }
 manageList.addEventListener("click", (event) => {
@@ -174,7 +176,7 @@ loginForm.addEventListener("submit", async (event) => {
         loginStatus.textContent = "";
         loginSection.classList.add("hidden");
         manageSection.classList.remove("hidden");
-        renderDevices(payload.data?.deviceLimit || 1, payload.data?.devices || [], payload.data?.connectCode);
+        renderDevices(payload.data?.deviceLimit || 1, payload.data?.devices || [], payload.data?.connectCode, payload.data?.deviceCap);
     }
     catch (error) {
         loginStatus.textContent = error instanceof Error ? error.message : "Unable to check that account.";

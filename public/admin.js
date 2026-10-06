@@ -513,9 +513,10 @@ function renderDeviceRows(devices) {
         `<span class="mono">${escapeHtml(device.deviceMac)}</span>`,
         fmtDate(device.addedAt),
         device.lastSeenAt ? fmtDate(device.lastSeenAt) : "-",
+        device.signedOutAt ? status("signed out") : status("active"),
         `<button type="button" class="device-remove-btn" data-remove-device-mac="${escapeHtml(device.deviceMac)}">Remove</button>`
       ])}</tr>`).join("")
-    : '<tr><td colspan="4" class="muted">No devices registered.</td></tr>';
+    : '<tr><td colspan="5" class="muted">No devices used yet.</td></tr>';
 }
 
 function renderAccessDetail(message = state.accessActionMessage || "") {
@@ -547,7 +548,7 @@ function renderAccessDetail(message = state.accessActionMessage || "") {
   accessDetailBody.innerHTML = `
     <div class="access-detail-grid">
       ${accessStat("Status", status(entitlement.status))}
-      ${accessStat("Customer", `<span class="mono">${escapeHtml(entitlement.username)}</span>`, `${escapeHtml(detail.devices?.length || 0)}/${escapeHtml(entitlement.deviceLimit || 1)} devices registered`)}
+      ${accessStat("Customer", `<span class="mono">${escapeHtml(entitlement.username)}</span>`, `${escapeHtml(detail.devices?.length || 0)} of ${escapeHtml(detail.deviceCap || entitlement.deviceLimit || 1)} devices used · ${escapeHtml(entitlement.deviceLimit || 1)} at once`)}
       ${accessStat("Current access", accessMeta)}
       ${accessStat("Current package", packageMeta, snapshotState(entitlement) === "synced" ? "settings synced" : "package changed")}
       ${accessStat("Starts", fmtDate(entitlement.startsAt))}
@@ -573,7 +574,7 @@ function renderAccessDetail(message = state.accessActionMessage || "") {
       <button type="button" data-access-action="update_limits">Save custom limits</button>
     </div>
     <div class="access-technical">
-      <details open><summary>Registered devices (${escapeHtml(detail.devices?.length || 0)}/${escapeHtml(entitlement.deviceLimit || 1)})</summary><div class="table-wrap"><table><thead><tr><th>MAC</th><th>Added</th><th>Last seen</th><th></th></tr></thead><tbody>${renderDeviceRows(detail.devices)}</tbody></table></div></details>
+      <details open><summary>Devices used (${escapeHtml(detail.devices?.length || 0)} of ${escapeHtml(detail.deviceCap || entitlement.deviceLimit || 1)})</summary><div class="action-row device-reset-row"><button type="button" class="secondary" data-reset-devices="true">Reset devices</button></div><div class="table-wrap"><table><thead><tr><th>MAC</th><th>First used</th><th>Last seen</th><th>Status</th><th></th></tr></thead><tbody>${renderDeviceRows(detail.devices)}</tbody></table></div></details>
       <details open><summary>RADIUS reply rows</summary><div class="table-wrap"><table><thead><tr><th>Attribute</th><th>Op</th><th>Value</th></tr></thead><tbody>${renderAttributeRows(detail.radreply)}</tbody></table></div></details>
       <details><summary>RADIUS check rows</summary><div class="table-wrap"><table><thead><tr><th>Attribute</th><th>Op</th><th>Value</th></tr></thead><tbody>${renderAttributeRows(detail.radcheck)}</tbody></table></div></details>
       <details><summary>Recent accounting</summary><div class="table-wrap"><table><thead><tr><th>Session</th><th>Device</th><th>IP</th><th>Seconds</th><th>Traffic</th><th>Updated</th></tr></thead><tbody>${renderAccountingRows(detail.accounting)}</tbody></table></div></details>
@@ -1444,8 +1445,18 @@ copyPortalBtn.addEventListener("click", async () => {
   }
 });
 
+async function resetEntitlementDevices(entitlementId) {
+  if (!window.confirm("Reset this customer's devices? Their package gets its full allowance of different devices back. Devices online now stay online.")) return;
+  try {
+    await api(adminApi(`/entitlements/${encodeURIComponent(entitlementId)}/devices`), { method: "DELETE" });
+    await selectAccess(entitlementId, true);
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : "Unable to reset devices.");
+  }
+}
+
 async function removeEntitlementDevice(entitlementId, mac) {
-  if (!window.confirm(`Remove device ${mac} from this customer's account? They'll need to re-enter their password on that device to reconnect.`)) return;
+  if (!window.confirm(`Remove device ${mac} from this customer's package? It stops counting toward their device allowance.`)) return;
   try {
     await api(adminApi(`/entitlements/${encodeURIComponent(entitlementId)}/devices/${encodeURIComponent(mac)}`), { method: "DELETE" });
     await selectAccess(entitlementId, true);
@@ -1465,6 +1476,7 @@ document.addEventListener("click", (event) => {
   if (action) void runAccessAction(action);
   const removeMac = target.dataset.removeDeviceMac;
   if (removeMac && state.selectedEntitlementId) void removeEntitlementDevice(state.selectedEntitlementId, removeMac);
+  if (target.dataset.resetDevices && state.selectedEntitlementId) void resetEntitlementDevices(state.selectedEntitlementId);
   const row = target.closest("[data-entitlement-id]");
   if (row instanceof HTMLElement && !target.closest("button, a, select, input")) void selectAccess(row.dataset.entitlementId || "");
 });

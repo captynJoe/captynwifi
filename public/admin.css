@@ -476,3 +476,4 @@ body[data-page]:not([data-page="overview"]) .metrics-grid { display: none; }
   .action-row { display: flex; flex-wrap: wrap; gap: 6px; }
   .action-row button, .action-row .button-link { width: auto; flex: 1 1 auto; min-height: 36px; }
 }
+.device-reset-row { padding: 8px 0; }

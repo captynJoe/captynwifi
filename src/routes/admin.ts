@@ -18,6 +18,7 @@ import { normalizeKenyaPhone } from "../lib/phone.js";
 import { endPromo, getActivePromo, startPromo } from "../services/promo.js";
 import { DYNAMIC_PLAN_SOURCE, refreshMirrorForBaseline } from "../services/dynamicPlanEngine.js";
 import { ensureConnectCode } from "../services/connectCode.js";
+import { deviceCap } from "../services/deviceLedger.js";
 import { CREDIT_REASONS, availableCreditSeconds, grantWifiCredit } from "../services/credits.js";
 
 export const adminRouter = Router();
@@ -847,7 +848,7 @@ adminRouter.get("/entitlements/:id", async (req, res, next) => {
     // online and can't reach the connected screen on a second device.
     const connectCode = await ensureConnectCode(prisma, entitlement);
 
-    return sendData(res, { entitlement, accounting, radcheck, radreply, devices, connectCode });
+    return sendData(res, { entitlement, accounting, radcheck, radreply, devices, connectCode, deviceCap: deviceCap(entitlement) });
   } catch (error) {
     return next(error);
   }
@@ -879,6 +880,21 @@ adminRouter.delete("/entitlements/:id/devices/:mac", async (req, res, next) => {
       orderBy: { addedAt: "asc" }
     });
     return sendData(res, { removed: true, devices });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// Clears a package's device history, restoring its full allowance of
+// different devices (e.g. a phone that changed its MAC address counted
+// twice). Devices currently online stay online and are recorded again on
+// their next sign-in.
+adminRouter.delete("/entitlements/:id/devices", async (req, res, next) => {
+  try {
+    const entitlement = await prisma.wifiEntitlement.findUnique({ where: { id: req.params.id } });
+    if (!entitlement) return res.status(404).json({ error: "Access record not found" });
+    const cleared = await prisma.wifiEntitlementDevice.deleteMany({ where: { entitlementId: entitlement.id } });
+    return sendData(res, { cleared: cleared.count });
   } catch (error) {
     return next(error);
   }

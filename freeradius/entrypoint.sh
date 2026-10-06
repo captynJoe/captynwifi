@@ -23,4 +23,19 @@ sed -i 's/^\tauth = no$/\tauth = yes/' /etc/raddb/radiusd.conf
 # they join against exists in the schema, so uncommenting this is enough.
 sed -i '/^session {$/,/^}$/ s/^#\tsql$/\tsql/' /etc/raddb/sites-available/default
 
+# Device ledger + switch cap (policy.d/captyn): check the cap right after the
+# SQL lookup in authorize, and record the device after an accepted login in
+# post-auth -- the first top-level -sql there, not the one inside
+# Post-Auth-Type REJECT.
+if ! grep -q "captyn_device_cap" /etc/raddb/sites-available/default; then
+  awk '
+    /^authorize \{$/ { section = "authorize" }
+    /^post-auth \{$/ { section = "post-auth" }
+    /^\tPost-Auth-Type REJECT/ { section = "" }
+    { print }
+    section == "authorize" && $0 == "\t-sql" { print "\tcaptyn_device_cap"; section = "" }
+    section == "post-auth" && $0 == "\t-sql" { print "\tcaptyn_record_device"; section = "" }
+  ' /etc/raddb/sites-available/default > /tmp/default.captyn && cat /tmp/default.captyn > /etc/raddb/sites-available/default
+fi
+
 exec /docker-entrypoint.sh "$@"

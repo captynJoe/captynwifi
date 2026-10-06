@@ -13,6 +13,7 @@ import { formatCreditDuration } from "../services/credits.js";
 import { bodyFieldKey, clientRateLimit, ipKey } from "../middleware/rateLimitGuard.js";
 import { ensureConnectCode, normalizeConnectCode } from "../services/connectCode.js";
 import { kickHotspotDevice } from "../services/routeros.js";
+import { deviceCap, publicDevice } from "../services/deviceLedger.js";
 
 export const publicRouter = Router();
 
@@ -904,12 +905,13 @@ publicRouter.post("/entitlements/link-device", publicCredentialLinkLimit, async 
         where: { entitlementId_deviceMac: { entitlementId: entitlement.id, deviceMac: mac } }
       });
       if (existing) {
-        await tx.wifiEntitlementDevice.update({ where: { id: existing.id }, data: { lastSeenAt: new Date() } });
+        await tx.wifiEntitlementDevice.update({ where: { id: existing.id }, data: { lastSeenAt: new Date(), signedOutAt: null } });
         return "already_registered" as const;
       }
 
+      // Same allowance FreeRADIUS enforces at sign-in (captyn_device_over_cap).
       const registeredCount = await tx.wifiEntitlementDevice.count({ where: { entitlementId: entitlement.id } });
-      if (registeredCount >= entitlement.deviceLimit) {
+      if (registeredCount >= deviceCap(entitlement)) {
         return "at_limit" as const;
       }
 
@@ -924,10 +926,11 @@ publicRouter.post("/entitlements/link-device", publicCredentialLinkLimit, async 
       });
       return res.status(409).json({
         error: "DEVICE_LIMIT_REACHED",
-        message: `You've registered the maximum of ${entitlement.deviceLimit} device${entitlement.deviceLimit === 1 ? "" : "s"} on this plan. Remove one to add this device.`,
+        message: `This package has already been used on ${deviceCap(entitlement)} different devices, its limit. Use a device you've signed in with before.`,
         data: {
           deviceLimit: entitlement.deviceLimit,
-          devices: devices.map((device) => ({ deviceMac: device.deviceMac, label: device.label, addedAt: device.addedAt }))
+          deviceCap: deviceCap(entitlement),
+          devices: devices.map(publicDevice)
         }
       });
     }
@@ -944,7 +947,8 @@ publicRouter.post("/entitlements/link-device", publicCredentialLinkLimit, async 
         linked: true,
         status: result,
         deviceLimit: entitlement.deviceLimit,
-        devices: devices.map((device) => ({ deviceMac: device.deviceMac, label: device.label, addedAt: device.addedAt, lastSeenAt: device.lastSeenAt }))
+        deviceCap: deviceCap(entitlement),
+        devices: devices.map(publicDevice)
       }
     });
   } catch (error) {
@@ -974,13 +978,9 @@ publicRouter.post("/entitlements/devices/list", publicDeviceListLimit, async (re
       data: {
         deviceLimit: entitlement.deviceLimit,
         connectCode,
+        deviceCap: deviceCap(entitlement),
         deviceCount: devices.length,
-        devices: devices.map((device) => ({
-          deviceMac: device.deviceMac,
-          label: device.label,
-          addedAt: device.addedAt,
-          lastSeenAt: device.lastSeenAt
-        }))
+        devices: devices.map(publicDevice)
       }
     });
   } catch (error) {
@@ -1036,7 +1036,9 @@ publicRouter.post("/entitlements/sign-out-device", publicDeviceRemoveLimit, asyn
     const entitlement = await authenticateEntitlementOwner(parsed.username, parsed.password);
     if (!entitlement) return res.status(404).json({ error: "No matching active access record" });
 
-    await prisma.wifiEntitlementDevice.deleteMany({ where: { entitlementId: entitlement.id, deviceMac: mac } });
+    // Marked, not deleted: the device still counts toward the switch cap,
+    // so signing out can't be used to rotate an unlimited number of devices.
+    await prisma.wifiEntitlementDevice.updateMany({ where: { entitlementId: entitlement.id, deviceMac: mac }, data: { signedOutAt: new Date() } });
     if (entitlement.deviceMac === mac) {
       await prisma.wifiEntitlement.update({ where: { id: entitlement.id }, data: { deviceMac: null } });
     }
@@ -1068,12 +1070,16 @@ publicRouter.post("/entitlements/remove-device", publicDeviceRemoveLimit, async 
     const entitlement = await authenticateEntitlementOwner(parsed.username, parsed.password);
     if (!entitlement) return res.status(404).json({ error: "No matching active access record" });
 
-    const deleted = await prisma.wifiEntitlementDevice.deleteMany({
-      where: { entitlementId: entitlement.id, deviceMac: mac }
+    // Signs that device out (and disconnects it) rather than deleting it --
+    // it still counts toward the package's switch cap.
+    const updated = await prisma.wifiEntitlementDevice.updateMany({
+      where: { entitlementId: entitlement.id, deviceMac: mac },
+      data: { signedOutAt: new Date() }
     });
-    if (deleted.count === 0) {
+    if (updated.count === 0) {
       return res.status(404).json({ error: "That device isn't registered on this account." });
     }
+    await kickHotspotDevice(mac);
 
     if (entitlement.deviceMac === mac) {
       // Clear the last-active-device cache so a removed device doesn't keep

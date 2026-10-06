@@ -42,6 +42,7 @@ const accessConnectCode = requireElement("access-connect-code");
 const accessConnectCodeValue = requireElement("access-connect-code-value");
 const accessConnectCodeHint = requireElement("access-connect-code-hint");
 const extendPeriodBtn = requireElement("extend-period-btn");
+const signOutDeviceBtn = requireElement("sign-out-device-btn");
 const workspaceEl = document.querySelector(".workspace");
 const introRowEl = document.querySelector(".intro-row");
 const promoSection = requireElement("promo");
@@ -625,7 +626,8 @@ function renderDeviceList(entitlement) {
     const limit = Number(entitlement.deviceLimit || 1);
     accessDevices.classList.remove("hidden");
     accessDevicesFeedback.classList.add("hidden");
-    accessDevicesCount.textContent = `${devices.length}/${limit}`;
+    // Devices used on this package so far, out of how many different ones it allows.
+    accessDevicesCount.textContent = `${devices.length}/${entitlement.deviceCap || limit} used`;
     accessDevicesList.innerHTML = devices.length
         ? devices
             .map((device) => {
@@ -633,7 +635,9 @@ function renderDeviceList(entitlement) {
             return `<div class="device-row">
             <span class="mono">${esc(device.deviceMac)}</span>
             ${isThisDevice ? '<span class="device-tag">This device</span>' : ""}
-            <button class="link-btn" type="button" data-remove-device-mac="${esc(device.deviceMac)}">Remove</button>
+            ${device.signedOut
+                ? '<span class="device-tag signed-out">Signed out</span>'
+                : `<button class="link-btn" type="button" data-remove-device-mac="${esc(device.deviceMac)}">Sign out</button>`}
           </div>`;
         })
             .join("")
@@ -669,6 +673,12 @@ async function removeDevice(mac) {
     const entitlement = state.currentEntitlement;
     if (!entitlement)
         return;
+    // Signing out the device you're holding goes through the full sign-out
+    // (clears saved access) instead of being re-registered below.
+    if (mac === currentDeviceMac()) {
+        signOutDeviceBtn.click();
+        return;
+    }
     try {
         const response = await fetch(api("/entitlements/remove-device"), {
             method: "POST",
@@ -677,17 +687,15 @@ async function removeDevice(mac) {
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok)
-            throw new Error(payload.error || "Unable to remove device.");
-        entitlement.devices = (entitlement.devices || []).filter((device) => device.deviceMac !== mac);
-        entitlement.deviceCount = entitlement.devices.length;
+            throw new Error(payload.error || "Couldn't sign that device out.");
+        entitlement.devices = (entitlement.devices || []).map((device) => (device.deviceMac === mac ? { ...device, signedOut: true } : device));
         hideDeviceLimitNotice();
         renderDeviceList(entitlement);
-        // Freed a slot -- claim it for this device right away so the customer
-        // doesn't have to reload or re-enter credentials to benefit.
+        // Freed a slot -- make sure this device is recorded on the package.
         await rememberDeviceForEntitlement(entitlement.username, entitlement.password);
     }
     catch (error) {
-        showError(error instanceof Error ? error.message : "Unable to remove device.");
+        showError(error instanceof Error ? error.message : "Couldn't sign that device out.");
     }
 }
 document.addEventListener("click", (event) => {
@@ -852,6 +860,7 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
         let deviceLimit;
         let devices = [];
         let connectCode;
+        let deviceCap;
         try {
             const [statusResponse, devicesResponse] = await Promise.all([
                 fetch(api(`/entitlements/${encodeURIComponent(username)}/status`)),
@@ -867,10 +876,11 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
             const devicesData = devicesResponse.ok ? (await devicesResponse.json())?.data : null;
             devices = devicesData?.devices || [];
             connectCode = devicesData?.connectCode;
+            deviceCap = devicesData?.deviceCap;
         }
         catch (_error) { }
         if (expiresAt) {
-            showConnectedPanel({ username, password, expiresAt, deviceLimit, devices, connectCode }, { heading: "You're connected", message: "You're all set. You can browse now.", skipAutoConnect: true });
+            showConnectedPanel({ username, password, expiresAt, deviceLimit, devices, connectCode, deviceCap }, { heading: "You're connected", message: "You're all set. You can browse now.", skipAutoConnect: true });
         }
         else {
             hideManualConnectFallback();
@@ -1282,7 +1292,15 @@ function waitingMessage() {
 const REMEMBERED_ACCESS_KEY = "captynWifiAccess";
 function saveRememberedAccess(entitlement) {
     try {
-        localStorage.setItem(REMEMBERED_ACCESS_KEY, JSON.stringify({ username: entitlement.username, password: entitlement.password, expiresAt: entitlement.expiresAt, deviceLimit: entitlement.deviceLimit }));
+        localStorage.setItem(REMEMBERED_ACCESS_KEY, JSON.stringify({
+            username: entitlement.username,
+            password: entitlement.password,
+            expiresAt: entitlement.expiresAt,
+            deviceLimit: entitlement.deviceLimit,
+            // The router's post-login redirect back to /wifi/ carries no MAC, so
+            // keep it here for "Sign out this device".
+            deviceMac: state.hotspot?.mac || entitlement.deviceMac || loadRememberedAccess()?.deviceMac || ""
+        }));
     }
     catch (_error) { }
 }
@@ -1303,6 +1321,9 @@ function loadRememberedAccess() {
     catch (_error) {
         return null;
     }
+}
+function currentDeviceMac() {
+    return state.hotspot?.mac || loadRememberedAccess()?.deviceMac || "";
 }
 function clearRememberedAccess() {
     try {
@@ -1381,6 +1402,7 @@ async function loadConnectCode(entitlement) {
         if (!data || state.currentEntitlement !== entitlement)
             return;
         entitlement.connectCode = data.connectCode;
+        entitlement.deviceCap = data.deviceCap;
         entitlement.devices = data.devices || entitlement.devices;
         if (data.deviceLimit)
             entitlement.deviceLimit = data.deviceLimit;
@@ -1420,6 +1442,7 @@ function showConnectedPanel(entitlement, { heading, skipAutoConnect, freshGrant,
     access.scrollIntoView({ behavior: "smooth", block: "start" });
     startExpiryWatch(entitlement.expiresAt, entitlement.deviceLimit);
     saveRememberedAccess(entitlement);
+    signOutDeviceBtn.classList.toggle("hidden", !currentDeviceMac());
     if (skipAutoConnect)
         return;
     if (state.hotspot?.login) {
@@ -1951,3 +1974,35 @@ async function bootstrap() {
     await loadPlansPromise;
 }
 void bootstrap();
+signOutDeviceBtn.addEventListener("click", async () => {
+    const entitlement = state.currentEntitlement;
+    const deviceMac = currentDeviceMac();
+    if (!entitlement || !deviceMac)
+        return;
+    if (!window.confirm("Sign out this device? Your package time keeps running."))
+        return;
+    signOutDeviceBtn.disabled = true;
+    signOutDeviceBtn.textContent = "Signing out...";
+    try {
+        const response = await fetch(api("/entitlements/sign-out-device"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username: entitlement.username, password: entitlement.password, deviceMac })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok)
+            throw new Error(payload.error || "Couldn't sign this device out.");
+        clearRememberedAccess();
+        window.location.replace(`${portalReturnUrl()}?signedOut=1`);
+    }
+    catch (error) {
+        signOutDeviceBtn.disabled = false;
+        signOutDeviceBtn.textContent = "Sign out this device";
+        showError(error instanceof Error ? error.message : "Couldn't sign this device out.");
+    }
+});
+if (new URLSearchParams(window.location.search).has("signedOut")) {
+    const note = document.querySelector(".intro-note");
+    if (note)
+        note.textContent = "This device is signed out. Your package time keeps running.";
+}

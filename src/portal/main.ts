@@ -48,6 +48,7 @@ interface EntitlementDevice {
   label?: string | null;
   addedAt: string;
   lastSeenAt?: string | null;
+  signedOut?: boolean;
 }
 
 interface Entitlement {
@@ -61,6 +62,7 @@ interface Entitlement {
   devices?: EntitlementDevice[];
   connectCode?: string;
   deviceMac?: string;
+  deviceCap?: number;
 }
 
 interface NotificationData {
@@ -693,7 +695,8 @@ function renderDeviceList(entitlement: Entitlement) {
   const limit = Number(entitlement.deviceLimit || 1);
   accessDevices.classList.remove("hidden");
   accessDevicesFeedback.classList.add("hidden");
-  accessDevicesCount.textContent = `${devices.length}/${limit}`;
+  // Devices used on this package so far, out of how many different ones it allows.
+  accessDevicesCount.textContent = `${devices.length}/${entitlement.deviceCap || limit} used`;
   accessDevicesList.innerHTML = devices.length
     ? devices
         .map((device) => {
@@ -701,7 +704,9 @@ function renderDeviceList(entitlement: Entitlement) {
           return `<div class="device-row">
             <span class="mono">${esc(device.deviceMac)}</span>
             ${isThisDevice ? '<span class="device-tag">This device</span>' : ""}
-            <button class="link-btn" type="button" data-remove-device-mac="${esc(device.deviceMac)}">Remove</button>
+            ${device.signedOut
+              ? '<span class="device-tag signed-out">Signed out</span>'
+              : `<button class="link-btn" type="button" data-remove-device-mac="${esc(device.deviceMac)}">Sign out</button>`}
           </div>`;
         })
         .join("")
@@ -735,6 +740,12 @@ function showDeviceLimitNotice(message: string, devices: EntitlementDevice[], de
 async function removeDevice(mac: string) {
   const entitlement = state.currentEntitlement;
   if (!entitlement) return;
+  // Signing out the device you're holding goes through the full sign-out
+  // (clears saved access) instead of being re-registered below.
+  if (mac === currentDeviceMac()) {
+    signOutDeviceBtn.click();
+    return;
+  }
   try {
     const response = await fetch(api("/entitlements/remove-device"), {
       method: "POST",
@@ -742,16 +753,14 @@ async function removeDevice(mac: string) {
       body: JSON.stringify({ username: entitlement.username, password: entitlement.password, deviceMac: mac })
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || "Unable to remove device.");
-    entitlement.devices = (entitlement.devices || []).filter((device) => device.deviceMac !== mac);
-    entitlement.deviceCount = entitlement.devices.length;
+    if (!response.ok) throw new Error(payload.error || "Couldn't sign that device out.");
+    entitlement.devices = (entitlement.devices || []).map((device) => (device.deviceMac === mac ? { ...device, signedOut: true } : device));
     hideDeviceLimitNotice();
     renderDeviceList(entitlement);
-    // Freed a slot -- claim it for this device right away so the customer
-    // doesn't have to reload or re-enter credentials to benefit.
+    // Freed a slot -- make sure this device is recorded on the package.
     await rememberDeviceForEntitlement(entitlement.username, entitlement.password);
   } catch (error) {
-    showError(error instanceof Error ? error.message : "Unable to remove device.");
+    showError(error instanceof Error ? error.message : "Couldn't sign that device out.");
   }
 }
 document.addEventListener("click", (event) => {
@@ -912,6 +921,7 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
     let deviceLimit;
     let devices: EntitlementDevice[] = [];
     let connectCode: string | undefined;
+    let deviceCap: number | undefined;
     try {
       const [statusResponse, devicesResponse] = await Promise.all([
         fetch(api(`/entitlements/${encodeURIComponent(username)}/status`)),
@@ -927,10 +937,11 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
       const devicesData = devicesResponse.ok ? (await devicesResponse.json())?.data : null;
       devices = devicesData?.devices || [];
       connectCode = devicesData?.connectCode;
+      deviceCap = devicesData?.deviceCap;
     } catch (_error) {}
     if (expiresAt) {
       showConnectedPanel(
-        { username, password, expiresAt, deviceLimit, devices, connectCode },
+        { username, password, expiresAt, deviceLimit, devices, connectCode, deviceCap },
         { heading: "You're connected", message: "You're all set. You can browse now.", skipAutoConnect: true }
       );
     } else {
@@ -1416,6 +1427,7 @@ async function loadConnectCode(entitlement: Entitlement) {
     const data = response.ok ? (await response.json())?.data : null;
     if (!data || state.currentEntitlement !== entitlement) return;
     entitlement.connectCode = data.connectCode;
+    entitlement.deviceCap = data.deviceCap;
     entitlement.devices = data.devices || entitlement.devices;
     if (data.deviceLimit) entitlement.deviceLimit = data.deviceLimit;
     renderDeviceList(entitlement);
