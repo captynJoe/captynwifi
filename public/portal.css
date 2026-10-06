@@ -387,3 +387,5 @@ body::after {
   .intro-row h1 { color: var(--text-strong); background: none; }
 }
 .intro-row h1 .emoji { -webkit-text-fill-color: initial; color: var(--text-strong); background: none; }
+.sign-out-device-btn { justify-self: center; color: var(--muted); }
+.sign-out-device-btn:hover { color: var(--red); }

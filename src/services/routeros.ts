@@ -145,6 +145,34 @@ function missingRouterConfig() {
   return null;
 }
 
+// Like kickHotspotUser, but only the session from one device -- used when a
+// customer signs out a single device on a multi-device package.
+export async function kickHotspotDevice(deviceMac: string): Promise<RouterSessionKickResult> {
+  const skippedReason = missingRouterConfig();
+  if (skippedReason) return { enabled: config.routeros.enabled, attempted: false, removed: 0, skippedReason };
+
+  const client = new RouterOsApiClient();
+  try {
+    await client.connect();
+    await client.login();
+    const sessions = await client.command(["/ip/hotspot/active/print", `?mac-address=${deviceMac}`]);
+    const ids = sessions
+      .filter((sentence) => sentence.type === "!re" && sentence.attrs[".id"])
+      .map((sentence) => sentence.attrs[".id"]);
+
+    let removed = 0;
+    for (const id of ids) {
+      await client.command(["/ip/hotspot/active/remove", `=numbers=${id}`]);
+      removed += 1;
+    }
+    return { enabled: true, attempted: true, removed };
+  } catch (error) {
+    return { enabled: true, attempted: true, removed: 0, error: error instanceof Error ? error.message : "RouterOS API action failed" };
+  } finally {
+    client.close();
+  }
+}
+
 export async function kickHotspotUser(username: string): Promise<RouterSessionKickResult> {
   const skippedReason = missingRouterConfig();
   if (skippedReason) return { enabled: config.routeros.enabled, attempted: false, removed: 0, skippedReason };

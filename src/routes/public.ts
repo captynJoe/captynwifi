@@ -12,6 +12,7 @@ import { claimPromoGrant, getLivePromo } from "../services/promo.js";
 import { formatCreditDuration } from "../services/credits.js";
 import { bodyFieldKey, clientRateLimit, ipKey } from "../middleware/rateLimitGuard.js";
 import { ensureConnectCode, normalizeConnectCode } from "../services/connectCode.js";
+import { kickHotspotDevice } from "../services/routeros.js";
 
 export const publicRouter = Router();
 
@@ -1011,6 +1012,40 @@ publicRouter.post("/entitlements/connect-code/redeem", publicConnectCodeLimit, a
         deviceLimit: entitlement.deviceLimit
       }
     });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+const signOutDeviceSchema = z.object({
+  username: z.string().trim().min(1),
+  password: z.string().min(1),
+  deviceMac: z.string().trim().min(1)
+});
+
+// "Sign out this device": ends this device's router session (freeing a slot
+// for another device on a multi-device package) and forgets it, so the
+// portal's returning-device lookup doesn't sign it straight back in. The
+// package's clock keeps running -- access is bought by time, not usage.
+publicRouter.post("/entitlements/sign-out-device", publicDeviceRemoveLimit, async (req, res, next) => {
+  try {
+    const parsed = signOutDeviceSchema.parse(req.body);
+    const mac = normalizeDeviceMac(parsed.deviceMac);
+    if (!mac) return res.status(400).json({ error: "Device MAC required" });
+
+    const entitlement = await authenticateEntitlementOwner(parsed.username, parsed.password);
+    if (!entitlement) return res.status(404).json({ error: "No matching active access record" });
+
+    await prisma.wifiEntitlementDevice.deleteMany({ where: { entitlementId: entitlement.id, deviceMac: mac } });
+    if (entitlement.deviceMac === mac) {
+      await prisma.wifiEntitlement.update({ where: { id: entitlement.id }, data: { deviceMac: null } });
+    }
+
+    const kick = await kickHotspotDevice(mac);
+    if (kick.error || kick.skippedReason) {
+      console.warn(`Sign-out kick ${mac} did not complete: ${kick.error || kick.skippedReason}`);
+    }
+    return res.json({ data: { signedOut: kick.removed > 0, disconnected: kick.removed } });
   } catch (error) {
     return next(error);
   }

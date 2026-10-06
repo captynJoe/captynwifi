@@ -60,6 +60,7 @@ interface Entitlement {
   deviceCount?: number;
   devices?: EntitlementDevice[];
   connectCode?: string;
+  deviceMac?: string;
 }
 
 interface NotificationData {
@@ -146,6 +147,7 @@ const accessConnectCode = requireElement<HTMLButtonElement>("access-connect-code
 const accessConnectCodeValue = requireElement<HTMLElement>("access-connect-code-value");
 const accessConnectCodeHint = requireElement<HTMLElement>("access-connect-code-hint");
 const extendPeriodBtn = requireElement<HTMLButtonElement>("extend-period-btn");
+const signOutDeviceBtn = requireElement<HTMLButtonElement>("sign-out-device-btn");
 const workspaceEl = document.querySelector<HTMLElement>(".workspace");
 const introRowEl = document.querySelector<HTMLElement>(".intro-row");
 const promoSection = requireElement<HTMLElement>("promo");
@@ -1311,7 +1313,15 @@ function saveRememberedAccess(entitlement) {
   try {
     localStorage.setItem(
       REMEMBERED_ACCESS_KEY,
-      JSON.stringify({ username: entitlement.username, password: entitlement.password, expiresAt: entitlement.expiresAt, deviceLimit: entitlement.deviceLimit })
+      JSON.stringify({
+        username: entitlement.username,
+        password: entitlement.password,
+        expiresAt: entitlement.expiresAt,
+        deviceLimit: entitlement.deviceLimit,
+        // The router's post-login redirect back to /wifi/ carries no MAC, so
+        // keep it here for "Sign out this device".
+        deviceMac: state.hotspot?.mac || entitlement.deviceMac || loadRememberedAccess()?.deviceMac || ""
+      })
     );
   } catch (_error) {}
 }
@@ -1329,6 +1339,9 @@ function loadRememberedAccess() {
   } catch (_error) {
     return null;
   }
+}
+function currentDeviceMac(): string {
+  return state.hotspot?.mac || loadRememberedAccess()?.deviceMac || "";
 }
 function clearRememberedAccess() {
   try { localStorage.removeItem(REMEMBERED_ACCESS_KEY); } catch (_error) {}
@@ -1436,6 +1449,7 @@ function showConnectedPanel(entitlement: Entitlement, { heading, skipAutoConnect
   access.scrollIntoView({ behavior: "smooth", block: "start" });
   startExpiryWatch(entitlement.expiresAt, entitlement.deviceLimit);
   saveRememberedAccess(entitlement);
+  signOutDeviceBtn.classList.toggle("hidden", !currentDeviceMac());
   if (skipAutoConnect) return;
   if (state.hotspot?.login) {
     // attemptAutoConnect navigates to the router's login page (a hidden
@@ -1946,3 +1960,31 @@ async function bootstrap() {
   await loadPlansPromise;
 }
 void bootstrap();
+
+signOutDeviceBtn.addEventListener("click", async () => {
+  const entitlement = state.currentEntitlement;
+  const deviceMac = currentDeviceMac();
+  if (!entitlement || !deviceMac) return;
+  if (!window.confirm("Sign out this device? Your package time keeps running.")) return;
+  signOutDeviceBtn.disabled = true;
+  signOutDeviceBtn.textContent = "Signing out...";
+  try {
+    const response = await fetch(api("/entitlements/sign-out-device"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: entitlement.username, password: entitlement.password, deviceMac })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "Couldn't sign this device out.");
+    clearRememberedAccess();
+    window.location.replace(`${portalReturnUrl()}?signedOut=1`);
+  } catch (error) {
+    signOutDeviceBtn.disabled = false;
+    signOutDeviceBtn.textContent = "Sign out this device";
+    showError(error instanceof Error ? error.message : "Couldn't sign this device out.");
+  }
+});
+if (new URLSearchParams(window.location.search).has("signedOut")) {
+  const note = document.querySelector<HTMLElement>(".intro-note");
+  if (note) note.textContent = "This device is signed out. Your package time keeps running.";
+}
