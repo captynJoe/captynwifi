@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#020403">
+<title>CAPTYN WiFi</title>
+<style>
+  :root { --bg: #020403; --card: rgba(9, 18, 13, .74); --line: rgba(32, 245, 154, .18); --text: #e6fff1; --muted: #8fb5a1; --green: #20f59a; --cyan: #23ddff; --amber: #ffd166; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    min-height: 100vh; display: grid; place-items: center; padding: 20px; overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--text); background: var(--bg); -webkit-font-smoothing: antialiased;
+  }
+  .aurora {
+    position: fixed; inset: -30%; z-index: 0; filter: blur(34px);
+    background:
+      radial-gradient(38% 34% at 24% 30%, rgba(32, 245, 154, .30), transparent 70%),
+      radial-gradient(34% 30% at 76% 66%, rgba(35, 221, 255, .26), transparent 70%),
+      radial-gradient(28% 28% at 62% 18%, rgba(70, 125, 255, .20), transparent 70%);
+    animation: drift 14s ease-in-out infinite alternate;
+  }
+  .grid {
+    position: fixed; inset: 0; z-index: 0;
+    background-image: linear-gradient(rgba(32, 245, 154, .06) 1px, transparent 1px), linear-gradient(90deg, rgba(32, 245, 154, .06) 1px, transparent 1px);
+    background-size: 44px 44px;
+    -webkit-mask-image: radial-gradient(circle at 50% 42%, #000 0, transparent 68%); mask-image: radial-gradient(circle at 50% 42%, #000 0, transparent 68%);
+  }
+  @keyframes drift { to { transform: translate3d(6%, -4%, 0) rotate(12deg) scale(1.1); } }
+  main {
+    position: relative; z-index: 1; width: min(400px, 100%); padding: 30px 24px 24px; text-align: center;
+    border: 1px solid var(--line); border-radius: 24px; background: var(--card);
+    -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px);
+    box-shadow: 0 30px 80px rgba(0, 0, 0, .6), 0 0 60px rgba(32, 245, 154, .08);
+    animation: rise .5s cubic-bezier(.2, .8, .2, 1) both;
+  }
+  @keyframes rise { from { opacity: 0; transform: translateY(14px) scale(.98); } }
+  .brand { display: inline-flex; align-items: center; gap: 8px; margin-bottom: 22px; font-weight: 800; font-size: 15px; letter-spacing: .02em; }
+  .brand i { width: 22px; height: 22px; border-radius: 7px; background: linear-gradient(135deg, var(--green), var(--cyan)); box-shadow: 0 0 18px rgba(32, 245, 154, .5); }
+  .brand span { color: var(--muted); font-weight: 700; }
+  .ring { width: 84px; height: 84px; margin: 0 auto 18px; filter: drop-shadow(0 0 18px rgba(32, 245, 154, .45)); }
+  .ring svg { width: 100%; height: 100%; }
+  .ring circle, .ring path { fill: none; stroke: var(--green); stroke-linecap: round; stroke-linejoin: round; }
+  .ring circle { stroke-width: 2.5; stroke-dasharray: 151; stroke-dashoffset: 151; animation: draw .7s ease-out forwards; }
+  .ring path { stroke-width: 3.5; stroke-dasharray: 44; stroke-dashoffset: 44; animation: draw .4s .6s ease-out forwards; }
+  .ring.warn { filter: drop-shadow(0 0 18px rgba(255, 209, 102, .4)); }
+  .ring.warn circle, .ring.warn path { stroke: var(--amber); }
+  .ring.spin circle { stroke-dasharray: 60 151; stroke-dashoffset: 0; animation: none; }
+  .ring.spin svg { animation: turn 1s linear infinite; }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+  @keyframes turn { to { transform: rotate(360deg); } }
+  h1 { margin: 0 0 8px; font-size: 26px; line-height: 1.15; letter-spacing: -.02em; }
+  p { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.5; }
+  .btn {
+    display: flex; align-items: center; justify-content: center; width: 100%; min-height: 52px; margin-top: 22px;
+    border-radius: 14px; background: linear-gradient(135deg, var(--green), var(--cyan)); color: #00140a;
+    font-weight: 800; font-size: 16px; text-decoration: none; box-shadow: 0 12px 30px rgba(32, 245, 154, .25);
+  }
+  .btn.ghost { margin-top: 10px; background: transparent; color: var(--text); border: 1px solid var(--line); box-shadow: none; font-weight: 700; }
+  .stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 20px; }
+  .stats.one { grid-template-columns: 1fr; }
+  .stat { padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; text-align: left; background: rgba(0, 0, 0, .25); }
+  .stat small { display: block; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+  .stat b { display: block; margin-top: 4px; font-size: 18px; font-variant-numeric: tabular-nums; }
+  .foot { margin-top: 18px; font-size: 12px; color: var(--muted); }
+  /* Neon border that races around the card. */
+  @property --a { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
+  main::before {
+    content: ""; position: absolute; inset: -1px; border-radius: inherit; padding: 1.5px; pointer-events: none;
+    background: conic-gradient(from var(--a), transparent 0 55%, var(--green) 70%, var(--cyan) 82%, transparent 92%);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor;
+    mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+    animation: orbit 4s linear infinite;
+  }
+  @keyframes orbit { to { --a: 360deg; } }
+  /* Radar pulses behind the icon. */
+  .ring { position: relative; }
+  .ring::before, .ring::after {
+    content: ""; position: absolute; inset: 0; border-radius: 50%; border: 1.5px solid var(--green); opacity: 0;
+    animation: pulse 2.4s cubic-bezier(.2, .6, .3, 1) infinite;
+  }
+  .ring::after { animation-delay: 1.2s; }
+  .ring.warn::before, .ring.warn::after { border-color: var(--amber); }
+  @keyframes pulse { 0% { transform: scale(.9); opacity: .55; } 100% { transform: scale(2.1); opacity: 0; } }
+  /* Headline shimmer. */
+  h1 {
+    background: linear-gradient(90deg, #ffffff 0%, #ffffff 35%, var(--green) 50%, var(--cyan) 60%, #ffffff 75%);
+    background-size: 250% 100%; -webkit-background-clip: text; background-clip: text; color: transparent;
+    animation: shimmer 3.5s ease-in-out infinite;
+  }
+  @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: -50% 0; } }
+  /* WiFi signal: arcs light up one after another. */
+  .signal { width: 96px; height: 76px; margin: 0 auto 18px; filter: drop-shadow(0 0 16px rgba(32, 245, 154, .5)); }
+  .signal path, .signal circle { fill: none; stroke: var(--green); stroke-width: 4; stroke-linecap: round; opacity: .18; animation: arc 1.6s ease-in-out infinite; }
+  .signal circle { fill: var(--green); stroke: none; animation-delay: 0s; }
+  .signal .a1 { animation-delay: .2s; } .signal .a2 { animation-delay: .4s; } .signal .a3 { animation-delay: .6s; }
+  @keyframes arc { 0%, 100% { opacity: .18; } 40%, 60% { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; } .ring circle, .ring path { stroke-dashoffset: 0; } h1 { color: var(--text); background: none; } }
+</style>
+</head>
+<body>
+<div class="aurora" aria-hidden="true"></div>
+<div class="grid" aria-hidden="true"></div>
+<main>
+  <div class="brand"><i></i>CAPTYN <span>WiFi</span></div>
+  <div class="ring warn"><svg viewBox="0 0 52 52" aria-hidden="true"><circle cx="26" cy="26" r="24"/><path d="M26 15v14M26 36v.5"/></svg></div>
+  <h1>That didn't work</h1>
+  <p>$(error)</p>
+  <a class="btn" href="$(link-login)">Try again</a>
+  <p class="foot">Need help? Call +254711635755</p>
+</main>
+</body>
+</html>

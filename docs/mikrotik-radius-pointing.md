@@ -42,33 +42,42 @@ Use the sandbox Safaricom host only when testing sandbox M-PESA.
 
 ## Hotspot Login Page
 
-MikroTik should keep only a small bridge page in `hotspot/login.html`. The full
-customer experience lives on CAPTYN WiFi at `https://captyn.shop/wifi/`; the
-bridge page forwards MikroTik placeholders such as `$(mac)`, `$(ip)`,
-`$(link-login-only)`, and `$(link-orig-esc)` into the hosted portal.
+The router serves five CAPTYN-branded pages from its `hotspot/` folder; the
+full customer experience lives on CAPTYN WiFi at `https://captyn.shop/wifi/`.
 
-The source of truth is `public/hotspot-login.html`. Do not fetch it from the
-public Cloudflare URL when updating RouterOS, because Cloudflare may append
-challenge scripts. Serve the clean repo file over the WireGuard address
-temporarily instead:
+| Router file | Shown when |
+|---|---|
+| `login.html` | A device that isn't signed in -- forwards `$(mac)`, `$(ip)`, `$(link-login-only)`, `$(link-orig-esc)` and `$(error)` to the portal |
+| `alogin.html` | Right after a successful sign-in, then on to the portal |
+| `status.html` | A signed-in device opening the router |
+| `logout.html` | After signing out |
+| `error.html` | When the router can't sign a device in |
+
+The source of truth is `public/hotspot/`. Everything is inline (no external
+fonts or scripts), since these load before the device has internet. Do not
+fetch them from the public Cloudflare URL when updating RouterOS, because
+Cloudflare may append challenge scripts. Serve the repo folder over the
+WireGuard address temporarily instead:
 
 ```bash
-cd /home/captyn/captyn-wifi/public
+cd /home/joe/captyn-wifi/public/hotspot
 python3 -m http.server 8088 --bind 10.8.0.6
 ```
 
-Before replacing the router copy, download a local rollback copy:
-
-```bash
-scp -O admin@10.8.0.50:hotspot/login.html /tmp/mikrotik-hotspot-login.backup-YYYYMMDD-HHMM.html
-```
+Keep a rollback copy of the router's current pages first: in Winbox open
+Files -> hotspot and drag `login.html`, `alogin.html`, `status.html`,
+`logout.html` and `error.html` to your computer.
 
 Then run on RouterOS:
 
 ```routeros
-/tool fetch url="http://10.8.0.6:8088/hotspot-login.html" dst-path="hotspot/login.html" keep-result=yes
-/file print terse where name="hotspot/login.html"
+:foreach f in={"login";"alogin";"status";"logout";"error"} do={
+  /tool fetch url=("http://10.8.0.6:8088/" . $f . ".html") dst-path=("hotspot/" . $f . ".html") keep-result=yes
+}
+/file print terse where name~"^hotspot/(login|alogin|status|logout|error).html"
 ```
+
+Stop the temporary server afterwards (Ctrl+C).
 
 ## Validate From RouterOS
 
