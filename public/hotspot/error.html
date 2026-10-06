@@ -37,7 +37,7 @@
     animation: rise .5s cubic-bezier(.2, .8, .2, 1) both;
   }
   @keyframes rise { from { opacity: 0; transform: translateY(14px) scale(.98); } }
-  .brand { display: inline-flex; align-items: center; gap: 8px; margin-bottom: 22px; font-weight: 800; font-size: 15px; letter-spacing: .02em; }
+  .brand { -webkit-user-select: none; user-select: none; display: inline-flex; align-items: center; gap: 8px; margin-bottom: 22px; font-weight: 800; font-size: 15px; letter-spacing: .02em; }
   .brand i { width: 22px; height: 22px; border-radius: 7px; background: linear-gradient(135deg, var(--green), var(--cyan)); box-shadow: 0 0 18px rgba(32, 245, 154, .5); }
   .brand span { color: var(--muted); font-weight: 700; }
   .ring { width: 84px; height: 84px; margin: 0 auto 18px; filter: drop-shadow(0 0 18px rgba(32, 245, 154, .45)); }
@@ -65,6 +65,8 @@
   .stat small { display: block; color: var(--muted); font-size: 10.5px; font-weight: 700; letter-spacing: .06em; overflow-wrap: anywhere; text-transform: uppercase; }
   .stat b { display: block; margin-top: 4px; font-size: 18px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
   .foot { margin-top: 18px; font-size: 12px; color: var(--muted); }
+  .powered { display: block; margin-top: 18px; color: var(--muted); font-size: 12px; font-weight: 600; text-decoration: none; letter-spacing: .02em; }
+  .powered b { color: var(--text); font-weight: 800; }
   /* Neon border that races around the card. */
   @property --a { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
   main::before {
@@ -92,7 +94,7 @@
   }
   @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: -50% 0; } }
   /* WiFi signal: arcs light up one after another. */
-  .signal { width: 96px; height: 76px; margin: 0 auto 18px; filter: drop-shadow(0 0 16px rgba(32, 245, 154, .5)); }
+  .signal { display: block; width: 96px; height: 76px; margin: 0 auto 18px; filter: drop-shadow(0 0 16px rgba(32, 245, 154, .5)); }
   .signal path, .signal circle { fill: none; stroke: var(--green); stroke-width: 4; stroke-linecap: round; opacity: .18; animation: arc 1.6s ease-in-out infinite; }
   .signal circle { fill: var(--green); stroke: none; animation-delay: 0s; }
   .signal .a1 { animation-delay: .2s; } .signal .a2 { animation-delay: .4s; } .signal .a3 { animation-delay: .6s; }
@@ -112,6 +114,7 @@
   <p>$(error)</p>
   <a class="btn" href="$(link-login)">Try again</a>
   <p class="foot">Need help? Call +254711635755</p>
+  <a class="powered" href="https://captyn.shop/">Powered by <b>captyn.shop</b></a>
 </main>
 </body>
 </html>
