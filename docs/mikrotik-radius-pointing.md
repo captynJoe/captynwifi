@@ -54,15 +54,12 @@ full customer experience lives on CAPTYN WiFi at `https://captyn.shop/wifi/`.
 | `error.html` | When the router can't sign a device in |
 
 The source of truth is `public/hotspot/`. Everything is inline (no external
-fonts or scripts), since these load before the device has internet. Do not
-fetch them from the public Cloudflare URL when updating RouterOS, because
-Cloudflare may append challenge scripts. Serve the repo folder over the
-WireGuard address temporarily instead:
-
-```bash
-cd /home/joe/captyn-wifi/public/hotspot
-python3 -m http.server 8088 --bind 10.8.0.6
-```
+fonts or scripts), since these load before the device has internet. The WiFi
+API serves this folder as-is at `http://10.8.0.6:4120/portal/hotspot/` over
+WireGuard -- fetch from there, not the public Cloudflare URL (Cloudflare may
+inject challenge scripts) and not a temporary server on another port (the
+VPS firewall only admits 22/80/443/51820; Docker-published ports like 4120
+are reachable).
 
 Keep a rollback copy of the router's current pages first: in Winbox open
 Files -> hotspot and drag `login.html`, `alogin.html`, `status.html`,
@@ -72,12 +69,10 @@ Then run on RouterOS:
 
 ```routeros
 :foreach f in={"login";"alogin";"status";"logout";"error"} do={
-  /tool fetch url=("http://10.8.0.6:8088/" . $f . ".html") dst-path=("hotspot/" . $f . ".html") keep-result=yes
+  /tool fetch url=("http://10.8.0.6:4120/portal/hotspot/" . $f . ".html") dst-path=("hotspot/" . $f . ".html") keep-result=yes
 }
 /file print terse where name~"^hotspot/(login|alogin|status|logout|error).html"
 ```
-
-Stop the temporary server afterwards (Ctrl+C).
 
 ## Validate From RouterOS
 
