@@ -624,8 +624,14 @@ function renderDeviceList(entitlement) {
     const limit = Number(entitlement.deviceLimit || 1);
     accessDevices.classList.remove("hidden");
     accessDevicesFeedback.classList.add("hidden");
-    // Devices used on this package so far, out of how many different ones it allows.
-    accessDevicesCount.textContent = `${devices.length}/${entitlement.deviceCap || limit} used`;
+    // A 1-device package shows just its device: a count and a code for
+    // "another device" read as if a second device could join. Multi-device
+    // packages show devices used out of how many different ones they allow.
+    const multiDevice = limit > 1;
+    accessDevicesCount.textContent = multiDevice ? `${devices.length}/${entitlement.deviceCap || limit} used` : "";
+    const devicesLabel = document.getElementById("access-devices-label");
+    if (devicesLabel)
+        devicesLabel.textContent = multiDevice ? "Devices" : "Device";
     accessDevicesList.innerHTML = devices.length
         ? devices
             .map((device) => {
@@ -643,7 +649,7 @@ function renderDeviceList(entitlement) {
             .join("")
         : '<div class="device-row-empty">No devices registered yet.</div>';
     accessConnectCodeValue.textContent = entitlement.connectCode || "";
-    accessConnectCode.classList.toggle("hidden", !entitlement.connectCode);
+    accessConnectCode.classList.toggle("hidden", !entitlement.connectCode || !multiDevice);
 }
 function hideDeviceLimitNotice() {
     accessDevicesNotice.classList.add("hidden");
@@ -721,14 +727,14 @@ function clockLabel(remainingMs) {
     return `${Math.max(0, Math.floor(remainingMs / 1000))}s`;
 }
 // Time left as a ring: the arc is the share of the package still to run.
-const CLOCK_CIRCUMFERENCE = 2 * Math.PI * 52;
+const CLOCK_CIRCUMFERENCE = 2 * Math.PI * 48;
 function updateAccessTimeLeft(remainingMs, totalMs) {
     if (!accessTimeLeft)
         return;
     const share = totalMs && totalMs > 0 ? Math.min(1, Math.max(0, remainingMs / totalMs)) : 1;
     accessTimeLeft.innerHTML = `<svg viewBox="0 0 120 120" aria-hidden="true">
-      <circle class="clock-track" cx="60" cy="60" r="52"/>
-      <circle class="clock-fill" cx="60" cy="60" r="52" stroke-dasharray="${CLOCK_CIRCUMFERENCE.toFixed(1)}" stroke-dashoffset="${(CLOCK_CIRCUMFERENCE * (1 - share)).toFixed(1)}"/>
+      <circle class="clock-track" cx="60" cy="60" r="48"/>
+      <circle class="clock-fill" cx="60" cy="60" r="48" stroke-dasharray="${CLOCK_CIRCUMFERENCE.toFixed(1)}" stroke-dashoffset="${(CLOCK_CIRCUMFERENCE * (1 - share)).toFixed(1)}"/>
     </svg>
     <span class="clock-center"><strong>${esc(clockLabel(remainingMs))}</strong><small>left</small></span>`;
 }

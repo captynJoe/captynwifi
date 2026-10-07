@@ -406,7 +406,7 @@ button.extend-period-btn:hover, button#pay-button:hover { filter: brightness(1.0
 
 .access-clock { display: grid; justify-items: center; gap: 8px; }
 .clock { position: relative; width: min(200px, 60vw); aspect-ratio: 1; }
-.clock svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.clock svg { width: 100%; height: 100%; overflow: visible; transform: rotate(-90deg); }
 .clock-track { fill: none; stroke: var(--line); stroke-width: 7; }
 .clock-fill {
   fill: none; stroke: var(--brand-blue); stroke-width: 7; stroke-linecap: round;

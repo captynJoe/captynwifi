@@ -633,7 +633,7 @@ function rateCard(plan, withAction = false) {
   const badgeHtml = tone.badge ? '<span class="rate-badge">' + escapeHtml(tone.badge) + '</span>' : "";
   const merchandisingBadges = [
     plan.featured ? '<span class="rate-badge featured">Featured</span>' : "",
-    plan.manualPricing ? '<span class="rate-badge manual-pricing">Manual price</span>' : ""
+    plan.manualPricing && currentPricingMode() === "mixed" ? '<span class="rate-badge manual-pricing">Manual price</span>' : ""
   ].join("");
   const imageHtml = plan.imageFile
     ? `<img class="rate-card-image" src="${basePath}/uploads/plan-images/${encodeURIComponent(plan.imageFile)}" alt="" loading="lazy" />`
@@ -646,7 +646,6 @@ function rateCard(plan, withAction = false) {
     </div>
     ${badgeHtml}${merchandisingBadges}
     <strong>${fmtMoney(plan.priceKsh)}</strong>
-    <p class="rate-pitch">${escapeHtml(tone.pitch)}</p>
     <div class="rate-meta">
       <span>${durationLabel(plan.durationSeconds)}</span>
       <span class="rate-speed ${speedTierClass(plan)}">Speed ${friendlyRate(plan.rateLimit)}</span>
