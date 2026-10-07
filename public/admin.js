@@ -79,6 +79,7 @@ const planCategorySelect = document.getElementById("plan-category");
 const planDownloadInput = document.getElementById("plan-download");
 const planUploadInput = document.getElementById("plan-upload");
 const planDevicesInput = document.getElementById("plan-devices");
+const planMaxDevicesSelect = document.getElementById("plan-max-devices");
 const planEnabledInput = document.getElementById("plan-enabled");
 const planFeaturedInput = document.getElementById("plan-featured");
 const planManualPricingInput = document.getElementById("plan-manual-pricing");
@@ -1033,6 +1034,7 @@ function resetPlanForm() {
   planForm.reset();
   planDurationUnitSelect.value = "hours";
   planDevicesInput.value = "1";
+  planMaxDevicesSelect.value = "3";
   planCategorySelect.value = "standard";
   planDownloadInput.value = "";
   planUploadInput.value = "";
@@ -1073,6 +1075,7 @@ function editPlan(planId) {
   planDownloadInput.value = rate.download;
   planUploadInput.value = rate.upload;
   planDevicesInput.value = String(plan.deviceLimit || 1);
+  planMaxDevicesSelect.value = String(plan.maxDevices || 3);
   planEnabledInput.checked = Boolean(plan.enabled);
   planFeaturedInput.checked = Boolean(plan.featured);
   planManualPricingInput.checked = Boolean(plan.manualPricing);
@@ -1235,6 +1238,7 @@ planForm.addEventListener("submit", async (event) => {
       category: planCategorySelect.value,
       rateLimit: composeRateLimit(planDownloadInput.value, planUploadInput.value),
       deviceLimit: Number(planDevicesInput.value || 1),
+      maxDevices: Math.max(Number(planDevicesInput.value || 1), Number(planMaxDevicesSelect.value || 3)),
       enabled: planEnabledInput.checked,
       featured: planFeaturedInput.checked,
       manualPricing: planManualPricingInput.checked

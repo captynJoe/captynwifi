@@ -197,7 +197,8 @@
               <label class="field" for="plan-category"><span>Category</span><select id="plan-category" name="category"><option value="standard">Standard</option><option value="limited">Limited</option></select><em class="field-hint">Use Limited for free/basic packages with restricted access.</em></label>
               <label class="field" for="plan-download"><span>Download speed (Mbps)</span><input id="plan-download" name="downloadMbps" type="number" min="0" step="0.5" placeholder="10" /><em class="field-hint">How fast pages/videos load for the customer. Leave blank for no limit.</em></label>
               <label class="field" for="plan-upload"><span>Upload speed (Mbps)</span><input id="plan-upload" name="uploadMbps" type="number" min="0" step="0.5" placeholder="10" /><em class="field-hint">How fast the customer can send data (calls, uploads). Leave blank for no limit.</em></label>
-              <label class="field" for="plan-devices"><span>Devices</span><input id="plan-devices" name="deviceLimit" type="number" min="1" value="1" required /><em class="field-hint">How many phones/laptops can use this login at once.</em></label>
+              <label class="field" for="plan-devices"><span>Devices</span><input id="plan-devices" name="deviceLimit" type="number" min="1" max="3" value="1" required /><em class="field-hint">Included in the price.</em></label>
+              <label class="field" for="plan-max-devices"><span>Max devices</span><select id="plan-max-devices" name="maxDevices"><option value="1">1</option><option value="2">2</option><option value="3" selected>3</option></select><em class="field-hint">Customers can add up to this many at checkout (×1.6 for 2, ×2.1 for 3).</em></label>
               <label class="check-field inline" for="plan-enabled"><input id="plan-enabled" name="enabled" type="checkbox" checked /><span>Published</span></label>
               <label class="check-field inline" for="plan-featured"><input id="plan-featured" name="featured" type="checkbox" /><span>Featured</span></label>
               <label class="check-field inline" for="plan-manual-pricing"><input id="plan-manual-pricing" name="manualPricing" type="checkbox" /><span>Manual pricing</span></label>
@@ -386,6 +387,6 @@
       </section>
     </main>
 
-    <script src="admin.js?v=2026100703" defer data-cfasync="false"></script>
+    <script src="admin.js?v=2026100704" defer data-cfasync="false"></script>
   </body>
 </html>

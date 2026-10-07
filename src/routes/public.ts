@@ -14,6 +14,7 @@ import { bodyFieldKey, clientRateLimit, ipKey } from "../middleware/rateLimitGua
 import { ensureConnectCode, normalizeConnectCode } from "../services/connectCode.js";
 import { kickHotspotDevice } from "../services/routeros.js";
 import { deviceCap, publicDevice } from "../services/deviceLedger.js";
+import { MAX_DEVICES, addDeviceQuote, deviceOptions, devicePrice, maxDevicesFor } from "../services/devicePricing.js";
 
 export const publicRouter = Router();
 
@@ -116,7 +117,15 @@ const PUBLICLY_PURCHASABLE_SOURCES = ["captyn_admin", "captyn_dynamic"];
 const stkRequestSchema = z.object({
   planId: z.string().min(1),
   phone: z.string().min(7),
-  deviceMac: z.string().trim().optional().nullable()
+  deviceMac: z.string().trim().optional().nullable(),
+  deviceCount: z.coerce.number().int().min(1).max(MAX_DEVICES).optional()
+});
+
+const addDeviceStkSchema = z.object({
+  username: z.string().trim().min(1),
+  password: z.string().min(1),
+  phone: z.string().min(7),
+  deviceCount: z.coerce.number().int().min(2).max(MAX_DEVICES)
 });
 
 const freeAccessSchema = z.object({
@@ -309,6 +318,45 @@ function rawPayloadMerchantRequestId(rawPayload: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+// Raises the target package's device limit and re-applies its RADIUS rows
+// (Simultaneous-Use) so the extra device can sign in straight away.
+async function applyAddDevicePayment(tx: Prisma.TransactionClient, paymentIntent: WifiPaymentIntent & { site: unknown; plan: WifiPlan }, now: Date) {
+  const target = await tx.wifiEntitlement.findUnique({
+    where: { id: paymentIntent.targetEntitlementId as string },
+    include: { projection: true }
+  });
+  if (!target) throw new Error("Package for this device upgrade not found");
+
+  const deviceLimit = Math.max(target.deviceLimit, paymentIntent.deviceCount ?? target.deviceLimit);
+  const entitlement = await tx.wifiEntitlement.update({ where: { id: target.id }, data: { deviceLimit } });
+  const projection = buildRadiusProjection({
+    entitlementId: entitlement.id,
+    phone: entitlement.customerPhone,
+    username: entitlement.username,
+    password: entitlement.cleartextSecret,
+    deviceMac: entitlement.deviceMac,
+    expiresAt: entitlement.expiresAt,
+    durationSeconds: Math.max(60, Math.round((entitlement.expiresAt.getTime() - now.getTime()) / 1000)),
+    rateLimit: entitlement.rateLimit,
+    deviceLimit
+  });
+  await applyRadiusProjectionRows(tx, projection.username, projection.checkItems, projection.replyItems);
+  const radiusProjection = target.projection
+    ? await tx.wifiRadiusProjection.update({
+        where: { id: target.projection.id },
+        data: { checkItems: projection.checkItems, replyItems: projection.replyItems, status: "applied", appliedAt: now, lastError: null }
+      })
+    : await tx.wifiRadiusProjection.create({
+        data: { entitlementId: entitlement.id, username: projection.username, checkItems: projection.checkItems, replyItems: projection.replyItems, status: "applied", appliedAt: now }
+      });
+  const updatedIntent = await tx.wifiPaymentIntent.update({
+    where: { id: paymentIntent.id },
+    data: { status: "activated", confirmedAt: now },
+    include: { site: true, plan: true }
+  });
+  return { intent: updatedIntent, entitlement, projection: radiusProjection, alreadyProcessed: false, extended: true };
+}
+
 async function activatePaymentIntent(intent: WifiPaymentIntent, confirmedAt = new Date()) {
   return prisma.$transaction(async (tx) => {
     const paymentIntent = await tx.wifiPaymentIntent.findUnique({
@@ -332,6 +380,11 @@ async function activatePaymentIntent(intent: WifiPaymentIntent, confirmedAt = ne
     }
 
     const startsAt = confirmedAt;
+
+    if (paymentIntent.purpose === "add_device" && paymentIntent.targetEntitlementId) {
+      return applyAddDevicePayment(tx, paymentIntent, startsAt);
+    }
+
     const username = normalizeWifiUsername(paymentIntent.customerPhone);
 
     // If this phone already has valid, unexpired access, extend it in place
@@ -427,7 +480,7 @@ async function activatePaymentIntent(intent: WifiPaymentIntent, confirmedAt = ne
         status: "active",
         startsAt,
         expiresAt,
-        deviceLimit: paymentIntent.plan.deviceLimit,
+        deviceLimit: paymentIntent.deviceCount ?? paymentIntent.plan.deviceLimit,
         rateLimit: paymentIntent.plan.rateLimit,
         acctInterimSeconds: config.defaultAcctInterimSeconds
       }
@@ -441,7 +494,7 @@ async function activatePaymentIntent(intent: WifiPaymentIntent, confirmedAt = ne
       expiresAt,
       durationSeconds: paymentIntent.plan.durationSeconds,
       rateLimit: paymentIntent.plan.rateLimit,
-      deviceLimit: paymentIntent.plan.deviceLimit
+      deviceLimit: entitlement.deviceLimit
     });
 
     // Apply synchronously — see voucherIssuance.ts for why (auto-connect
@@ -1163,6 +1216,20 @@ publicRouter.post("/payments/mpesa/stk", publicPaymentIpLimit, async (req, res, 
     const mpesa = getMpesaStatus();
     if (!mpesa.configured) return res.status(503).json({ error: "M-PESA is not configured for WiFi payments." });
 
+    // A phone with access still running gets a top-up (activation extends
+    // it), so charge for the devices that package actually covers -- a
+    // 1-device top-up used to extend a 2-device package at the 1-device
+    // price. Otherwise the customer's choice, within what this package allows.
+    const existingActive = await prisma.wifiEntitlement.findFirst({
+      where: { username: normalizeWifiUsername(phone), ...activeAccessWhere(new Date()) },
+      orderBy: { expiresAt: "desc" },
+      select: { deviceLimit: true }
+    });
+    const deviceCount = existingActive
+      ? existingActive.deviceLimit
+      : Math.min(maxDevicesFor(plan), Math.max(plan.deviceLimit, parsed.deviceCount ?? plan.deviceLimit));
+    const amountKsh = devicePrice(plan, deviceCount);
+
     const reference = sourceReference();
     const intent = await prisma.wifiPaymentIntent.create({
       data: {
@@ -1172,7 +1239,8 @@ publicRouter.post("/payments/mpesa/stk", publicPaymentIpLimit, async (req, res, 
         sourceReference: reference,
         customerPhone: phone,
         deviceMac: normalizeDeviceMac(parsed.deviceMac),
-        amountKsh: plan.priceKsh,
+        amountKsh,
+        deviceCount,
         provider: "mpesa",
         status: "pending_confirmation"
       },
@@ -1180,7 +1248,7 @@ publicRouter.post("/payments/mpesa/stk", publicPaymentIpLimit, async (req, res, 
     });
 
     const stk = await initiateWifiStkPush({
-      amount: plan.priceKsh,
+      amount: amountKsh,
       phoneNumber: phone,
       accountReference: reference.slice(0, 12),
       transactionDesc: `CAPTYN WiFi ${plan.name}`.slice(0, 64),
@@ -1208,9 +1276,90 @@ publicRouter.post("/payments/mpesa/stk", publicPaymentIpLimit, async (req, res, 
         checkoutRequestId,
         customerMessage: stk.CustomerMessage || stk.ResponseDescription || "Check your phone to complete payment.",
         amountKsh: updated.amountKsh,
+        deviceCount: updated.deviceCount,
         site: updated.site,
         plan: updated.plan
       })
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+const addDeviceQuoteSchema = z.object({ username: z.string().trim().min(1), password: z.string().min(1) });
+
+// What adding devices to the running package costs right now.
+publicRouter.post("/entitlements/add-device/quote", publicDeviceListLimit, async (req, res, next) => {
+  try {
+    const parsed = addDeviceQuoteSchema.parse(req.body);
+    const entitlement = await authenticateEntitlementOwner(parsed.username, parsed.password);
+    if (!entitlement) return res.status(404).json({ error: "No matching active access record" });
+    const plan = await prisma.wifiPlan.findUnique({ where: { id: entitlement.planId } });
+    if (!plan || plan.priceKsh <= 0) return res.json({ data: { deviceLimit: entitlement.deviceLimit, options: [] } });
+    const options = deviceOptions(plan)
+      .filter((option) => option.devices > entitlement.deviceLimit)
+      .map((option) => ({ devices: option.devices, priceKsh: addDeviceQuote(plan, entitlement, option.devices) }));
+    return res.json({ data: { deviceLimit: entitlement.deviceLimit, options } });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// Pays to raise a running package's device limit; activatePaymentIntent
+// applies it to the package (purpose "add_device") instead of selling time.
+publicRouter.post("/payments/mpesa/add-device", publicPaymentIpLimit, async (req, res, next) => {
+  try {
+    const parsed = addDeviceStkSchema.parse(req.body);
+    const phone = formatDarajaMsisdn(parsed.phone);
+    if (!phone) return res.status(400).json({ error: "Enter a valid Safaricom phone number." });
+    const entitlement = await authenticateEntitlementOwner(parsed.username, parsed.password);
+    if (!entitlement) return res.status(404).json({ error: "No matching active access record" });
+    const plan = await prisma.wifiPlan.findUnique({ where: { id: entitlement.planId } });
+    if (!plan || plan.priceKsh <= 0) return res.status(400).json({ error: "This package can't take extra devices." });
+    if (parsed.deviceCount <= entitlement.deviceLimit || parsed.deviceCount > maxDevicesFor(plan)) {
+      return res.status(400).json({ error: "Pick a number of devices this package offers." });
+    }
+
+    const mpesa = getMpesaStatus();
+    if (!mpesa.configured) return res.status(503).json({ error: "M-PESA is not configured for WiFi payments." });
+
+    const amountKsh = addDeviceQuote(plan, entitlement, parsed.deviceCount);
+    const reference = sourceReference();
+    const intent = await prisma.wifiPaymentIntent.create({
+      data: {
+        siteId: entitlement.siteId,
+        planId: plan.id,
+        source: "captyn_wifi_portal",
+        sourceReference: reference,
+        customerPhone: phone,
+        amountKsh,
+        deviceCount: parsed.deviceCount,
+        purpose: "add_device",
+        targetEntitlementId: entitlement.id,
+        provider: "mpesa",
+        status: "pending_confirmation"
+      }
+    });
+
+    const stk = await initiateWifiStkPush({
+      amount: amountKsh,
+      phoneNumber: phone,
+      accountReference: reference.slice(0, 12),
+      transactionDesc: `CAPTYN WiFi ${parsed.deviceCount} devices`.slice(0, 64),
+      callbackUrl: config.mpesa.callbackUrl
+    });
+    const checkoutRequestId = typeof stk.CheckoutRequestID === "string" ? stk.CheckoutRequestID : null;
+    const responseCode = typeof stk.ResponseCode === "string" ? stk.ResponseCode : null;
+    const updated = await prisma.wifiPaymentIntent.update({
+      where: { id: intent.id },
+      data: {
+        providerReference: checkoutRequestId,
+        status: responseCode === "0" ? "pending_confirmation" : "failed",
+        rawPayload: stk as Prisma.InputJsonValue
+      }
+    });
+    return res.status(201).json({
+      data: toJsonSafe({ id: updated.id, status: updated.status, amountKsh, deviceCount: parsed.deviceCount })
     });
   } catch (error) {
     return next(error);

@@ -438,3 +438,22 @@ button.extend-period-btn:hover, button#pay-button:hover { filter: brightness(1.0
 .portal-app > .sign-out-device-btn { justify-self: center; min-height: 36px; padding: 0 14px; color: var(--muted); font-size: 13px; font-weight: 700; }
 .portal-app > .sign-out-device-btn:hover { color: var(--red); text-decoration: none; }
 @media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
+
+
+/* ---------- Device picker (checkout and Add a device) ---------- */
+.device-picker { display: grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: 8px; }
+.device-option {
+  min-height: 0; padding: 10px 8px; display: grid; justify-items: center; gap: 1px; white-space: normal;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); color: var(--text); text-shadow: none;
+}
+.device-option:hover { border-color: var(--line-strong); background: var(--surface-soft); transform: none; box-shadow: none; }
+.device-option strong { font-family: var(--font-display); font-size: 20px; line-height: 1; color: var(--text-strong); }
+.device-option span { color: var(--muted); font-size: 11px; font-weight: 700; }
+.device-option em { margin-top: 4px; font-style: normal; font-size: 12.5px; font-weight: 800; color: var(--text); }
+.device-option.active { border-color: var(--brand-blue); box-shadow: var(--focus-ring); background: var(--surface); }
+.device-option.active em { color: var(--brand-blue); }
+.device-locked { margin: 0; color: var(--muted); font-size: 12.5px; font-weight: 700; }
+.add-device-btn { justify-self: start; }
+.add-device-panel { display: grid; gap: 10px; margin-top: 6px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); }
+.add-device-panel .primary { min-height: 44px; border: 0; background: linear-gradient(135deg, var(--brand-blue), var(--brand-cyan)); color: #00140a; }
+:root[data-theme="light"] .add-device-panel .primary { color: #fff; }

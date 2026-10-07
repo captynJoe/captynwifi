@@ -72,6 +72,7 @@ const planCreateSchema = z.object({
   category: planCategorySchema.default("standard"),
   rateLimit: mikrotikRateLimit,
   deviceLimit: z.coerce.number().int().positive().default(1),
+  maxDevices: z.coerce.number().int().min(1).max(3).default(3),
   enabled: z.coerce.boolean().default(true),
   source: optionalText.default("captyn_admin"),
   featured: z.coerce.boolean().default(false),
@@ -615,6 +616,7 @@ adminRouter.post("/plans", async (req, res, next) => {
         category: data.category,
         rateLimit: data.rateLimit,
         deviceLimit: data.deviceLimit,
+        maxDevices: data.maxDevices,
         enabled: data.enabled,
         featured: data.featured,
         manualPricing: data.manualPricing
@@ -648,6 +650,7 @@ adminRouter.patch("/plans/:id", async (req, res, next) => {
           ...(data.category !== undefined ? { category: data.category } : {}),
           ...(data.rateLimit !== undefined ? { rateLimit: data.rateLimit } : {}),
           ...(data.deviceLimit !== undefined ? { deviceLimit: data.deviceLimit } : {}),
+          ...(data.maxDevices !== undefined ? { maxDevices: data.maxDevices } : {}),
           ...(data.enabled !== undefined ? { enabled: data.enabled } : {}),
           ...(data.featured !== undefined ? { featured: data.featured } : {}),
           ...(data.manualPricing !== undefined ? { manualPricing: data.manualPricing } : {})

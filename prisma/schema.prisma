@@ -56,6 +56,9 @@ model WifiPlan {
   category          String       @default("standard")
   rateLimit         String?
   deviceLimit       Int          @default(1)
+  // Most devices customers can choose at checkout (device selector); the
+  // package's own deviceLimit is the starting count.
+  maxDevices        Int          @default(3)
   enabled           Boolean      @default(true)
   featured          Boolean      @default(false)
   manualPricing     Boolean      @default(false)
@@ -80,6 +83,11 @@ model WifiPaymentIntent {
   customerPhone       String
   deviceMac           String?
   amountKsh           Int
+  // Devices this payment bought (null on payments from before the device
+  // selector), and whether it bought a package or added devices to one.
+  deviceCount         Int?
+  purpose             String                  @default("purchase")
+  targetEntitlementId String?
   provider            String                  @default("mpesa")
   providerReference   String?
   receiptNumber       String?

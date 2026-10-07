@@ -6,7 +6,7 @@
     <title>CAPTYN WiFi</title>
     <script src="theme.js?v=2026080402"></script>
     <link rel="stylesheet" href="theme.css?v=2026080924" />
-    <link rel="stylesheet" href="portal.css?v=2026100708" />
+    <link rel="stylesheet" href="portal.css?v=2026100709" />
   </head>
   <body>
     <main class="portal-app">
@@ -132,6 +132,13 @@
           <p id="access-devices-notice" class="access-devices-notice hidden"></p>
           <div id="access-devices-list"></div>
           <p id="access-devices-feedback" class="access-devices-feedback hidden"></p>
+          <button id="add-device-btn" type="button" class="link-btn add-device-btn hidden">+ Add a device</button>
+          <div id="add-device-panel" class="add-device-panel hidden">
+            <div id="add-device-options"></div>
+            <label class="field" for="add-device-phone"><span>M-PESA phone</span><input id="add-device-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+254" /></label>
+            <button id="add-device-pay" type="button" class="primary">Pay</button>
+            <p id="add-device-status" class="status-text"></p>
+          </div>
           <button id="access-connect-code" type="button" class="code-row hidden" data-copy-target="access-connect-code-value"><span>Code for another device</span><strong id="access-connect-code-value" class="mono"></strong><em>Copy</em></button>
         </div>
         <details id="access-login-details" class="login-details">
