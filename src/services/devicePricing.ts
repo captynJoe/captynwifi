@@ -30,17 +30,20 @@ export function deviceOptions(plan: PricedPlan): Array<{ devices: number; priceK
   return options;
 }
 
-// Adding devices to a running package costs the price difference for the
-// package, scaled to the share of its time still left (minimum KSh 1).
+// Adding devices to a running package costs the price difference for one
+// package, scaled by the time left measured in package lengths. Measured
+// against the package's own duration -- not the access record's span, which
+// top-ups stretch -- so a Day Pass topped up to 72h with 48h left pays
+// 2 x the daily difference, not a third of it. Minimum KSh 1.
 export function addDeviceQuote(
-  plan: PricedPlan,
-  entitlement: { deviceLimit: number; startsAt: Date; expiresAt: Date },
+  plan: PricedPlan & { durationSeconds: number },
+  entitlement: { deviceLimit: number; expiresAt: Date },
   devices: number,
   now = new Date()
 ): number {
   const difference = devicePrice(plan, devices) - devicePrice(plan, entitlement.deviceLimit);
-  const lengthMs = entitlement.expiresAt.getTime() - entitlement.startsAt.getTime();
-  const leftMs = entitlement.expiresAt.getTime() - now.getTime();
-  const share = lengthMs > 0 ? Math.min(1, Math.max(0, leftMs / lengthMs)) : 1;
-  return Math.max(1, Math.ceil(difference * share));
+  const leftMs = Math.max(0, entitlement.expiresAt.getTime() - now.getTime());
+  const packageMs = plan.durationSeconds * 1000;
+  const lengths = packageMs > 0 ? leftMs / packageMs : 1;
+  return Math.max(1, Math.ceil(difference * lengths));
 }

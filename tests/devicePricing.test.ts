@@ -22,10 +22,17 @@ test("maxDevices limits the selector and free packages get none", () => {
 });
 
 test("adding a device costs the difference for the time left", () => {
-  const startsAt = new Date("2026-10-07T00:00:00Z");
+  const dayPassPlan = { ...dayPass, durationSeconds: 24 * 3600 };
   const expiresAt = new Date("2026-10-08T00:00:00Z");
-  const halfway = new Date("2026-10-07T12:00:00Z");
-  // (72 - 45) * 0.5 = 13.5 -> 14
-  assert.equal(addDeviceQuote(dayPass, { deviceLimit: 1, startsAt, expiresAt }, 2, halfway), 14);
-  assert.equal(addDeviceQuote(dayPass, { deviceLimit: 1, startsAt, expiresAt }, 2, new Date("2026-10-07T23:59:00Z")), 1);
+  // (72 - 45) * 12h/24h = 13.5 -> 14
+  assert.equal(addDeviceQuote(dayPassPlan, { deviceLimit: 1, expiresAt }, 2, new Date("2026-10-07T12:00:00Z")), 14);
+  assert.equal(addDeviceQuote(dayPassPlan, { deviceLimit: 1, expiresAt }, 2, new Date("2026-10-07T23:59:00Z")), 1);
+  // to 3 devices with 6h left: (95 - 45) * 6/24 = 12.5 -> 13
+  assert.equal(addDeviceQuote(dayPassPlan, { deviceLimit: 1, expiresAt }, 3, new Date("2026-10-07T18:00:00Z")), 13);
+});
+
+test("topped-up packages pay per package length left, not per stretched span", () => {
+  const dayPassPlan = { ...dayPass, durationSeconds: 24 * 3600 };
+  // 48h left on a Day Pass topped up to 72h: 27 * 2 = 54
+  assert.equal(addDeviceQuote(dayPassPlan, { deviceLimit: 1, expiresAt: new Date("2026-10-09T12:00:00Z") }, 2, new Date("2026-10-07T12:00:00Z")), 54);
 });
