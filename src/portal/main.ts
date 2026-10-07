@@ -105,6 +105,7 @@ interface PortalState {
   expiryTimer: number | null;
   activeNeed: NeedKey;
   selectedDevices: number;
+  packageView: "all" | "multi" | "fast";
   paymentStartedAt?: number;
   currentEntitlement: Entitlement | null;
 }
@@ -115,7 +116,7 @@ function requireElement<T extends HTMLElement>(id: string): T {
   return element as T;
 }
 
-const state: PortalState = { plans: [], selectedPlanId: "", paymentId: "", pollTimer: null, hotspot: null, expiryTimer: null, activeNeed: "all", currentEntitlement: null, selectedDevices: 1 };
+const state: PortalState = { plans: [], selectedPlanId: "", paymentId: "", pollTimer: null, hotspot: null, expiryTimer: null, activeNeed: "all", currentEntitlement: null, selectedDevices: 1, packageView: "all" };
 const plansEl = requireElement<HTMLDivElement>("plans");
 const checkoutTitle = requireElement<HTMLHeadingElement>("checkout-title");
 const checkoutPrice = requireElement<HTMLElement>("checkout-price");
@@ -1063,17 +1064,19 @@ function formatKsh(value: number) {
 // The line under the price says what the money buys, so cards can be
 // compared at a glance: cost per hour (or per day), and for faster
 // packages how much faster than standard.
-function planValueLine(plan) {
+function planValueLine(plan, price = Number(plan.priceKsh || 0)) {
   const hours = Number(plan.durationSeconds || 0) / 3600;
-  const price = Number(plan.priceKsh || 0);
   if (!hours || !price) return "";
   const rate = hours >= 24 ? `KSh ${formatKsh(price / (hours / 24))}/day` : `KSh ${formatKsh(price / hours)}/hr`;
   if (!isFastPlan(plan)) return rate;
   const multiple = rateParts(plan.rateLimit).download / standardDownloadMbps();
   return `${formatKsh(multiple)}× standard speed · ${rate}`;
 }
-function planCard(plan) {
+// devices: price and describe the card for this many devices (the
+// "Multiple devices" view shows every package at 2).
+function planCard(plan, devices = plan.deviceLimit) {
   const selected = plan.id === state.selectedPlanId;
+  const price = devicePriceFor(plan, devices);
   const tone = planTone(plan);
   const badgeHtml = tone.badge ? '<span class="plan-badge">' + esc(tone.badge) + '</span>' : "";
   // Only render the image slot when a real photo exists -- a placeholder
@@ -1091,13 +1094,13 @@ function planCard(plan) {
     <span class="plan-card-body plan-row">
       <span class="plan-main">
         <h3>${esc(displayPlanName(plan))}</h3>
-        <span class="plan-facts">${duration(plan.durationSeconds)} · ${esc(plan.deviceLimit)} device${Number(plan.deviceLimit) === 1 ? "" : "s"}</span>
+        <span class="plan-facts">${duration(plan.durationSeconds)} · ${esc(devices)} device${Number(devices) === 1 ? "" : "s"}</span>
         <span class="plan-speed ${speedTierClass(plan)}">${friendlyRate(plan.rateLimit)}</span>
       </span>
       <span class="plan-side">
         ${badgeHtml}
-        <strong class="plan-price">${money(plan.priceKsh)}</strong>
-        <span class="plan-value">${esc(planValueLine(plan))}</span>
+        <strong class="plan-price">${money(price)}</strong>
+        <span class="plan-value">${esc(planValueLine(plan, price))}</span>
       </span>
     </span>
   </button>`;
@@ -1266,8 +1269,13 @@ function speedTierForPlan(plan: PortalPlan) {
   const key = family === "occasion" ? "everyday" : family;
   return SPEED_TIERS.find((tier) => tier.key === key) || null;
 }
-function renderPlanGrid(plans: PortalPlan[]) {
-  return plans.length ? plans.map(planCard).join("") : '<div class="empty-state">No packages in this group yet.</div>';
+function renderPlanGrid(plans: PortalPlan[], devices?: number) {
+  return plans.length
+    ? plans.map((plan) => planCard(plan, devices ? Math.min(maxDevicesForPlan(plan), Math.max(plan.deviceLimit, devices)) : plan.deviceLimit)).join("")
+    : '<div class="empty-state">No packages in this group yet.</div>';
+}
+function isMultiDevicePlan(plan: PortalPlan) {
+  return plan.deviceLimit > 1 || maxDevicesForPlan(plan) > 1;
 }
 // Packages are grouped by what actually drives their price -- time and
 // speed -- instead of by name, so a pricier card never sits unexplained
@@ -1285,17 +1293,41 @@ function standardDownloadMbps() {
     .sort((a, b) => a - b);
   return speeds.length ? speeds[Math.floor(speeds.length / 2)] : FAST_DOWNLOAD_MBPS;
 }
-function renderPlanSection(title: string, plans: PortalPlan[], variant = "") {
+function renderPlanSection(title: string, plans: PortalPlan[], variant = "", devices?: number) {
   if (!plans.length) return "";
   return `<section class="plan-section ${variant}">
     <h3 class="plan-section-title">${esc(title)}</h3>
-    <div class="intent-grid">${renderPlanGrid(plans)}</div>
+    <div class="intent-grid">${renderPlanGrid(plans, devices)}</div>
   </section>`;
+}
+// All / Multiple devices / Faster: the filters under "Packages".
+function renderPackageViews(visiblePlans: PortalPlan[]) {
+  const views = document.getElementById("package-views");
+  if (!views) return;
+  const available = { all: true, multi: visiblePlans.some(isMultiDevicePlan), fast: visiblePlans.some(isFastPlan) };
+  if (!available[state.packageView]) state.packageView = "all";
+  views.querySelectorAll<HTMLButtonElement>("[data-view]").forEach((button) => {
+    const view = button.dataset.view as keyof typeof available;
+    button.classList.toggle("hidden", !available[view]);
+    button.classList.toggle("active", view === state.packageView);
+    button.setAttribute("aria-selected", String(view === state.packageView));
+  });
 }
 function renderPackageBrowser() {
   const visiblePlans = customerPlans();
   if (!visiblePlans.length) {
     plansEl.innerHTML = '<div class="empty-state">No WiFi packages are published yet.</div>';
+    renderSelectedPlan();
+    return;
+  }
+  renderPackageViews(visiblePlans);
+  if (state.packageView === "multi") {
+    plansEl.innerHTML = `<div class="plan-sections">${renderPlanSection("Priced for 2 devices", visiblePlans.filter(isMultiDevicePlan), "", 2)}</div>`;
+    renderSelectedPlan();
+    return;
+  }
+  if (state.packageView === "fast") {
+    plansEl.innerHTML = `<div class="plan-sections">${renderPlanSection("Faster speeds", visiblePlans.filter(isFastPlan), "fast")}</div>`;
     renderSelectedPlan();
     return;
   }
@@ -1330,7 +1362,10 @@ function selectPlan(planId) {
   const selected = state.plans.find((plan) => plan.id === planId);
   if (!selected) return;
   state.selectedPlanId = planId;
-  state.selectedDevices = selected.deviceLimit;
+  // Picked from "Multiple devices": start checkout at 2 devices.
+  state.selectedDevices = state.packageView === "multi"
+    ? Math.min(maxDevicesForPlan(selected), Math.max(selected.deviceLimit, 2))
+    : selected.deviceLimit;
   const selectedTier = speedTierForPlan(selected);
   if (selectedTier && !isSupportOnlyPlan(selected)) state.activeNeed = selectedTier.key;
   access.classList.add("hidden");
@@ -2186,4 +2221,11 @@ addDevicePay.addEventListener("click", async () => {
     addDeviceStatus.textContent = error instanceof Error ? error.message : "Couldn't send the M-PESA prompt.";
     addDevicePay.disabled = false;
   }
+});
+
+document.getElementById("package-views")?.addEventListener("click", (event) => {
+  const button = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-view]") : null;
+  if (!button) return;
+  state.packageView = (button.dataset.view as "all" | "multi" | "fast") || "all";
+  renderPackageBrowser();
 });

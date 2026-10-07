@@ -5,7 +5,7 @@ function requireElement(id) {
         throw new Error(`Missing portal element #${id}`);
     return element;
 }
-const state = { plans: [], selectedPlanId: "", paymentId: "", pollTimer: null, hotspot: null, expiryTimer: null, activeNeed: "all", currentEntitlement: null };
+const state = { plans: [], selectedPlanId: "", paymentId: "", pollTimer: null, hotspot: null, expiryTimer: null, activeNeed: "all", currentEntitlement: null, selectedDevices: 1, packageView: "all" };
 const plansEl = requireElement("plans");
 const checkoutTitle = requireElement("checkout-title");
 const checkoutPrice = requireElement("checkout-price");
@@ -41,6 +41,12 @@ const accessConnectCode = requireElement("access-connect-code");
 const accessConnectCodeValue = requireElement("access-connect-code-value");
 const extendPeriodBtn = requireElement("extend-period-btn");
 const signOutDeviceBtn = requireElement("sign-out-device-btn");
+const addDeviceBtn = requireElement("add-device-btn");
+const addDevicePanel = requireElement("add-device-panel");
+const addDeviceOptions = requireElement("add-device-options");
+const addDevicePhone = requireElement("add-device-phone");
+const addDevicePay = requireElement("add-device-pay");
+const addDeviceStatus = requireElement("add-device-status");
 const workspaceEl = document.querySelector(".workspace");
 const introRowEl = document.querySelector(".intro-row");
 const promoSection = requireElement("promo");
@@ -629,6 +635,7 @@ function renderDeviceList(entitlement) {
     // packages show devices used out of how many different ones they allow.
     const multiDevice = limit > 1;
     accessDevicesCount.textContent = multiDevice ? `${devices.length}/${entitlement.deviceCap || limit} used` : "";
+    addDeviceBtn.classList.toggle("hidden", limit >= 3 || !addDevicePanel.classList.contains("hidden"));
     const devicesLabel = document.getElementById("access-devices-label");
     if (devicesLabel)
         devicesLabel.textContent = multiDevice ? "Devices" : "Device";
@@ -1013,9 +1020,8 @@ function formatKsh(value) {
 // The line under the price says what the money buys, so cards can be
 // compared at a glance: cost per hour (or per day), and for faster
 // packages how much faster than standard.
-function planValueLine(plan) {
+function planValueLine(plan, price = Number(plan.priceKsh || 0)) {
     const hours = Number(plan.durationSeconds || 0) / 3600;
-    const price = Number(plan.priceKsh || 0);
     if (!hours || !price)
         return "";
     const rate = hours >= 24 ? `KSh ${formatKsh(price / (hours / 24))}/day` : `KSh ${formatKsh(price / hours)}/hr`;
@@ -1024,8 +1030,11 @@ function planValueLine(plan) {
     const multiple = rateParts(plan.rateLimit).download / standardDownloadMbps();
     return `${formatKsh(multiple)}× standard speed · ${rate}`;
 }
-function planCard(plan) {
+// devices: price and describe the card for this many devices (the
+// "Multiple devices" view shows every package at 2).
+function planCard(plan, devices = plan.deviceLimit) {
     const selected = plan.id === state.selectedPlanId;
+    const price = devicePriceFor(plan, devices);
     const tone = planTone(plan);
     const badgeHtml = tone.badge ? '<span class="plan-badge">' + esc(tone.badge) + '</span>' : "";
     // Only render the image slot when a real photo exists -- a placeholder
@@ -1043,13 +1052,13 @@ function planCard(plan) {
     <span class="plan-card-body plan-row">
       <span class="plan-main">
         <h3>${esc(displayPlanName(plan))}</h3>
-        <span class="plan-facts">${duration(plan.durationSeconds)} · ${esc(plan.deviceLimit)} device${Number(plan.deviceLimit) === 1 ? "" : "s"}</span>
+        <span class="plan-facts">${duration(plan.durationSeconds)} · ${esc(devices)} device${Number(devices) === 1 ? "" : "s"}</span>
         <span class="plan-speed ${speedTierClass(plan)}">${friendlyRate(plan.rateLimit)}</span>
       </span>
       <span class="plan-side">
         ${badgeHtml}
-        <strong class="plan-price">${money(plan.priceKsh)}</strong>
-        <span class="plan-value">${esc(planValueLine(plan))}</span>
+        <strong class="plan-price">${money(price)}</strong>
+        <span class="plan-value">${esc(planValueLine(plan, price))}</span>
       </span>
     </span>
   </button>`;
@@ -1114,6 +1123,48 @@ function upgradeCard(plan) {
     </button>
   </div>`;
 }
+// Mirrors src/services/devicePricing.ts for display; the server computes
+// the real charge (and forces a top-up to the package's own device count).
+const DEVICE_PRICE_MULTIPLIERS = { 1: 1, 2: 1.6, 3: 2.1 };
+function maxDevicesForPlan(plan) {
+    if (Number(plan.priceKsh || 0) <= 0)
+        return plan.deviceLimit;
+    return Math.max(plan.deviceLimit, Math.min(3, Number(plan.maxDevices ?? 3)));
+}
+function devicePriceFor(plan, devices) {
+    if (devices <= plan.deviceLimit)
+        return Number(plan.priceKsh || 0);
+    return Math.round((Number(plan.priceKsh) * DEVICE_PRICE_MULTIPLIERS[devices]) / DEVICE_PRICE_MULTIPLIERS[plan.deviceLimit]);
+}
+// Adding time to an active package extends it at its own device count.
+function lockedDeviceCount() {
+    const entitlement = state.currentEntitlement;
+    if (!entitlement?.expiresAt || new Date(entitlement.expiresAt).getTime() <= Date.now())
+        return null;
+    return Number(entitlement.deviceLimit || 1);
+}
+function checkoutDevices(plan) {
+    const locked = lockedDeviceCount();
+    if (locked)
+        return locked;
+    return Math.min(maxDevicesForPlan(plan), Math.max(plan.deviceLimit, state.selectedDevices || plan.deviceLimit));
+}
+function devicePicker(plan) {
+    const locked = lockedDeviceCount();
+    if (locked)
+        return `<p class="device-locked">For your package's ${locked} device${locked === 1 ? "" : "s"}</p>`;
+    const max = maxDevicesForPlan(plan);
+    if (max <= plan.deviceLimit)
+        return `<p class="device-locked">${plan.deviceLimit} device${plan.deviceLimit === 1 ? "" : "s"}</p>`;
+    const chosen = checkoutDevices(plan);
+    const options = [];
+    for (let devices = plan.deviceLimit; devices <= max; devices += 1) {
+        options.push(`<button type="button" class="device-option ${devices === chosen ? "active" : ""}" data-devices="${devices}" role="radio" aria-checked="${devices === chosen}">
+      <strong>${devices}</strong><span>device${devices === 1 ? "" : "s"}</span><em>${money(devicePriceFor(plan, devices))}</em>
+    </button>`);
+    }
+    return `<div class="device-picker" role="radiogroup" aria-label="Devices">${options.join("")}</div>`;
+}
 function renderSelectedPlan() {
     const plan = currentPlan();
     if (!plan) {
@@ -1130,13 +1181,14 @@ function renderSelectedPlan() {
     }
     const isFree = Number(plan.priceKsh || 0) === 0;
     checkoutTitle.textContent = displayPlanName(plan);
-    checkoutPrice.textContent = money(plan.priceKsh);
+    const price = devicePriceFor(plan, checkoutDevices(plan));
+    checkoutPrice.textContent = money(price);
     planIdInput.value = plan.id;
     payButton.disabled = false;
-    payButton.textContent = Number(plan.priceKsh || 0) === 0 ? paymentActionLabel(plan) : `Pay ${money(plan.priceKsh)}`;
+    payButton.textContent = Number(plan.priceKsh || 0) === 0 ? paymentActionLabel(plan) : `Pay ${money(price)}`;
     phoneInput.required = !isFree;
     phoneField?.classList.toggle("hidden", isFree);
-    selectedSummary.innerHTML = `<div class="summary-meta compact"><span class="summary-pill summary-duration">${duration(plan.durationSeconds)}</span><span class="summary-pill summary-speed ${speedTierClass(plan)}">${friendlyRate(plan.rateLimit)}</span><span class="summary-pill summary-device">${esc(plan.deviceLimit)} device${Number(plan.deviceLimit) === 1 ? "" : "s"}</span></div>${upgradeCard(plan)}`;
+    selectedSummary.innerHTML = `<div class="summary-meta compact"><span class="summary-pill summary-duration">${duration(plan.durationSeconds)}</span><span class="summary-pill summary-speed ${speedTierClass(plan)}">${friendlyRate(plan.rateLimit)}</span></div>${devicePicker(plan)}${upgradeCard(plan)}`;
 }
 function comparePlansByPrice(a, b) {
     const priceDelta = Number(a?.priceKsh || 0) - Number(b?.priceKsh || 0);
@@ -1185,8 +1237,13 @@ function speedTierForPlan(plan) {
     const key = family === "occasion" ? "everyday" : family;
     return SPEED_TIERS.find((tier) => tier.key === key) || null;
 }
-function renderPlanGrid(plans) {
-    return plans.length ? plans.map(planCard).join("") : '<div class="empty-state">No packages in this group yet.</div>';
+function renderPlanGrid(plans, devices) {
+    return plans.length
+        ? plans.map((plan) => planCard(plan, devices ? Math.min(maxDevicesForPlan(plan), Math.max(plan.deviceLimit, devices)) : plan.deviceLimit)).join("")
+        : '<div class="empty-state">No packages in this group yet.</div>';
+}
+function isMultiDevicePlan(plan) {
+    return plan.deviceLimit > 1 || maxDevicesForPlan(plan) > 1;
 }
 // Packages are grouped by what actually drives their price -- time and
 // speed -- instead of by name, so a pricier card never sits unexplained
@@ -1204,18 +1261,44 @@ function standardDownloadMbps() {
         .sort((a, b) => a - b);
     return speeds.length ? speeds[Math.floor(speeds.length / 2)] : FAST_DOWNLOAD_MBPS;
 }
-function renderPlanSection(title, plans, variant = "") {
+function renderPlanSection(title, plans, variant = "", devices) {
     if (!plans.length)
         return "";
     return `<section class="plan-section ${variant}">
     <h3 class="plan-section-title">${esc(title)}</h3>
-    <div class="intent-grid">${renderPlanGrid(plans)}</div>
+    <div class="intent-grid">${renderPlanGrid(plans, devices)}</div>
   </section>`;
+}
+// All / Multiple devices / Faster: the filters under "Packages".
+function renderPackageViews(visiblePlans) {
+    const views = document.getElementById("package-views");
+    if (!views)
+        return;
+    const available = { all: true, multi: visiblePlans.some(isMultiDevicePlan), fast: visiblePlans.some(isFastPlan) };
+    if (!available[state.packageView])
+        state.packageView = "all";
+    views.querySelectorAll("[data-view]").forEach((button) => {
+        const view = button.dataset.view;
+        button.classList.toggle("hidden", !available[view]);
+        button.classList.toggle("active", view === state.packageView);
+        button.setAttribute("aria-selected", String(view === state.packageView));
+    });
 }
 function renderPackageBrowser() {
     const visiblePlans = customerPlans();
     if (!visiblePlans.length) {
         plansEl.innerHTML = '<div class="empty-state">No WiFi packages are published yet.</div>';
+        renderSelectedPlan();
+        return;
+    }
+    renderPackageViews(visiblePlans);
+    if (state.packageView === "multi") {
+        plansEl.innerHTML = `<div class="plan-sections">${renderPlanSection("Priced for 2 devices", visiblePlans.filter(isMultiDevicePlan), "", 2)}</div>`;
+        renderSelectedPlan();
+        return;
+    }
+    if (state.packageView === "fast") {
+        plansEl.innerHTML = `<div class="plan-sections">${renderPlanSection("Faster speeds", visiblePlans.filter(isFastPlan), "fast")}</div>`;
         renderSelectedPlan();
         return;
     }
@@ -1253,6 +1336,10 @@ function selectPlan(planId) {
     if (!selected)
         return;
     state.selectedPlanId = planId;
+    // Picked from "Multiple devices": start checkout at 2 devices.
+    state.selectedDevices = state.packageView === "multi"
+        ? Math.min(maxDevicesForPlan(selected), Math.max(selected.deviceLimit, 2))
+        : selected.deviceLimit;
     const selectedTier = speedTierForPlan(selected);
     if (selectedTier && !isSupportOnlyPlan(selected))
         state.activeNeed = selectedTier.key;
@@ -1577,7 +1664,7 @@ paymentForm.addEventListener("submit", async (event) => {
     if (!normalizedPhone) {
         showError("Enter a valid M-PESA number starting with +2547, +2541, 07, 01, 7, or 1.");
         payButton.disabled = false;
-        payButton.textContent = Number(plan.priceKsh || 0) === 0 ? paymentActionLabel(plan) : `Pay ${money(plan.priceKsh)}`;
+        payButton.textContent = Number(plan.priceKsh || 0) === 0 ? paymentActionLabel(plan) : `Pay ${money(devicePriceFor(plan, checkoutDevices(plan)))}`;
         phoneInput.focus();
         setStep("package");
         return;
@@ -1591,7 +1678,7 @@ paymentForm.addEventListener("submit", async (event) => {
         const response = await fetch(api("/payments/mpesa/stk"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ planId: plan.id, phone: normalizedPhone, deviceMac: state.hotspot?.mac || undefined })
+            body: JSON.stringify({ planId: plan.id, phone: normalizedPhone, deviceMac: state.hotspot?.mac || undefined, deviceCount: checkoutDevices(plan) })
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok)
@@ -2056,3 +2143,119 @@ if (new URLSearchParams(window.location.search).has("signedOut")) {
     if (note)
         note.textContent = "This device is signed out. Your package time keeps running.";
 }
+selectedSummary.addEventListener("click", (event) => {
+    const option = event.target instanceof Element ? event.target.closest("[data-devices]") : null;
+    if (!option)
+        return;
+    state.selectedDevices = Number(option.dataset.devices || 1);
+    renderSelectedPlan();
+});
+// "Add a device": pay the time-left share to raise this package's device
+// limit (POST /payments/mpesa/add-device); RADIUS lets the extra device in
+// as soon as the payment confirms.
+let addDeviceChoice = 0;
+addDeviceBtn.addEventListener("click", async () => {
+    const entitlement = state.currentEntitlement;
+    if (!entitlement)
+        return;
+    addDeviceBtn.classList.add("hidden");
+    addDevicePanel.classList.remove("hidden");
+    addDeviceStatus.textContent = "";
+    addDeviceOptions.innerHTML = '<p class="device-locked">Loading prices...</p>';
+    if (!addDevicePhone.value && /^254\d{9}$/.test(entitlement.username))
+        addDevicePhone.value = `+${entitlement.username}`;
+    try {
+        const response = await fetch(api("/entitlements/add-device/quote"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username: entitlement.username, password: entitlement.password })
+        });
+        const payload = await response.json().catch(() => ({}));
+        const options = payload.data?.options || [];
+        if (!response.ok || !options.length) {
+            addDeviceOptions.innerHTML = '<p class="device-locked">This package can\'t take more devices.</p>';
+            addDevicePay.disabled = true;
+            return;
+        }
+        addDeviceChoice = options[0].devices;
+        const render = () => {
+            addDeviceOptions.innerHTML = `<div class="device-picker">${options
+                .map((option) => `<button type="button" class="device-option ${option.devices === addDeviceChoice ? "active" : ""}" data-add-devices="${option.devices}"><strong>${option.devices}</strong><span>devices</span><em>+${money(option.priceKsh)}</em></button>`)
+                .join("")}</div>`;
+            const chosen = options.find((option) => option.devices === addDeviceChoice);
+            addDevicePay.textContent = chosen ? `Pay ${money(chosen.priceKsh)}` : "Pay";
+            addDevicePay.disabled = !chosen;
+        };
+        addDeviceOptions.onclick = (event) => {
+            const button = event.target instanceof Element ? event.target.closest("[data-add-devices]") : null;
+            if (!button)
+                return;
+            addDeviceChoice = Number(button.dataset.addDevices);
+            render();
+        };
+        render();
+    }
+    catch (_error) {
+        addDeviceOptions.innerHTML = '<p class="device-locked">Couldn\'t load prices. Try again.</p>';
+    }
+});
+addDevicePay.addEventListener("click", async () => {
+    const entitlement = state.currentEntitlement;
+    const phone = normalizeMpesaPhoneInput(addDevicePhone.value);
+    if (!entitlement || !addDeviceChoice)
+        return;
+    if (!phone) {
+        addDeviceStatus.textContent = "Enter the M-PESA number to pay with.";
+        return;
+    }
+    addDevicePay.disabled = true;
+    addDeviceStatus.textContent = "Check your phone for the M-PESA prompt.";
+    try {
+        const response = await fetch(api("/payments/mpesa/add-device"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username: entitlement.username, password: entitlement.password, phone: phone.replace(/^\+/, ""), deviceCount: addDeviceChoice })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload.data?.status === "failed")
+            throw new Error(payload.error || "Couldn't send the M-PESA prompt.");
+        const paymentId = payload.data.id;
+        const startedAt = Date.now();
+        const poll = async () => {
+            const result = await fetch(api(`/payments/${encodeURIComponent(paymentId)}`)).then((r) => r.json()).catch(() => null);
+            const status = result?.data?.status;
+            if (status === "activated") {
+                entitlement.deviceLimit = addDeviceChoice;
+                addDevicePanel.classList.add("hidden");
+                addDevicePay.disabled = false;
+                await loadConnectCode(entitlement);
+                renderDeviceList(entitlement);
+                setDeviceFeedback(`Done. This package now covers ${addDeviceChoice} devices.`, "ok");
+                return;
+            }
+            if (status === "failed") {
+                addDeviceStatus.textContent = result?.data?.failureReason || "Payment didn't go through. Try again.";
+                addDevicePay.disabled = false;
+                return;
+            }
+            if (Date.now() - startedAt > 3 * 60 * 1000) {
+                addDeviceStatus.textContent = "Still waiting for M-PESA. If you paid, your devices will update shortly.";
+                addDevicePay.disabled = false;
+                return;
+            }
+            setTimeout(poll, 3000);
+        };
+        setTimeout(poll, 3000);
+    }
+    catch (error) {
+        addDeviceStatus.textContent = error instanceof Error ? error.message : "Couldn't send the M-PESA prompt.";
+        addDevicePay.disabled = false;
+    }
+});
+document.getElementById("package-views")?.addEventListener("click", (event) => {
+    const button = event.target instanceof Element ? event.target.closest("[data-view]") : null;
+    if (!button)
+        return;
+    state.packageView = button.dataset.view || "all";
+    renderPackageBrowser();
+});

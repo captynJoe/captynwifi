@@ -6,7 +6,7 @@
     <title>CAPTYN WiFi</title>
     <script src="theme.js?v=2026080402"></script>
     <link rel="stylesheet" href="theme.css?v=2026080924" />
-    <link rel="stylesheet" href="portal.css?v=2026100709" />
+    <link rel="stylesheet" href="portal.css?v=2026100711" />
   </head>
   <body>
     <main class="portal-app">
@@ -52,6 +52,11 @@
             <div class="plans-heading">
               <h2>Packages</h2>
             </div>
+          </div>
+          <div id="package-views" class="package-views" role="tablist" aria-label="Show packages">
+            <button type="button" class="package-view active" data-view="all" role="tab" aria-selected="true">All</button>
+            <button type="button" class="package-view" data-view="multi" role="tab" aria-selected="false">Multiple devices</button>
+            <button type="button" class="package-view" data-view="fast" role="tab" aria-selected="false">Faster</button>
           </div>
           <div id="plans" class="plans"></div>
         </section>
@@ -186,6 +191,6 @@
       </div>
     </div>
 
-    <script type="module" src="portal-build/main.js?v=2026100708" data-cfasync="false"></script>
+    <script type="module" src="portal-build/main.js?v=2026100711" data-cfasync="false"></script>
   </body>
 </html>
