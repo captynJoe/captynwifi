@@ -395,3 +395,46 @@ body::after {
 button.extend-period-btn, button#pay-button { border: 0; background: linear-gradient(135deg, var(--brand-blue), var(--brand-cyan)); color: #00140a; }
 :root[data-theme="light"] button.extend-period-btn, :root[data-theme="light"] button#pay-button { color: #fff; }
 button.extend-period-btn:hover, button#pay-button:hover { filter: brightness(1.05); }
+
+
+/* ---------- Connected card: clock, devices, one primary action ---------- */
+.access-panel { gap: 16px; padding: 18px 16px 16px; }
+.access-head { display: flex; align-items: center; justify-content: center; gap: 8px; }
+.access-head h2 { font-size: 17px; }
+.live-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 4px var(--green-soft); animation: live-pulse 2s ease-in-out infinite; }
+@keyframes live-pulse { 50% { box-shadow: 0 0 0 7px transparent; } }
+
+.access-clock { display: grid; justify-items: center; gap: 8px; }
+.clock { position: relative; width: min(200px, 60vw); aspect-ratio: 1; }
+.clock svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.clock-track { fill: none; stroke: var(--line); stroke-width: 7; }
+.clock-fill {
+  fill: none; stroke: var(--brand-blue); stroke-width: 7; stroke-linecap: round;
+  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--brand-blue) 55%, transparent));
+  transition: stroke-dashoffset .6s ease;
+}
+.clock-center { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; gap: 2px; }
+.clock-center strong { font-family: var(--font-display); font-size: clamp(26px, 8vw, 34px); font-weight: 800; color: var(--text-strong); font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+.clock-center small { color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.clock-exp { margin: 0; color: var(--muted); font-size: 11.5px; font-weight: 800; letter-spacing: .08em; }
+.clock-exp strong { margin-left: 4px; color: var(--text); font-weight: 700; letter-spacing: 0; }
+
+.access-devices { gap: 6px; padding: 12px 14px; }
+.access-devices-head { font-size: 11px; }
+.device-row { min-height: 30px; }
+.code-row {
+  width: 100%; min-height: 0; margin-top: 6px; padding: 10px 12px; display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 10px;
+  text-align: left; white-space: nowrap; border: 1px dashed var(--line-strong); border-radius: 10px; background: transparent; color: var(--text); text-shadow: none;
+}
+.code-row:hover { border-color: var(--brand-blue); background: transparent; transform: none; box-shadow: none; }
+.code-row span { overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 12px; font-weight: 700; }
+.code-row strong { font-family: var(--font-mono); font-size: 16px; letter-spacing: .14em; color: var(--text-strong); }
+.code-row em { font-style: normal; font-size: 12px; font-weight: 800; color: var(--brand-blue); }
+
+.login-details summary { padding: 10px 14px; font-size: 13px; color: var(--muted); }
+.access-panel > .extend-period-btn { margin-top: 2px; }
+
+/* Sign out sits outside the card, just above the footer. */
+.portal-app > .sign-out-device-btn { justify-self: center; min-height: 36px; padding: 0 14px; color: var(--muted); font-size: 13px; font-weight: 700; }
+.portal-app > .sign-out-device-btn:hover { color: var(--red); text-decoration: none; }
+@media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }

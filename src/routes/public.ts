@@ -199,6 +199,7 @@ async function publicEntitlement(entitlement: {
   id: string;
   username: string;
   cleartextSecret: string;
+  startsAt: Date;
   expiresAt: Date;
   deviceLimit: number;
   rateLimit: string | null;
@@ -211,18 +212,16 @@ async function publicEntitlement(entitlement: {
   return {
     username: entitlement.username,
     password: entitlement.cleartextSecret,
+    // startsAt lets the portal draw time left as a share of the package.
+    startsAt: entitlement.startsAt,
     expiresAt: entitlement.expiresAt,
     deviceLimit: entitlement.deviceLimit,
+    deviceCap: deviceCap(entitlement),
     rateLimit: entitlement.rateLimit,
     pausedSince: entitlement.outagePausedAt,
     totalCreditedSeconds,
     deviceCount: devices.length,
-    devices: devices.map((device) => ({
-      deviceMac: device.deviceMac,
-      label: device.label,
-      addedAt: device.addedAt,
-      lastSeenAt: device.lastSeenAt
-    }))
+    devices: devices.map(publicDevice)
   };
 }
 
@@ -1138,6 +1137,7 @@ publicRouter.get("/entitlements/:username/status", async (req, res, next) => {
     return res.json({
       data: toJsonSafe({
         status: entitlement.status,
+        startsAt: entitlement.startsAt,
         expiresAt: entitlement.expiresAt,
         deviceLimit: entitlement.deviceLimit,
         deviceCount

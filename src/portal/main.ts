@@ -63,6 +63,7 @@ interface Entitlement {
   connectCode?: string;
   deviceMac?: string;
   deviceCap?: number;
+  startsAt?: string;
 }
 
 interface NotificationData {
@@ -146,7 +147,6 @@ const accessDevicesList = requireElement<HTMLElement>("access-devices-list");
 const accessDevicesFeedback = requireElement<HTMLElement>("access-devices-feedback");
 const accessConnectCode = requireElement<HTMLButtonElement>("access-connect-code");
 const accessConnectCodeValue = requireElement<HTMLElement>("access-connect-code-value");
-const accessConnectCodeHint = requireElement<HTMLElement>("access-connect-code-hint");
 const extendPeriodBtn = requireElement<HTMLButtonElement>("extend-period-btn");
 const signOutDeviceBtn = requireElement<HTMLButtonElement>("sign-out-device-btn");
 const workspaceEl = document.querySelector<HTMLElement>(".workspace");
@@ -714,7 +714,6 @@ function renderDeviceList(entitlement: Entitlement) {
     : '<div class="device-row-empty">No devices registered yet.</div>';
   accessConnectCodeValue.textContent = entitlement.connectCode || "";
   accessConnectCode.classList.toggle("hidden", !entitlement.connectCode);
-  accessConnectCodeHint.classList.toggle("hidden", !entitlement.connectCode);
 }
 function hideDeviceLimitNotice() {
   accessDevicesNotice.classList.add("hidden");
@@ -772,21 +771,37 @@ document.addEventListener("click", (event) => {
   event.preventDefault();
   void removeDevice(button.dataset.removeDeviceMac || "");
 });
-function updateAccessTimeLeft(remainingMs, deviceLimit?: number) {
-  if (!accessTimeLeft) return;
-  const deviceBadge = Number(deviceLimit) > 0
-    ? `<span class="time-left-devices">&middot; ${esc(String(deviceLimit))} device${Number(deviceLimit) === 1 ? "" : "s"}</span>`
-    : "";
-  accessTimeLeft.innerHTML = `<span class="time-left-label">Time left</span>${esc(formatTimeLeft(remainingMs))}${deviceBadge}`;
+function clockLabel(remainingMs: number) {
+  const totalMinutes = Math.max(0, Math.floor(remainingMs / 60000));
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${String(minutes).padStart(2, "0")}m`;
+  if (totalMinutes > 0) return `${minutes}m`;
+  return `${Math.max(0, Math.floor(remainingMs / 1000))}s`;
 }
-function startExpiryWatch(expiresAt, deviceLimit?: number) {
+// Time left as a ring: the arc is the share of the package still to run.
+const CLOCK_CIRCUMFERENCE = 2 * Math.PI * 52;
+function updateAccessTimeLeft(remainingMs: number, totalMs?: number) {
+  if (!accessTimeLeft) return;
+  const share = totalMs && totalMs > 0 ? Math.min(1, Math.max(0, remainingMs / totalMs)) : 1;
+  accessTimeLeft.innerHTML = `<svg viewBox="0 0 120 120" aria-hidden="true">
+      <circle class="clock-track" cx="60" cy="60" r="52"/>
+      <circle class="clock-fill" cx="60" cy="60" r="52" stroke-dasharray="${CLOCK_CIRCUMFERENCE.toFixed(1)}" stroke-dashoffset="${(CLOCK_CIRCUMFERENCE * (1 - share)).toFixed(1)}"/>
+    </svg>
+    <span class="clock-center"><strong>${esc(clockLabel(remainingMs))}</strong><small>left</small></span>`;
+}
+function startExpiryWatch(expiresAt, startsAt?: string) {
   const target = new Date(expiresAt).getTime();
+  const start = startsAt ? new Date(startsAt).getTime() : NaN;
+  const totalMs = Number.isFinite(start) ? target - start : undefined;
   if (!Number.isFinite(target)) return;
   if (state.expiryTimer) clearInterval(state.expiryTimer);
   const WARN_MS = 2 * 60 * 1000;
   function tick() {
     const remainingMs = target - Date.now();
-    updateAccessTimeLeft(remainingMs, deviceLimit);
+    updateAccessTimeLeft(remainingMs, totalMs);
     if (remainingMs <= 0) {
       expiryBanner.classList.remove("hidden");
       expiryBanner.classList.add("expired");
@@ -855,7 +870,7 @@ async function saveAccessBeforeLeaving(username: string, password: string) {
   try {
     const response = await fetch(api(`/entitlements/${encodeURIComponent(username)}/status`));
     const data = response.ok ? (await response.json())?.data : null;
-    if (data?.expiresAt) saveRememberedAccess({ username, password, expiresAt: data.expiresAt, deviceLimit: data.deviceLimit });
+    if (data?.expiresAt) saveRememberedAccess({ username, password, expiresAt: data.expiresAt, startsAt: data.startsAt, deviceLimit: data.deviceLimit });
   } catch (_error) {}
 }
 async function attemptAutoConnect(username, password, statusEl, formEl, { freshGrant = false } = {}) {
@@ -891,6 +906,7 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
     let devices: EntitlementDevice[] = [];
     let connectCode: string | undefined;
     let deviceCap: number | undefined;
+    let startsAt: string | undefined;
     try {
       const [statusResponse, devicesResponse] = await Promise.all([
         fetch(api(`/entitlements/${encodeURIComponent(username)}/status`)),
@@ -902,6 +918,7 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
       ]);
       const data = statusResponse.ok ? (await statusResponse.json())?.data : null;
       expiresAt = data?.expiresAt || null;
+      startsAt = data?.startsAt;
       deviceLimit = data?.deviceLimit;
       const devicesData = devicesResponse.ok ? (await devicesResponse.json())?.data : null;
       devices = devicesData?.devices || [];
@@ -910,7 +927,7 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
     } catch (_error) {}
     if (expiresAt) {
       showConnectedPanel(
-        { username, password, expiresAt, deviceLimit, devices, connectCode, deviceCap },
+        { username, password, expiresAt, startsAt, deviceLimit, devices, connectCode, deviceCap },
         { heading: "You're connected", message: "You're all set. You can browse now.", skipAutoConnect: true }
       );
     } else {
@@ -1297,6 +1314,7 @@ function saveRememberedAccess(entitlement) {
         username: entitlement.username,
         password: entitlement.password,
         expiresAt: entitlement.expiresAt,
+        startsAt: entitlement.startsAt,
         deviceLimit: entitlement.deviceLimit,
         // The router's post-login redirect back to /wifi/ carries no MAC, so
         // keep it here for "Sign out this device".
@@ -1415,7 +1433,8 @@ function showConnectedPanel(entitlement: Entitlement, { heading, skipAutoConnect
   accessUsernameCard?.classList.toggle("hidden", Boolean(hideCredentials));
   accessPasswordCard?.classList.toggle("hidden", Boolean(hideCredentials));
   accessRecoveryCard?.classList.toggle("hidden", !recoveryReference);
-  accessExpires.textContent = new Date(entitlement.expiresAt).toLocaleString();
+  accessExpires.textContent = new Date(entitlement.expiresAt).toLocaleString(undefined, { hour: "numeric", minute: "2-digit", month: "short", day: "numeric" });
+  if (introRowEl) introRowEl.classList.add("hidden");
   renderOutageNote(entitlement);
   state.currentEntitlement = entitlement;
   hideDeviceLimitNotice();
@@ -1428,7 +1447,7 @@ function showConnectedPanel(entitlement: Entitlement, { heading, skipAutoConnect
   setStep("access");
   closeCheckoutSheet();
   access.scrollIntoView({ behavior: "smooth", block: "start" });
-  startExpiryWatch(entitlement.expiresAt, entitlement.deviceLimit);
+  startExpiryWatch(entitlement.expiresAt, entitlement.startsAt);
   saveRememberedAccess(entitlement);
   signOutDeviceBtn.classList.toggle("hidden", !currentDeviceMac());
   if (skipAutoConnect) return;
@@ -1444,6 +1463,7 @@ function showConnectedPanel(entitlement: Entitlement, { heading, skipAutoConnect
 }
 extendPeriodBtn?.addEventListener("click", () => {
   if (workspaceEl) workspaceEl.classList.remove("hidden");
+  if (introRowEl) introRowEl.classList.remove("hidden");
   resetPaymentAttempt();
   // Always land on "all" here rather than whatever tier happens to still be
   // selected from earlier in the session (e.g. the tier they originally

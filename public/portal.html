@@ -6,7 +6,7 @@
     <title>CAPTYN WiFi</title>
     <script src="theme.js?v=2026080402"></script>
     <link rel="stylesheet" href="theme.css?v=2026080924" />
-    <link rel="stylesheet" href="portal.css?v=2026100706" />
+    <link rel="stylesheet" href="portal.css?v=2026100707" />
   </head>
   <body>
     <main class="portal-app">
@@ -28,6 +28,7 @@
             <div id="settings-menu" class="settings-menu hidden" role="menu" aria-label="Portal settings">
               <button id="theme-toggle-btn" class="theme-toggle settings-menu-item" type="button" role="menuitem">Theme</button>
               <button id="welcome-access-btn" class="settings-menu-item welcome-access-btn" type="button" role="menuitem">Start welcome access</button>
+              <a class="settings-menu-item" href="devices.html" role="menuitem">Manage devices</a>
             </div>
           </div>
         </div>
@@ -114,26 +115,24 @@
       </section>
 
       <section id="access" class="access-panel hidden">
-        <div class="section-head">
-          <h2 id="access-heading">You're connected</h2>
-          <span class="pill ok">Active</span>
+        <div class="access-head">
+          <span class="live-dot" aria-hidden="true"></span>
+          <h2 id="access-heading">You're online</h2>
         </div>
-        <div class="access-overview">
-          <div class="access-time-left" id="access-time-left"></div>
-          <div class="credential static expires-card"><span>Expires</span><strong id="access-expires"></strong></div>
+        <div class="access-clock">
+          <div id="access-time-left" class="clock" role="timer" aria-live="off"></div>
+          <p class="clock-exp">EXP <strong id="access-expires"></strong></p>
         </div>
         <p id="access-outage-note" class="access-outage-note hidden"></p>
         <div id="access-devices" class="access-devices hidden">
           <div class="access-devices-head">
-            <span>Your devices</span>
+            <span>Devices</span>
             <strong id="access-devices-count"></strong>
           </div>
           <p id="access-devices-notice" class="access-devices-notice hidden"></p>
           <div id="access-devices-list"></div>
           <p id="access-devices-feedback" class="access-devices-feedback hidden"></p>
-          <button id="access-connect-code" type="button" class="credential access-connect-code hidden" data-copy-target="access-connect-code-value"><span>Code for another device</span><strong id="access-connect-code-value" class="mono"></strong><em>Copy</em></button>
-          <p id="access-connect-code-hint" class="access-connect-code-hint hidden">On the new device, open <strong>wifi.captyn.shop</strong> and enter this code.</p>
-          <a class="access-devices-manage-link" href="devices.html">Manage devices from any browser &rarr;</a>
+          <button id="access-connect-code" type="button" class="code-row hidden" data-copy-target="access-connect-code-value"><span>Code for another device</span><strong id="access-connect-code-value" class="mono"></strong><em>Copy</em></button>
         </div>
         <details id="access-login-details" class="login-details">
           <summary>Connection details</summary>
@@ -144,9 +143,8 @@
           </div>
         </details>
         <button id="extend-period-btn" class="secondary extend-period-btn" type="button">Add time</button>
-        <button id="sign-out-device-btn" class="link-btn sign-out-device-btn hidden" type="button">Sign out this device</button>
-        <a class="sponsor-link access-sponsor" href="https://captyn.shop/" target="_blank" rel="noopener">Powered by captyn.shop</a>
       </section>
+      <button id="sign-out-device-btn" class="link-btn sign-out-device-btn hidden" type="button">Sign out this device</button>
 
       <div id="manual-connect-fallback" class="manual-connect hidden">
         <div class="manual-connect-card">
@@ -181,6 +179,6 @@
       </div>
     </div>
 
-    <script type="module" src="portal-build/main.js?v=2026100706" data-cfasync="false"></script>
+    <script type="module" src="portal-build/main.js?v=2026100707" data-cfasync="false"></script>
   </body>
 </html>
