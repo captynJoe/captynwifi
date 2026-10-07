@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { config } from "../config.js";
 import { prisma } from "../prisma.js";
 import { kickHotspotUser } from "./routeros.js";
-import { parseMikrotikRateLimit, rateLimitEquals, scaleMikrotikRateLimit } from "./rateLimit.js";
+import { parseMikrotikRateLimit, rateLimitEquals, scaleMikrotikRateLimit, withBurst } from "./rateLimit.js";
 
 type PressureState = "GREEN" | "YELLOW" | "RED" | "CRITICAL";
 type PriorityClass = "welcome" | "standard" | "protected";
@@ -291,7 +291,7 @@ export class WifiDynamicGovernor {
     if (!sample.rateLimit || !parseMikrotikRateLimit(sample.rateLimit)) return;
 
     const priority = priorityClass(sample);
-    const targetRateLimit = scaleMikrotikRateLimit(sample.rateLimit, STATE_FACTORS[state][priority]);
+    const targetRateLimit = withBurst(scaleMikrotikRateLimit(sample.rateLimit, STATE_FACTORS[state][priority]));
     if (!targetRateLimit) return;
 
     const currentRateLimit = sample.currentRateLimit || sample.rateLimit;

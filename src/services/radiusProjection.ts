@@ -1,3 +1,4 @@
+import { withBurst } from "./rateLimit.js";
 import { randomBytes } from "node:crypto";
 import { config } from "../config.js";
 
@@ -66,7 +67,7 @@ export function buildRadiusProjection(input: BuildEntitlementInput) {
   );
 
   if (input.rateLimit) {
-    replyItems.unshift({ attribute: "Mikrotik-Rate-Limit", op: ":=", value: input.rateLimit });
+    replyItems.unshift({ attribute: "Mikrotik-Rate-Limit", op: ":=", value: withBurst(input.rateLimit) ?? input.rateLimit });
   }
 
   return {
