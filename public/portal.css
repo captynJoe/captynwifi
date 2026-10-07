@@ -390,3 +390,8 @@ body::after {
 .sign-out-device-btn { justify-self: center; color: var(--muted); }
 .sign-out-device-btn:hover { color: var(--red); }
 .device-tag.signed-out { background: var(--surface-soft); color: var(--muted); }
+/* button.* so these beat theme.css's button.secondary (which made "Add time"
+   white text on a cream button in light mode). */
+button.extend-period-btn, button#pay-button { border: 0; background: linear-gradient(135deg, var(--brand-blue), var(--brand-cyan)); color: #00140a; }
+:root[data-theme="light"] button.extend-period-btn, :root[data-theme="light"] button#pay-button { color: #fff; }
+button.extend-period-btn:hover, button#pay-button:hover { filter: brightness(1.05); }

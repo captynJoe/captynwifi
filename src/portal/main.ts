@@ -143,7 +143,6 @@ const accessDevices = requireElement<HTMLElement>("access-devices");
 const accessDevicesCount = requireElement<HTMLElement>("access-devices-count");
 const accessDevicesNotice = requireElement<HTMLElement>("access-devices-notice");
 const accessDevicesList = requireElement<HTMLElement>("access-devices-list");
-const accessDevicesAddBtn = requireElement<HTMLButtonElement>("access-devices-add-btn");
 const accessDevicesFeedback = requireElement<HTMLElement>("access-devices-feedback");
 const accessConnectCode = requireElement<HTMLButtonElement>("access-connect-code");
 const accessConnectCodeValue = requireElement<HTMLElement>("access-connect-code-value");
@@ -700,13 +699,15 @@ function renderDeviceList(entitlement: Entitlement) {
   accessDevicesList.innerHTML = devices.length
     ? devices
         .map((device) => {
-          const isThisDevice = state.hotspot?.mac && device.deviceMac === state.hotspot.mac;
+          const isThisDevice = device.deviceMac === currentDeviceMac();
           return `<div class="device-row">
             <span class="mono">${esc(device.deviceMac)}</span>
             ${isThisDevice ? '<span class="device-tag">This device</span>' : ""}
             ${device.signedOut
               ? '<span class="device-tag signed-out">Signed out</span>'
-              : `<button class="link-btn" type="button" data-remove-device-mac="${esc(device.deviceMac)}">Sign out</button>`}
+              : isThisDevice
+                ? ""
+                : `<button class="link-btn" type="button" data-remove-device-mac="${esc(device.deviceMac)}">Sign out</button>`}
           </div>`;
         })
         .join("")
@@ -812,25 +813,13 @@ function setDeviceFeedback(message: string, tone: "ok" | "bad") {
   accessDevicesFeedback.classList.remove("hidden");
 }
 
-// Called two ways: silently after a device is already online (see
-// attemptAutoConnect below -- MikroTik/RADIUS grants network access first,
-// gated only by Simultaneous-Use, completely independent of this) so
-// returning devices keep reconnecting automatically, and explicitly when
-// the customer taps "+ Add this device" (announce: true) for a visible,
-// deliberate registration with clear before/after feedback. A 409 here
-// never means "you're offline" -- it's surfaced as a dismissible notice,
-// not an error that blocks anything.
-async function rememberDeviceForEntitlement(username, password, { announce = false }: { announce?: boolean } = {}) {
+// Links this device to the package before signing in, so the returning-
+// device lookup recognises it next time. Devices are recorded on the
+// package by FreeRADIUS at sign-in regardless; a 409 here means the package
+// has used its allowance of different devices.
+async function rememberDeviceForEntitlement(username, password) {
   const mac = state.hotspot?.mac;
-  if (!mac) {
-    if (announce) setDeviceFeedback("Connect to the CAPTYN WiFi network first, then try again.", "bad");
-    return;
-  }
-  if (announce) {
-    accessDevicesFeedback.classList.add("hidden");
-    accessDevicesAddBtn.disabled = true;
-    accessDevicesAddBtn.textContent = "Adding...";
-  }
+  if (!mac) return;
   try {
     const response = await fetch(api("/entitlements/link-device"), {
       method: "POST",
@@ -840,13 +829,12 @@ async function rememberDeviceForEntitlement(username, password, { announce = fal
     const payload = await response.json().catch(() => ({}));
     if (response.status === 409) {
       showDeviceLimitNotice(
-        payload.message || "You've reached your device limit. Remove a device to keep using this one automatically.",
+        payload.message || "This package has reached its device limit.",
         payload.data?.devices || [],
         payload.data?.deviceLimit,
         username,
         password
       );
-      if (announce) setDeviceFeedback(payload.message || "You're already at your device limit. Remove one below first.", "bad");
       return;
     }
     hideDeviceLimitNotice();
@@ -854,33 +842,13 @@ async function rememberDeviceForEntitlement(username, password, { announce = fal
       if (!state.currentEntitlement) state.currentEntitlement = { username, password, expiresAt: "" };
       state.currentEntitlement.devices = payload.data.devices;
       if (payload.data.deviceLimit) state.currentEntitlement.deviceLimit = payload.data.deviceLimit;
+      if (payload.data.deviceCap) state.currentEntitlement.deviceCap = payload.data.deviceCap;
       renderDeviceList(state.currentEntitlement);
-      if (announce) {
-        setDeviceFeedback(
-          payload.data.status === "already_registered"
-            ? "This device is already registered."
-            : "Device added — it's permanently registered on this plan until you remove it.",
-          "ok"
-        );
-      }
     }
   } catch (_error) {
-    // Best-effort on the silent path -- never block the already-successful
-    // connection on this. The explicit path still owes the customer a
-    // response either way.
-    if (announce) setDeviceFeedback("Couldn't reach the server. Try again.", "bad");
-  } finally {
-    if (announce) {
-      accessDevicesAddBtn.disabled = false;
-      accessDevicesAddBtn.textContent = "+ Add this device";
-    }
+    // Best-effort -- never block the connection on this.
   }
 }
-accessDevicesAddBtn.addEventListener("click", () => {
-  const entitlement = state.currentEntitlement;
-  if (!entitlement) return;
-  void rememberDeviceForEntitlement(entitlement.username, entitlement.password, { announce: true });
-});
 // Saved before leaving for the router, so the page the router sends the
 // device back to (/wifi/, no hotspot params) opens on the connected screen.
 async function saveAccessBeforeLeaving(username: string, password: string) {
