@@ -87,7 +87,9 @@ export const config = {
     serviceName: process.env.CAPTYN_WIFI_OUTAGE_CREDIT_SERVICE?.trim() || "captyn-wifi-radius-worker",
     graceSeconds: readPositiveInt("CAPTYN_WIFI_OUTAGE_CREDIT_GRACE_SECONDS", 180),
     accountingGraceSeconds: readPositiveInt("CAPTYN_WIFI_OUTAGE_CREDIT_ACCOUNTING_GRACE_SECONDS", 300),
-    maxCreditSeconds: readPositiveInt("CAPTYN_WIFI_OUTAGE_CREDIT_MAX_SECONDS", 60 * 60 * 24),
+    // How long a customer frozen by an outage has to reconnect and keep
+    // their remaining time; after that it's forfeited.
+    reconnectWindowSeconds: readPositiveInt("CAPTYN_WIFI_OUTAGE_CREDIT_MAX_SECONDS", 60 * 60 * 48),
     batchSize: readPositiveInt("CAPTYN_WIFI_OUTAGE_CREDIT_BATCH_SIZE", 500)
   },
   routeros: {

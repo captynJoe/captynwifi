@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { decideAccountingOutageAction, decideResumeAction } from "../src/services/outageCredit.js";
 
 const GRACE_SECONDS = 600;
-const MAX_CREDIT_SECONDS = 60 * 60 * 24;
+const RECONNECT_WINDOW_SECONDS = 60 * 60 * 48;
 
 test("real activity moving forward advances the checkpoint and is never treated as an outage", () => {
   const checkpoint = new Date("2026-08-16T10:00:00Z");
@@ -56,32 +56,32 @@ test("a still-disconnected entitlement stays paused with no reconnect observed",
   const pausedAt = new Date("2026-08-16T10:00:00Z");
   const now = new Date(pausedAt.getTime() + 5 * 60 * 1000);
 
-  const decision = decideResumeAction(pausedAt, null, now, MAX_CREDIT_SECONDS);
+  const decision = decideResumeAction(pausedAt, null, now, RECONNECT_WINDOW_SECONDS);
   assert.deepEqual(decision, { type: "still-paused" });
 });
 
-test("a reconnect resumes and credits exactly the personal gap, capped by maxCreditSeconds", () => {
+test("a reconnect inside the window resumes with exactly the time that was frozen", () => {
   const pausedAt = new Date("2026-08-16T10:00:00Z");
   const reconnectedAt = new Date("2026-08-16T10:07:00Z");
   const now = new Date("2026-08-16T10:07:05Z");
 
-  const decision = decideResumeAction(pausedAt, reconnectedAt, now, MAX_CREDIT_SECONDS);
+  const decision = decideResumeAction(pausedAt, reconnectedAt, now, RECONNECT_WINDOW_SECONDS);
   assert.deepEqual(decision, { type: "resume", creditedSeconds: 7 * 60, reconnectedAt });
 });
 
-test("a reconnect gap longer than maxCreditSeconds is capped, not fully credited", () => {
+test("a reconnect after the window closed gets nothing back", () => {
   const pausedAt = new Date("2026-08-16T10:00:00Z");
-  const reconnectedAt = new Date(pausedAt.getTime() + (MAX_CREDIT_SECONDS + 3600) * 1000);
+  const reconnectedAt = new Date(pausedAt.getTime() + (RECONNECT_WINDOW_SECONDS + 3600) * 1000);
   const now = new Date(reconnectedAt.getTime() + 1000);
 
-  const decision = decideResumeAction(pausedAt, reconnectedAt, now, MAX_CREDIT_SECONDS);
-  assert.deepEqual(decision, { type: "resume", creditedSeconds: MAX_CREDIT_SECONDS, reconnectedAt });
+  const decision = decideResumeAction(pausedAt, reconnectedAt, now, RECONNECT_WINDOW_SECONDS);
+  assert.deepEqual(decision, { type: "resume", creditedSeconds: 0, reconnectedAt });
 });
 
-test("a customer who never reconnects is force-released after maxCreditSeconds so they don't block expiry forever", () => {
+test("a customer who never reconnects forfeits the remaining time when the window closes", () => {
   const pausedAt = new Date("2026-08-16T10:00:00Z");
-  const now = new Date(pausedAt.getTime() + (MAX_CREDIT_SECONDS + 1) * 1000);
+  const now = new Date(pausedAt.getTime() + (RECONNECT_WINDOW_SECONDS + 1) * 1000);
 
-  const decision = decideResumeAction(pausedAt, null, now, MAX_CREDIT_SECONDS);
-  assert.deepEqual(decision, { type: "resume", creditedSeconds: MAX_CREDIT_SECONDS, reconnectedAt: now });
+  const decision = decideResumeAction(pausedAt, null, now, RECONNECT_WINDOW_SECONDS);
+  assert.deepEqual(decision, { type: "resume", creditedSeconds: 0, reconnectedAt: now });
 });

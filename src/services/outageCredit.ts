@@ -69,25 +69,27 @@ export function decideAccountingOutageAction(
 
 // Pure decision function for the per-entitlement resume sweep. `reconnectedAt`
 // is that specific username's own next radacct session start after it was
-// paused -- not any fleet-wide signal. A customer who never reconnects is
-// force-released after maxCreditSeconds so they don't block expiry forever.
+// paused -- not any fleet-wide signal.
+//
+// A paused package keeps its remaining time only if the customer reconnects
+// within the reconnect window: then the clock resumes exactly where it
+// stopped (credit = the frozen gap). If the window closes first, the
+// remaining time is forfeited (credit 0, so the already-past expiry ends it).
+// It used to credit the whole window instead, quietly handing the
+// remaining time back a day later to someone who never came back.
 export function decideResumeAction(
   pausedAt: Date,
   reconnectedAt: Date | null,
   now: Date,
-  maxCreditSeconds: number
+  reconnectWindowSeconds: number
 ): ResumeDecision {
   if (reconnectedAt) {
-    return {
-      type: "resume",
-      creditedSeconds: Math.min(secondsBetween(pausedAt, reconnectedAt), maxCreditSeconds),
-      reconnectedAt
-    };
+    const gap = secondsBetween(pausedAt, reconnectedAt);
+    return { type: "resume", creditedSeconds: gap <= reconnectWindowSeconds ? gap : 0, reconnectedAt };
   }
 
-  const elapsed = secondsBetween(pausedAt, now);
-  if (elapsed > maxCreditSeconds) {
-    return { type: "resume", creditedSeconds: maxCreditSeconds, reconnectedAt: now };
+  if (secondsBetween(pausedAt, now) > reconnectWindowSeconds) {
+    return { type: "resume", creditedSeconds: 0, reconnectedAt: now };
   }
 
   return { type: "still-paused" };
@@ -212,6 +214,17 @@ export async function applyOutageCredit(prisma: PrismaClient): Promise<PauseSumm
       return { paused: false, pausedCount: 0, outageSeconds };
     }
 
+    // The worker being down doesn't take anyone offline -- RADIUS and the
+    // router keep working; it only runs background jobs. A routine restart
+    // (npm ci + build, ~3 min) used to freeze every package and hand out
+    // free time. Only freeze if RADIUS accounting also went silent, i.e.
+    // customers really were cut off (Lane B catches that case too).
+    const lastActivity = await lastRadiusAccountingActivity(tx);
+    if (lastActivity && lastActivity.getTime() > lastSeenAt.getTime() + config.outageCredit.graceSeconds * 1000) {
+      await upsertHeartbeat(tx, service, now);
+      return { paused: false, pausedCount: 0, outageSeconds };
+    }
+
     const pausedCount = await pauseActiveEntitlements(tx, lastSeenAt, service);
     await upsertHeartbeat(tx, service, now);
 
@@ -328,7 +341,7 @@ export async function resumePausedEntitlements(prisma: PrismaClient): Promise<Re
       `;
       const reconnectedAt = reconnectRows[0]?.acctstarttime ?? null;
 
-      const decision = decideResumeAction(pausedAt, reconnectedAt, now, config.outageCredit.maxCreditSeconds);
+      const decision = decideResumeAction(pausedAt, reconnectedAt, now, config.outageCredit.reconnectWindowSeconds);
       if (decision.type === "still-paused") continue;
 
       if (decision.creditedSeconds > 0) {

@@ -1216,7 +1216,7 @@ adminRouter.get("/outage-credits", async (_req, res, next) => {
         enabled: config.outageCredit.enabled,
         graceSeconds: config.outageCredit.graceSeconds,
         accountingGraceSeconds: config.outageCredit.accountingGraceSeconds,
-        maxCreditSeconds: config.outageCredit.maxCreditSeconds
+        reconnectWindowSeconds: config.outageCredit.reconnectWindowSeconds
       },
       heartbeats,
       currentlyPaused,

@@ -829,7 +829,7 @@ function renderOutageCredits() {
   if (settings) {
     settings.innerHTML = `
       <div class="governor-setting"><span>Enabled</span>${status(config.enabled ? "enabled" : "disabled")}</div>
-      <div class="governor-setting"><span>Max credit cap</span><strong>${durationMinutes(Number(config.maxCreditSeconds || 0) * 1000)} min</strong></div>
+      <div class="governor-setting"><span>Reconnect window</span><strong>${Math.round(Number(config.reconnectWindowSeconds ?? config.maxCreditSeconds ?? 0) / 3600)} h</strong></div>
       ${(data.heartbeats || []).map((hb) => `<div class="governor-setting"><span>${escapeHtml(hb.service)}</span><strong>${fmtDate(hb.lastSeenAt)}</strong></div>`).join("")}
     `;
   }
