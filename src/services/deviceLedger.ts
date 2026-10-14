@@ -17,3 +17,16 @@ export function publicDevice(device: { deviceMac: string; label: string | null; 
     signedOut: Boolean(device.signedOutAt)
   };
 }
+
+// A payment from a device the running package has never seen only tops up
+// time -- RADIUS still lets in deviceLimit devices at once -- so when every
+// slot is taken by a device that hasn't signed out, the payer pays and stays
+// offline. Those payments must add a device instead.
+export function payingDeviceNeedsSlot(
+  entitlement: { deviceLimit: number; deviceMac: string | null },
+  devices: Array<{ deviceMac: string; signedOutAt: Date | null }>,
+  mac: string
+): boolean {
+  if (entitlement.deviceMac === mac || devices.some((device) => device.deviceMac === mac)) return false;
+  return devices.filter((device) => !device.signedOutAt).length >= entitlement.deviceLimit;
+}

@@ -15,7 +15,8 @@ import { applyRadiusProjectionRows, hasOtherActiveEntitlement } from "../service
 import { kickHotspotUser } from "../services/routeros.js";
 import { issueVoucher } from "../services/voucherIssuance.js";
 import { normalizeKenyaPhone } from "../lib/phone.js";
-import { endPromo, getActivePromo, startPromo } from "../services/promo.js";
+import { PROMO_PLAN_SOURCE, endPromo, getActivePromo, startPromo } from "../services/promo.js";
+import { getLoyaltySetting, monthStandings, pickLoyaltyRound, releaseLoyaltyRound, tierForRank } from "../services/loyalty.js";
 import { DYNAMIC_PLAN_SOURCE, refreshMirrorForBaseline } from "../services/dynamicPlanEngine.js";
 import { ensureConnectCode } from "../services/connectCode.js";
 import { deviceCap } from "../services/deviceLedger.js";
@@ -234,6 +235,22 @@ async function applyEntitlementRadius(
   });
 }
 
+// Midnight in Nairobi (UTC+3, no daylight saving), as a UTC instant.
+function startOfNairobiDay(now: Date): Date {
+  const offsetMs = 3 * 60 * 60 * 1000;
+  const local = new Date(now.getTime() + offsetMs);
+  return new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate()) - offsetMs);
+}
+
+// Month-end estimate: what's booked so far plus the last 7 days' daily
+// average for every day left, so it follows the current pace rather than
+// the month's slow start.
+function projectMonth(now: Date, monthToDateKsh: number, last7DaysKsh: number): number {
+  const monthEnd = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1);
+  const daysLeft = Math.max(0, (monthEnd - now.getTime()) / (24 * 60 * 60 * 1000));
+  return Math.round(monthToDateKsh + (last7DaysKsh / 7) * daysLeft);
+}
+
 const BOOKED_PAYMENT_STATUSES = Prisma.sql`('confirmed', 'paid_pending_activation', 'activated')`;
 
 adminRouter.get("/summary", async (_req, res, next) => {
@@ -249,6 +266,9 @@ adminRouter.get("/summary", async (_req, res, next) => {
       paymentCount,
       revenue,
       bookedThisMonth,
+      bookedToday,
+      bookedLastMonthToDate,
+      bookedLast7Days,
       monthlyBookingsRaw,
       recentPayments,
       recentEntitlements,
@@ -279,6 +299,26 @@ adminRouter.get("/summary", async (_req, res, next) => {
         },
         _sum: { amountKsh: true },
         _count: true
+      }),
+      prisma.wifiPaymentIntent.aggregate({
+        where: { status: { in: ["confirmed", "paid_pending_activation", "activated"] }, createdAt: { gte: startOfNairobiDay(now) } },
+        _sum: { amountKsh: true }
+      }),
+      prisma.wifiPaymentIntent.aggregate({
+        where: { status: { in: ["confirmed", "paid_pending_activation", "activated"] }, createdAt: { gte: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000) } },
+        _sum: { amountKsh: true }
+      }),
+      // The same days of last month, so a month that just started isn't
+      // compared with a finished one.
+      prisma.wifiPaymentIntent.aggregate({
+        where: {
+          status: { in: ["confirmed", "paid_pending_activation", "activated"] },
+          createdAt: {
+            gte: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)),
+            lt: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1) + (now.getTime() - Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)))
+          }
+        },
+        _sum: { amountKsh: true }
       }),
       prisma.$queryRaw<Array<{ month: Date; bookedKsh: number; count: number }>>(
         Prisma.sql`
@@ -327,7 +367,10 @@ adminRouter.get("/summary", async (_req, res, next) => {
         paymentCount,
         revenueKsh: revenue._sum.amountKsh ?? 0,
         bookedThisMonthKsh: bookedThisMonth._sum.amountKsh ?? 0,
-        bookedThisMonthCount: bookedThisMonth._count ?? 0
+        bookedThisMonthCount: bookedThisMonth._count ?? 0,
+        bookedTodayKsh: bookedToday._sum.amountKsh ?? 0,
+        bookedLastMonthToDateKsh: bookedLastMonthToDate._sum.amountKsh ?? 0,
+        projectedMonthKsh: projectMonth(now, bookedThisMonth._sum.amountKsh ?? 0, bookedLast7Days._sum.amountKsh ?? 0)
       },
       monthlyBookings,
       recentPayments,
@@ -819,11 +862,23 @@ adminRouter.get("/payment-intents", async (_req, res, next) => {
   }
 });
 
+// Everyone who has access, plus anything that ended in the last 3 hours;
+// older expired records drop off so the list stays about who is online.
+const ACCESS_EXPIRED_GRACE_MS = 3 * 60 * 60 * 1000;
+
 adminRouter.get("/entitlements", async (_req, res, next) => {
   try {
+    const recentCutoff = new Date(Date.now() - ACCESS_EXPIRED_GRACE_MS);
     const data = await prisma.wifiEntitlement.findMany({
+      where: {
+        OR: [
+          { expiresAt: { gt: recentCutoff } },
+          { outagePausedAt: { not: null } },
+          { promoPausedAt: { not: null } }
+        ]
+      },
       orderBy: { createdAt: "desc" },
-      take: 100,
+      take: 1000,
       include: { site: true, plan: true, projection: true }
     });
     return sendData(res, data);
@@ -1269,6 +1324,113 @@ adminRouter.get("/promo", async (_req, res, next) => {
   }
 });
 
+// Analytics page: daily takings, busiest hours, packages and customers over
+// the last N days (Nairobi days), excluding free claims.
+adminRouter.get("/analytics", async (req, res, next) => {
+  try {
+    const now = new Date();
+    // "all": every day since the first paid sale (capped at about 13 months).
+    const allTime = req.query.days === "all";
+    let days = [30, 60, 90].includes(Number(req.query.days)) ? Number(req.query.days) : 30;
+    if (allTime) {
+      const first = await prisma.wifiPaymentIntent.findFirst({
+        where: { status: { in: ["confirmed", "paid_pending_activation", "activated"] }, amountKsh: { gt: 0 } },
+        orderBy: { createdAt: "asc" },
+        select: { createdAt: true }
+      });
+      const dayMs = 24 * 60 * 60 * 1000;
+      days = first ? Math.min(400, Math.floor((startOfNairobiDay(now).getTime() - startOfNairobiDay(first.createdAt).getTime()) / dayMs) + 1) : 30;
+    }
+    const since = new Date(startOfNairobiDay(now).getTime() - (days - 1) * 24 * 60 * 60 * 1000);
+    const [dailyRaw, hours, plans, customers] = await Promise.all([
+      prisma.$queryRaw<Array<{ day: Date; ksh: number; payments: number; payers: number }>>(Prisma.sql`
+        SELECT ("createdAt" + interval '3 hours')::date AS day, SUM("amountKsh")::int AS ksh, COUNT(*)::int AS payments, COUNT(DISTINCT "customerPhone")::int AS payers
+        FROM "WifiPaymentIntent"
+        WHERE status IN ${BOOKED_PAYMENT_STATUSES} AND "amountKsh" > 0 AND "createdAt" >= ${since}
+        GROUP BY 1 ORDER BY 1`),
+      prisma.$queryRaw<Array<{ hour: number; ksh: number; payments: number }>>(Prisma.sql`
+        SELECT EXTRACT(hour FROM "createdAt" + interval '3 hours')::int AS hour, SUM("amountKsh")::int AS ksh, COUNT(*)::int AS payments
+        FROM "WifiPaymentIntent"
+        WHERE status IN ${BOOKED_PAYMENT_STATUSES} AND "amountKsh" > 0 AND "createdAt" >= ${since}
+        GROUP BY 1 ORDER BY 1`),
+      prisma.$queryRaw<Array<{ name: string; ksh: number; payments: number }>>(Prisma.sql`
+        SELECT COALESCE(p.name, 'Other') AS name, SUM(i."amountKsh")::int AS ksh, COUNT(*)::int AS payments
+        FROM "WifiPaymentIntent" i LEFT JOIN "WifiPlan" p ON p.id = i."planId"
+        WHERE i.status IN ${BOOKED_PAYMENT_STATUSES} AND i."amountKsh" > 0 AND i."createdAt" >= ${since}
+        GROUP BY 1 ORDER BY 2 DESC`),
+      prisma.$queryRaw<Array<{ payers: number; returning: number; newPayers: number; ksh: number }>>(Prisma.sql`
+        WITH paid AS (
+          SELECT "customerPhone" AS phone, "amountKsh" AS ksh, ("createdAt" + interval '3 hours')::date AS day
+          FROM "WifiPaymentIntent"
+          WHERE status IN ${BOOKED_PAYMENT_STATUSES} AND "amountKsh" > 0 AND "createdAt" >= ${since}
+        ), firsts AS (
+          SELECT "customerPhone" AS phone, MIN("createdAt") AS first_at
+          FROM "WifiPaymentIntent"
+          WHERE status IN ${BOOKED_PAYMENT_STATUSES} AND "amountKsh" > 0
+          GROUP BY 1
+        ), per AS (
+          SELECT paid.phone, COUNT(DISTINCT day) AS paid_days, SUM(ksh) AS ksh FROM paid GROUP BY 1
+        )
+        SELECT COUNT(*)::int AS payers,
+               COUNT(*) FILTER (WHERE per.paid_days >= 2)::int AS returning,
+               COUNT(*) FILTER (WHERE firsts.first_at >= ${since})::int AS "newPayers",
+               COALESCE(SUM(per.ksh), 0)::int AS ksh
+        FROM per JOIN firsts ON firsts.phone = per.phone`)
+    ]);
+    const byDay = new Map(dailyRaw.map((row) => [row.day.toISOString().slice(0, 10), row]));
+    const daily = Array.from({ length: days }, (_, index) => {
+      const key = new Date(since.getTime() + 3 * 60 * 60 * 1000 + index * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const row = byDay.get(key);
+      return { day: key, ksh: row?.ksh ?? 0, payments: row?.payments ?? 0, payers: row?.payers ?? 0 };
+    });
+    const byHour = new Map(hours.map((row) => [row.hour, row]));
+    return sendData(res, {
+      days,
+      allTime,
+      daily,
+      hours: Array.from({ length: 24 }, (_, hour) => ({ hour, ksh: byHour.get(hour)?.ksh ?? 0, payments: byHour.get(hour)?.payments ?? 0 })),
+      plans,
+      customers: customers[0] ?? { payers: 0, returning: 0, newPayers: 0, ksh: 0 }
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// Recent giveaways and what they did: devices that claimed, and paid sales
+// in the 24 hours after against an ordinary day the week before.
+adminRouter.get("/promo/history", async (_req, res, next) => {
+  try {
+    const promos = await prisma.wifiPromo.findMany({ orderBy: { startsAt: "desc" }, take: 6 });
+    const dayMs = 24 * 60 * 60 * 1000;
+    const paidBetween = async (from: Date, to: Date) => (await prisma.wifiPaymentIntent.aggregate({
+      where: { status: "activated", amountKsh: { gt: 0 }, source: { not: PROMO_PLAN_SOURCE }, createdAt: { gte: from, lt: to } },
+      _sum: { amountKsh: true }
+    }))._sum.amountKsh ?? 0;
+    const history = await Promise.all(promos.map(async (promo) => {
+      const end = promo.endsAt;
+      const claims = await prisma.wifiPaymentIntent.count({ where: { source: PROMO_PLAN_SOURCE, createdAt: { gte: promo.startsAt, lt: end } } });
+      const finished = !promo.active && end.getTime() + dayMs <= Date.now();
+      const paidAfterKsh = finished ? await paidBetween(end, new Date(end.getTime() + dayMs)) : null;
+      const weekBefore = await paidBetween(new Date(promo.startsAt.getTime() - 7 * dayMs), promo.startsAt);
+      return {
+        id: promo.id,
+        heading: promo.heading,
+        active: promo.active,
+        startsAt: promo.startsAt,
+        endsAt: promo.endsAt,
+        rateLimit: promo.rateLimit,
+        claims,
+        paidAfterKsh,
+        usualDayKsh: Math.round(weekBefore / 7)
+      };
+    }));
+    return sendData(res, history);
+  } catch (error) {
+    return next(error);
+  }
+});
+
 const startPromoSchema = z.object({
   siteId: z.string().min(1),
   heading: z.string().trim().min(1).max(120).optional(),
@@ -1304,6 +1466,109 @@ adminRouter.post("/promo/end", async (req, res, next) => {
     const { mode } = endPromoSchema.parse(req.body ?? {});
     const result = await endPromo(prisma, promo.id, { revokeExisting: mode === "everyone" });
     return sendData(res, result);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// Weekly rewards (see services/loyalty.ts): settings, this month's live
+// ranking with tiers, and recent rounds with each customer's reward.
+adminRouter.get("/loyalty", async (_req, res, next) => {
+  try {
+    const { setting, month, ranked } = await monthStandings(prisma);
+    const rounds = await prisma.wifiLoyaltyRound.findMany({
+      orderBy: { weekOf: "desc" },
+      take: 4,
+      include: { rewards: { orderBy: { rank: "asc" } } }
+    });
+    const planIds = [...new Set(rounds.flatMap((round) => round.rewards.map((reward) => reward.choice)).filter((id): id is string => Boolean(id) && id !== "free"))];
+    const plans = planIds.length ? await prisma.wifiPlan.findMany({ where: { id: { in: planIds } }, select: { id: true, name: true } }) : [];
+    const planName = new Map(plans.map((plan) => [plan.id, plan.name]));
+    return sendData(res, {
+      setting: { enabled: setting.enabled, tiers: setting.tierList, claimDays: setting.claimDays, minPaidDays: setting.minPaidDays },
+      month,
+      standings: ranked.map((entry, index) => ({ ...entry, rank: index + 1, tier: tierForRank(setting.tierList, index + 1)?.name ?? null })),
+      rounds: rounds.map((round) => ({
+        ...round,
+        rewards: round.rewards.map((reward) => ({ ...reward, choiceName: reward.choice === "free" ? "Free time" : reward.choice ? planName.get(reward.choice) ?? "Package" : null }))
+      }))
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+const loyaltyTierSchema = z.object({
+  name: z.string().trim().min(1).max(24),
+  maxRank: z.coerce.number().int().min(1).max(500),
+  freeHours: z.coerce.number().int().min(0).max(720),
+  bonusHours: z.coerce.number().int().min(0).max(720),
+  speedBoostPct: z.coerce.number().int().min(0).max(200)
+});
+const loyaltySettingSchema = z.object({
+  enabled: z.boolean(),
+  tiers: z.array(loyaltyTierSchema).min(1).max(6),
+  claimDays: z.coerce.number().int().min(1).max(60),
+  minPaidDays: z.coerce.number().int().min(1).max(31)
+});
+
+adminRouter.put("/loyalty", async (req, res, next) => {
+  try {
+    const data = loyaltySettingSchema.parse(req.body);
+    const tiers = [...data.tiers].sort((a, b) => a.maxRank - b.maxRank);
+    if (new Set(tiers.map((tier) => tier.maxRank)).size !== tiers.length) return res.status(400).json({ error: "Each tier needs a different last rank." });
+    const values = { enabled: data.enabled, tiers: tiers as unknown as Prisma.InputJsonValue, claimDays: data.claimDays, minPaidDays: data.minPaidDays };
+    const setting = await prisma.wifiLoyaltySetting.upsert({ where: { id: "default" }, update: values, create: { id: "default", ...values } });
+    return sendData(res, setting);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// Picks this week's round now instead of waiting for Sunday.
+adminRouter.post("/loyalty/pick", async (_req, res, next) => {
+  try {
+    return sendData(res, await pickLoyaltyRound(prisma));
+  } catch (error) {
+    return next(error);
+  }
+});
+
+async function scheduledRound(id: string) {
+  const round = await prisma.wifiLoyaltyRound.findUnique({ where: { id } });
+  if (!round) return { error: [404, "Round not found."] as const };
+  if (round.status !== "scheduled") return { error: [409, "This round has already been given out."] as const };
+  return { round };
+}
+
+adminRouter.post("/loyalty/rounds/:id/remove", async (req, res, next) => {
+  try {
+    const { phone } = z.object({ phone: z.string().min(1) }).parse(req.body);
+    const found = await scheduledRound(req.params.id);
+    if (found.error) return res.status(found.error[0]).json({ error: found.error[1] });
+    await prisma.wifiLoyaltyReward.deleteMany({ where: { roundId: found.round.id, customerPhone: phone, status: "scheduled" } });
+    return sendData(res, { removed: true });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+adminRouter.post("/loyalty/rounds/:id/release", async (req, res, next) => {
+  try {
+    const found = await scheduledRound(req.params.id);
+    if (found.error) return res.status(found.error[0]).json({ error: found.error[1] });
+    return sendData(res, { released: await releaseLoyaltyRound(prisma, found.round) });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+adminRouter.delete("/loyalty/rounds/:id", async (req, res, next) => {
+  try {
+    const found = await scheduledRound(req.params.id);
+    if (found.error) return res.status(found.error[0]).json({ error: found.error[1] });
+    await prisma.wifiLoyaltyRound.delete({ where: { id: found.round.id } });
+    return sendData(res, { deleted: true });
   } catch (error) {
     return next(error);
   }

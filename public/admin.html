@@ -5,13 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>CAPTYN WiFi Admin</title>
     <script src="theme.js?v=2026080402"></script>
+    <link rel="icon" href="captyn-mark.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="theme.css?v=2026080924" />
-    <link rel="stylesheet" href="admin.css?v=2026100702" />
+    <link rel="stylesheet" href="admin.css?v=2026101401" />
   </head>
   <body>
     <header class="topbar">
       <a class="brand" href="/wifi-admin/" aria-label="WiFi admin home">
-        <span class="brand-mark">C</span>
+        <img class="brand-mark" src="captyn-mark.svg" alt="" width="36" height="36" />
         <span class="brand-text">
           <span id="site-title" class="brand-title">WiFi</span>
           <span id="health-pill" class="brand-status muted">Checking</span>
@@ -31,8 +32,6 @@
           <div class="topbar-menu-panel">
             <span id="admin-user-pill" class="menu-user hidden"></span>
             <button id="copy-portal-btn" type="button">Copy portal URL</button>
-            <button id="toggle-sensitive-btn" type="button" aria-pressed="false">Show sensitive</button>
-            <button id="more-info-btn" type="button" aria-expanded="false">More info</button>
             <button id="theme-toggle-btn" type="button" aria-label="Toggle dark mode">Dark</button>
             <button id="logout-btn" class="menu-danger hidden" type="button">Sign out</button>
           </div>
@@ -86,6 +85,7 @@
           <aside class="sidebar" aria-label="WiFi admin">
             <nav class="page-nav" aria-label="WiFi admin pages">
               <button class="nav-item active" type="button" data-page="overview">Overview</button>
+              <button class="nav-item" type="button" data-page="analytics">Analytics</button>
               <button class="nav-item" type="button" data-page="setup">Setup</button>
               <button class="nav-item" type="button" data-page="packages">Packages</button>
               <button class="nav-item" type="button" data-page="vouchers">Vouchers</button>
@@ -98,73 +98,17 @@
               <button class="nav-item" type="button" data-page="promo">Promo</button>
               <button class="nav-item" type="button" data-page="accounting">Accounting</button>
             </nav>
-            <section class="side-block">
-              <span id="ops-health-pill" class="status-pill ok"><span class="status-dot"></span>Ops health stable</span>
-              <p class="side-note"><strong id="published-count">0</strong> package<span id="published-plural">s</span> live at captyn.shop/wifi</p>
-            </section>
           </aside>
           <div class="workspace-main">
 
-        <section class="metrics-grid" aria-label="WiFi metrics">
-          <article class="metric" data-accent="blue">
-            <div class="metric-icon" aria-hidden="true">&#127968;</div>
-            <div class="metric-body"><span>Sites</span><strong id="metric-sites">0</strong></div>
-          </article>
-          <article class="metric" data-accent="violet">
-            <div class="metric-icon" aria-hidden="true">&#128230;</div>
-            <div class="metric-body"><span>Packages</span><strong id="metric-plans">0</strong></div>
-          </article>
-          <article class="metric" data-accent="cyan">
-            <div class="metric-icon" aria-hidden="true">&#128204;</div>
-            <div class="metric-body">
-              <span>Published</span>
-              <strong id="metric-published">0</strong>
-              <p class="metric-detail">Live and visible to customers at checkout.</p>
-            </div>
-          </article>
-          <article class="metric" data-accent="amber">
-            <div class="metric-icon" aria-hidden="true">&#128225;</div>
-            <div class="metric-body">
-              <span>Active Access</span>
-              <strong id="metric-active">0</strong>
-              <p class="metric-detail" id="metric-active-detail"></p>
-            </div>
-          </article>
-          <article class="metric" data-accent="cyan">
-            <div class="metric-icon" aria-hidden="true">&#8987;</div>
-            <div class="metric-body"><span>RADIUS Queue</span><strong id="metric-pending">0</strong></div>
-          </article>
-          <article class="metric" data-accent="rose">
-            <div class="metric-icon" aria-hidden="true">&#9888;</div>
-            <div class="metric-body">
-              <span>Failures</span>
-              <strong id="metric-failures">0</strong>
-              <p class="metric-detail" id="metric-failures-detail"></p>
-            </div>
-          </article>
-          <article class="metric metric-money" data-accent="emerald">
-            <div class="metric-icon" aria-hidden="true">&#128176;</div>
-            <div class="metric-body">
-              <span>Revenue</span>
-              <strong id="metric-revenue" class="sensitive">KSh 0</strong>
-              <span id="metric-revenue-trend" class="trend-pill"></span>
-              <div class="metric-detail sensitive">
-                <p id="metric-booked-month-detail"></p>
-                <ul class="metric-month-list" id="booked-by-month-list"></ul>
-              </div>
-            </div>
-          </article>
+        <section class="overview-numbers" aria-label="Today">
+          <div><strong id="metric-active">0</strong><span>online</span></div>
+          <div><strong id="metric-today">KSh 0</strong><span>today</span></div>
+          <div><strong id="metric-month">KSh 0</strong><span>this month <em id="metric-month-trend" class="trend-pill"></em><em id="metric-month-full" class="trend-pill"></em></span></div>
+          <div><strong id="metric-alltime">–</strong><span>all time</span></div>
         </section>
 
         <section class="page-grid" data-page-panel="overview">
-          <article class="surface span-7">
-            <div class="panel-head"><h2>Live Package Preview</h2><span id="preview-count"></span></div>
-            <div id="client-preview" class="client-preview"></div>
-          </article>
-          <article class="surface span-5">
-            <div class="panel-head"><h2>Failure Points</h2><span id="radius-health-label">Ready</span></div>
-            <div id="network-flow" class="flow-list"></div>
-          </article>
           <article class="surface span-6 table-panel">
             <div class="panel-head"><h2>Recent Payments</h2><span id="overview-payments-count"></span></div>
             <div class="table-wrap"><table><thead><tr><th>Reference</th><th>Package</th><th>Status</th><th>Amount</th></tr></thead><tbody id="overview-payments-body"></tbody></table></div>
@@ -172,6 +116,29 @@
           <article class="surface span-6 table-panel">
             <div class="panel-head"><h2>Recent Access</h2><span id="overview-access-count"></span></div>
             <div class="table-wrap"><table><thead><tr><th>Username</th><th>Package</th><th>Status</th><th>Expires</th></tr></thead><tbody id="overview-access-body"></tbody></table></div>
+          </article>
+        </section>
+
+        <section class="page-grid hidden" data-page-panel="analytics">
+          <div class="span-12 range-row" role="group" aria-label="Date range">
+            <button class="range-btn active" type="button" data-range="30">Last 30 days</button>
+            <button class="range-btn" type="button" data-range="60">60 days</button>
+            <button class="range-btn" type="button" data-range="90">90 days</button>
+            <button class="range-btn" type="button" data-range="all">All time</button>
+          </div>
+          <section id="analytics-numbers" class="span-12 analytics-numbers" aria-label="Totals"></section>
+          <article class="surface span-12">
+            <div class="panel-head"><h2>Daily takings</h2><span class="chart-key"><i class="key-bar"></i>KSh per day <i class="key-line"></i>7-day average</span></div>
+            <div id="chart-daily" class="chart"></div>
+            <details class="chart-table"><summary>Table</summary><div id="table-daily" class="table-wrap"></div></details>
+          </article>
+          <article class="surface span-6">
+            <div class="panel-head"><h2>Busiest hours</h2><span>payments by hour</span></div>
+            <div id="chart-hours" class="chart"></div>
+          </article>
+          <article class="surface span-6">
+            <div class="panel-head"><h2>Packages</h2><span>by takings</span></div>
+            <div id="chart-plans" class="hbar-chart"></div>
           </article>
         </section>
 
@@ -273,7 +240,7 @@
         <section class="page-grid hidden" data-page-panel="access">
           <article class="surface span-12 table-panel">
             <div class="panel-head"><h2>Customer Access</h2><span id="entitlements-count"></span></div>
-            <div class="table-wrap"><table><thead><tr><th>Username</th><th>Site</th><th>Package</th><th>Status</th><th>Starts</th><th>Expires</th><th>Devices</th><th>RADIUS</th></tr></thead><tbody id="entitlements-body"></tbody></table></div>
+            <div class="table-wrap access-scroll"><table><thead><tr><th>Username</th><th>Site</th><th>Package</th><th>Status</th><th>Starts</th><th>Expires</th><th>Devices</th><th>RADIUS</th></tr></thead><tbody id="entitlements-body"></tbody></table></div>
           </article>
           <article id="access-detail-panel" class="surface span-12 access-detail-panel hidden">
             <div class="panel-head">
@@ -354,26 +321,40 @@
         </section>
 
         <section class="page-grid hidden" data-page-panel="promo">
-          <article class="surface span-5">
-            <div class="panel-head"><h2>Promo Status</h2><span id="promo-status-pill" class="pill muted">Checking</span></div>
-            <div id="promo-summary" class="governor-summary"></div>
-            <label id="promo-end-mode-field" class="field hidden" for="promo-end-mode"><span>When ending</span><select id="promo-end-mode"><option value="new_claims" selected>Stop new devices only</option><option value="everyone">End for everyone</option></select></label>
-            <button id="promo-end-btn" class="secondary hidden" type="button">End promo now</button>
+          <article class="surface span-12">
+            <div class="panel-head"><h2>Weekly Rewards</h2><span id="loyalty-status"></span></div>
+            <form id="loyalty-form" class="setup-body loyalty-form">
+              <div class="loyalty-settings">
+                <label class="check-field" for="loyalty-enabled"><input id="loyalty-enabled" type="checkbox" /><span>On</span></label>
+                <label class="field" for="loyalty-claim-days"><span>Claim within (days)</span><input id="loyalty-claim-days" type="number" min="1" max="60" required /></label>
+                <label class="field" for="loyalty-min-days"><span>Min paid days</span><input id="loyalty-min-days" type="number" min="1" max="31" required /></label>
+              </div>
+              <div class="table-wrap"><table class="tier-table"><thead><tr><th>Tier</th><th>Up to rank</th><th>Free hours</th><th>Bonus hours</th><th>Speed +%</th><th></th></tr></thead><tbody id="loyalty-tiers"></tbody></table></div>
+              <div class="loyalty-actions"><button id="loyalty-add-tier" class="secondary" type="button">Add tier</button><button id="loyalty-save" type="submit">Save</button></div>
+            </form>
+            <div id="loyalty-round" class="loyalty-round"></div>
           </article>
-          <form id="promo-form" class="surface setup-panel span-7">
-            <div class="panel-head"><h2>Launch Free Access Promo</h2><span id="promo-form-status"></span></div>
-            <div class="setup-body">
-              <label class="field" for="promo-heading"><span>Heading</span><input id="promo-heading" name="heading" type="text" maxlength="120" placeholder="Thank you for choosing CAPTYN" /></label>
-              <label class="field" for="promo-message"><span>Message</span><textarea id="promo-message" name="message" rows="3" maxlength="500" placeholder="Free Surfing till midday, enjoy!"></textarea></label>
-              <label class="field" for="promo-starts-at"><span>Starts at</span><input id="promo-starts-at" name="startsAt" type="datetime-local" /></label>
-              <label class="field" for="promo-ends-at"><span>Valid till</span><input id="promo-ends-at" name="endsAt" type="datetime-local" required /></label>
-              <label class="field" for="promo-rate-limit"><span>Rate limit (rx/tx)</span><input id="promo-rate-limit" name="rateLimit" type="text" placeholder="3M/5M" /></label>
-              <label class="field" for="promo-device-limit"><span>Device limit</span><input id="promo-device-limit" name="deviceLimit" type="number" min="1" max="10" value="1" /></label>
-              <label class="check-field" for="promo-pause-existing"><input id="promo-pause-existing" name="pauseExisting" type="checkbox" checked /><span>Pause everyone's existing packages while this runs</span></label>
-              <em class="field-hint">Every device that hits the portal sees this offer instead of the package list from "Starts at" until "Valid till". Existing paid time is frozen only while the promo is live.</em>
-              <button id="promo-submit" type="submit">Schedule promo</button>
+          <article class="surface span-12">
+            <div class="panel-head"><h2>Giveaway</h2><span id="promo-status-pill" class="pill muted">Off</span></div>
+            <div id="promo-live" class="giveaway-live hidden">
+              <p id="promo-summary" class="giveaway-summary"></p>
+              <div class="giveaway-end">
+                <label id="promo-end-mode-field" class="field compact hidden" for="promo-end-mode"><span>End for</span><select id="promo-end-mode"><option value="new_claims" selected>New devices only</option><option value="everyone">Everyone</option></select></label>
+                <button id="promo-end-btn" class="secondary hidden" type="button">End now</button>
+              </div>
             </div>
-          </form>
+            <form id="promo-form" class="setup-body giveaway-form">
+              <label class="field wide" for="promo-heading"><span>Heading</span><input id="promo-heading" name="heading" type="text" maxlength="120" placeholder="Thank you for choosing CAPTYN" /></label>
+              <label class="field wide" for="promo-message"><span>Message</span><input id="promo-message" name="message" type="text" maxlength="500" placeholder="Free surfing till midday, enjoy!" /></label>
+              <label class="field" for="promo-starts-at"><span>Starts (blank = now)</span><input id="promo-starts-at" name="startsAt" type="datetime-local" /></label>
+              <label class="field" for="promo-ends-at"><span>Ends</span><input id="promo-ends-at" name="endsAt" type="datetime-local" required /></label>
+              <label class="field" for="promo-rate-limit"><span>Speed (up/down)</span><input id="promo-rate-limit" name="rateLimit" type="text" placeholder="3M/5M" /></label>
+              <label class="field" for="promo-device-limit"><span>Devices</span><input id="promo-device-limit" name="deviceLimit" type="number" min="1" max="10" value="1" /></label>
+              <label class="check-field wide" for="promo-pause-existing"><input id="promo-pause-existing" name="pauseExisting" type="checkbox" checked /><span>Pause paid packages while it runs</span></label>
+              <div class="giveaway-actions wide"><span id="promo-form-status" class="inline-status"></span><button id="promo-submit" type="submit">Start giveaway</button></div>
+            </form>
+            <div id="promo-history" class="giveaway-history"></div>
+          </article>
         </section>
 
         <section class="page-grid hidden" data-page-panel="accounting">
@@ -387,6 +368,6 @@
       </section>
     </main>
 
-    <script src="admin.js?v=2026100801" defer data-cfasync="false"></script>
+    <script src="admin.js?v=2026101401" defer data-cfasync="false"></script>
   </body>
 </html>

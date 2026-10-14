@@ -104,7 +104,9 @@ const endpoints = {
   governorStatus: adminApi("/governor-status"),
   dynamicPlanStatus: adminApi("/dynamic-plan-status"),
   outageCredits: adminApi("/outage-credits"),
-  promo: adminApi("/promo")
+  promo: adminApi("/promo"),
+  loyalty: adminApi("/loyalty"),
+  promoHistory: adminApi("/promo/history")
 };
 
 const voucherForm = document.getElementById("voucher-form");
@@ -204,7 +206,8 @@ function friendlyRate(rateLimit) {
   const { download, upload } = parseRateLimit(rateLimit);
   if (!download && !upload) return rateLimit ? escapeHtml(rateLimit) : "Standard speed";
   const parts = [];
-  if (download) parts.push(`↓ ${download} Mbps`);
+  // Packages burst to twice this for short loads.
+  if (download) parts.push(`↓ ${download} Mbps + burst`);
   if (upload) parts.push(`↑ ${upload} Mbps`);
   return parts.join(" / ");
 }
@@ -362,7 +365,7 @@ function renderRows(id, rows, mapper, emptyColspan = 8, rowAttrs) {
     : `<tr><td class="muted" colspan="${emptyColspan}">No records yet.</td></tr>`;
 }
 
-function renderTrendPill(elementId, changePercent) {
+function renderTrendPill(elementId, changePercent, label = "") {
   const el = document.getElementById(elementId);
   if (!el) return;
   if (changePercent === null || changePercent === undefined || !Number.isFinite(changePercent)) {
@@ -371,58 +374,31 @@ function renderTrendPill(elementId, changePercent) {
     return;
   }
   const positive = changePercent >= 0;
-  el.textContent = `${positive ? "+" : ""}${changePercent.toFixed(1)}% vs last month`;
+  el.textContent = `${positive ? "+" : ""}${Math.round(changePercent)}%${label ? ` ${label}` : ""}`;
   el.className = `trend-pill ${positive ? "positive" : "negative"}`;
 }
 
-function monthOverMonthChange(monthlyBookings) {
-  const rows = monthlyBookings || [];
-  if (rows.length < 2) return null;
-  const [current, previous] = rows;
-  if (!previous.bookedKsh) return null;
-  return ((current.bookedKsh - previous.bookedKsh) / previous.bookedKsh) * 100;
+function previousMonthKey(now = new Date()) {
+  const date = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+  return date.toISOString().slice(0, 7);
 }
-
 function renderSummary(summary) {
+  state.summary = summary;
   const metrics = summary.metrics || {};
-  const monthlyBookings = summary.monthlyBookings || [];
-  const published = publiclyVisiblePlans().length;
-  document.getElementById("metric-sites").textContent = text(metrics.siteCount, "0");
-  document.getElementById("metric-plans").textContent = text(metrics.planCount, "0");
-  document.getElementById("metric-published").textContent = String(published);
+  document.getElementById("metric-alltime").textContent = metrics.revenueKsh === undefined ? "–" : fmtMoney(metrics.revenueKsh);
   document.getElementById("metric-active").textContent = text(metrics.activeEntitlementCount, "0");
-  document.getElementById("metric-active-detail").textContent = `${text(metrics.expiredEntitlementCount, "0")} access records have expired and need renewal.`;
-  document.getElementById("metric-pending").textContent = text(metrics.pendingProjectionCount, "0");
-  const networkMetrics = state.cache.networkStatus?.metrics || {};
-  const failures = Number(metrics.failedProjectionCount || 0) + Number(networkMetrics.appliedMissingRadiusRowsCount || 0);
-  document.getElementById("metric-failures").textContent = String(failures);
-  document.getElementById("metric-failures-detail").textContent = failures > 0
-    ? "RADIUS sync failures need review before customers are affected."
-    : "No RADIUS sync failures right now.";
-  document.getElementById("metric-revenue").textContent = fmtMoney(metrics.revenueKsh);
-  document.getElementById("metric-booked-month-detail").textContent =
-    `${fmtMoney(metrics.bookedThisMonthKsh)} booked this month (${text(metrics.bookedThisMonthCount, "0")} payments).`;
-  const trendChange = monthOverMonthChange(monthlyBookings);
-  renderTrendPill("metric-revenue-trend", trendChange);
-  const monthListEl = document.getElementById("booked-by-month-list");
-  if (monthListEl) {
-    monthListEl.innerHTML = monthlyBookings.length
-      ? monthlyBookings.map((row) => `
-          <li>
-            <span class="month-label">${escapeHtml(fmtMonth(row.month))}</span>
-            <span class="month-figures"><strong>${escapeHtml(fmtMoney(row.bookedKsh))}</strong> &middot; ${row.count} payment${row.count === 1 ? "" : "s"}</span>
-          </li>
-        `).join("")
-      : `<li class="muted">No bookings recorded yet.</li>`;
-  }
-  document.getElementById("published-count").textContent = String(published);
-  document.getElementById("published-plural").textContent = published === 1 ? "" : "s";
-  document.getElementById("radius-health-label").textContent = failures > 0 ? "Needs review" : "Ready";
-  const opsHealthPill = document.getElementById("ops-health-pill");
-  if (opsHealthPill) {
-    opsHealthPill.className = `status-pill ${failures > 0 ? "warn" : "ok"}`;
-    opsHealthPill.innerHTML = `<span class="status-dot"></span>${failures > 0 ? "Ops health needs attention" : "Ops health stable"}`;
-  }
+  // "–", not a false KSh 0, if the API didn't send today's figure.
+  document.getElementById("metric-today").textContent = metrics.bookedTodayKsh === undefined ? "–" : fmtMoney(metrics.bookedTodayKsh);
+  document.getElementById("metric-month").textContent = fmtMoney(metrics.bookedThisMonthKsh);
+  // Month-to-date against the same days of last month: a fresh month
+  // compared with a whole one always reads as a crash.
+  const previous = Number(metrics.bookedLastMonthToDateKsh || 0);
+  const thisMonth = Number(metrics.bookedThisMonthKsh || 0);
+  renderTrendPill("metric-month-trend", previous ? ((thisMonth - previous) / previous) * 100 : null, "same days");
+  // And against last month's full total.
+  const lastMonth = (summary.monthlyBookings || []).find((row) => row.month === previousMonthKey());
+  renderTrendPill("metric-month-full", lastMonth?.bookedKsh ? ((thisMonth - lastMonth.bookedKsh) / lastMonth.bookedKsh) * 100 : null,
+    lastMonth ? `vs all ${new Date(`${lastMonth.month}-01T00:00:00Z`).toLocaleString("en", { month: "short", timeZone: "UTC" })}` : "");
 }
 
 function renderSiteOptions() {
@@ -555,7 +531,7 @@ function renderAccessDetail(message = state.accessActionMessage || "") {
       ${accessStat("Starts", fmtDate(entitlement.startsAt))}
       ${accessStat("Expires", fmtDate(entitlement.expiresAt))}
       ${accessStat("Payment", `<span class="mono">${escapeHtml(reference)}</span>`, fmtMoney(payment.amountKsh || 0))}
-      ${detail.connectCode ? accessStat("Device code", `<span class="mono sensitive">${escapeHtml(detail.connectCode)}</span>`, "Connects another device") : ""}
+      ${detail.connectCode ? accessStat("Device code", `<span class="mono">${escapeHtml(detail.connectCode)}</span>`, "Connects another device") : ""}
       ${accessStat("RADIUS", status(entitlement.projection?.status || "missing"), fmtDate(entitlement.projection?.appliedAt))}
     </div>
     <div class="access-actions">
@@ -658,12 +634,9 @@ function rateCard(plan, withAction = false) {
 
 function renderPlanCards() {
   const published = publiclyVisiblePlans();
-  const preview = document.getElementById("client-preview");
   const cards = document.getElementById("package-cards");
-  document.getElementById("preview-count").textContent = `${published.length} published`;
   document.getElementById("package-card-count").textContent = `${published.length} visible to clients`;
   const empty = '<div class="empty-state">No published packages.</div>';
-  preview.innerHTML = published.length ? published.map((plan) => rateCard(plan)).join("") : empty;
   cards.innerHTML = published.length ? published.map((plan) => rateCard(plan, true)).join("") : empty;
   renderPricingMode();
 }
@@ -854,35 +827,50 @@ function renderOutageCredits() {
 
 function renderPromo() {
   const promo = state.cache.promo;
+  const history = state.cache.promoHistory || [];
   const pill = document.getElementById("promo-status-pill");
   const summary = document.getElementById("promo-summary");
   const endBtn = document.getElementById("promo-end-btn");
-  if (!pill || !summary || !endBtn) return;
+  const live = document.getElementById("promo-live");
+  if (!pill || !summary || !endBtn || !live) return;
 
-  if (promo && promo.active) {
+  const running = Boolean(promo && promo.active);
+  live.classList.toggle("hidden", !running);
+  document.getElementById("promo-form")?.classList.toggle("hidden", running);
+  if (running) {
     const now = Date.now();
-    const startsAt = promo.startsAt ? new Date(promo.startsAt).getTime() : 0;
-    const endsAt = promo.endsAt ? new Date(promo.endsAt).getTime() : 0;
-    const isLive = Boolean(promo.activatedAt) && startsAt <= now && now < endsAt;
+    const isLive = Boolean(promo.activatedAt) && new Date(promo.startsAt).getTime() <= now && now < new Date(promo.endsAt).getTime();
+    const claims = history.find((row) => row.id === promo.id)?.claims;
     pill.className = isLive ? "pill ok" : "pill warn";
     pill.textContent = isLive ? "Live" : "Scheduled";
-    summary.innerHTML = `
-      <div class="governor-card"><span>Heading</span><strong>${escapeHtml(promo.heading || "-")}</strong></div>
-      <div class="governor-card"><span>Starts at</span><strong>${fmtDate(promo.startsAt)}</strong></div>
-      <div class="governor-card"><span>Valid till</span><strong>${fmtDate(promo.endsAt)}</strong></div>
-      <div class="governor-card"><span>Rate limit</span><strong>${escapeHtml(promo.rateLimit || "plan default")}</strong></div>
-      <div class="governor-card"><span>Pausing existing</span>${status(promo.pauseExisting ? "yes" : "no")}</div>
-    `;
-    endBtn.textContent = isLive ? "End promo now" : "Cancel scheduled promo";
+    summary.textContent = [
+      isLive ? `Free for everyone until ${fmtDate(promo.endsAt)}` : `Starts ${fmtDate(promo.startsAt)}, ends ${fmtDate(promo.endsAt)}`,
+      promo.rateLimit || "package speed",
+      `${promo.deviceLimit || 1} device${promo.deviceLimit === 1 ? "" : "s"}`,
+      isLive && claims !== undefined ? `${claims} claimed` : null,
+      promo.pauseExisting ? "paid packages paused" : null
+    ].filter(Boolean).join(" · ");
+    endBtn.textContent = isLive ? "End now" : "Cancel";
     endBtn.classList.remove("hidden");
     document.getElementById("promo-end-mode-field")?.classList.toggle("hidden", !isLive);
   } else {
     pill.className = "pill muted";
     pill.textContent = "Off";
-    summary.innerHTML = '<div class="empty-state">No promo running. Fill in the form to launch one.</div>';
     endBtn.classList.add("hidden");
     document.getElementById("promo-end-mode-field")?.classList.add("hidden");
   }
+
+  const past = history.filter((row) => !row.active);
+  document.getElementById("promo-history").innerHTML = past.length
+    ? `<div class="table-wrap"><table><thead><tr><th>Giveaway</th><th>Length</th><th>Claimed</th><th>Paid next 24h</th></tr></thead><tbody>${past.map((row) => {
+        const hours = Math.max(0, Math.round((new Date(row.endsAt).getTime() - new Date(row.startsAt).getTime()) / 3600000));
+        const change = row.paidAfterKsh !== null && row.usualDayKsh ? Math.round(((row.paidAfterKsh - row.usualDayKsh) / row.usualDayKsh) * 100) : null;
+        const after = row.paidAfterKsh === null
+          ? "In 24h"
+          : `${fmtMoney(row.paidAfterKsh)}${change === null ? "" : ` <em class="trend-pill ${change >= 0 ? "positive" : "negative"}">${change >= 0 ? "+" : ""}${change}% vs usual</em>`}`;
+        return `<tr><td>${escapeHtml(fmtDate(row.startsAt))}</td><td>${hours}h</td><td>${row.claims}</td><td>${after}</td></tr>`;
+      }).join("")}</tbody></table></div>`
+    : "";
 }
 
 function renderNetworkStatus() {
@@ -898,9 +886,261 @@ function renderNetworkStatus() {
   document.querySelectorAll("#network-flow, #failure-points").forEach((element) => { element.innerHTML = html; });
   const generated = document.getElementById("network-status-generated");
   if (generated) generated.textContent = diagnostics.generatedAt ? `Checked ${fmtDate(diagnostics.generatedAt)}` : "";
-  const worst = items.some((item) => item.state === "bad") ? "Needs repair" : items.some((item) => item.state === "warn") ? "Watch" : "Ready";
-  document.getElementById("radius-health-label").textContent = worst;
 }
+
+// Weekly rewards: settings and tiers, this week's rewards, and this month's
+// live ranking.
+function tierRowHtml(tier = { name: "", maxRank: "", freeHours: 0, bonusHours: 0, speedBoostPct: 0 }) {
+  return `<tr class="tier-row">
+    <td><input data-tier="name" type="text" maxlength="24" value="${escapeHtml(tier.name)}" required /></td>
+    <td><input data-tier="maxRank" type="number" min="1" max="500" value="${escapeHtml(tier.maxRank)}" required /></td>
+    <td><input data-tier="freeHours" type="number" min="0" max="720" value="${escapeHtml(tier.freeHours)}" /></td>
+    <td><input data-tier="bonusHours" type="number" min="0" max="720" value="${escapeHtml(tier.bonusHours)}" /></td>
+    <td><input data-tier="speedBoostPct" type="number" min="0" max="200" value="${escapeHtml(tier.speedBoostPct)}" /></td>
+    <td><button class="device-remove-btn" type="button" data-remove-tier>Remove</button></td>
+  </tr>`;
+}
+function renderLoyalty() {
+  const data = state.cache.loyalty;
+  if (!data) return;
+  const { setting, month, standings = [], rounds = [] } = data;
+  const form = document.getElementById("loyalty-form");
+  if (!form.contains(document.activeElement)) {
+    document.getElementById("loyalty-enabled").checked = Boolean(setting.enabled);
+    document.getElementById("loyalty-claim-days").value = setting.claimDays;
+    document.getElementById("loyalty-min-days").value = setting.minPaidDays;
+    document.getElementById("loyalty-tiers").innerHTML = (setting.tiers || []).map((tier) => tierRowHtml(tier)).join("");
+  }
+  document.getElementById("loyalty-status").textContent = setting.enabled ? "On" : "Off";
+
+  const round = rounds[0];
+  const thisWeek = round && Date.now() - new Date(round.weekOf).getTime() < 7 * 24 * 3600 * 1000 ? round : null;
+  const ranking = standings.length
+    ? `<div class="table-wrap"><table class="loyalty-table"><thead><tr><th>#</th><th>Phone</th><th>Tier</th><th>Points</th><th>Spent</th><th>Paid days</th></tr></thead><tbody>${standings.map((row) => `<tr>
+        <td>${row.rank}</td><td><span class="mono">${escapeHtml(row.phone)}</span></td><td>${escapeHtml(row.tier || "–")}</td>
+        <td><strong>${row.score}</strong></td><td>${fmtMoney(row.spentKsh)}</td><td>${row.paidDays}</td></tr>`).join("")}</tbody></table></div>`
+    : '<div class="empty-state">Nobody is ranked yet this month.</div>';
+  const box = document.getElementById("loyalty-round");
+  if (!thisWeek) {
+    box.innerHTML = `<div class="loyalty-head"><strong>${escapeHtml(fmtMonth(month))} ranking · ${standings.length} ranked · next pick Sunday</strong><button id="loyalty-pick" class="secondary" type="button">Pick this week now</button></div>${ranking}`;
+    return;
+  }
+  const rewards = thisWeek.rewards || [];
+  const claimed = rewards.filter((reward) => reward.status === "claimed").length;
+  const head = thisWeek.status === "released"
+    ? `<strong>This week (${escapeHtml(fmtMonth(thisWeek.month))} points) · out since ${escapeHtml(fmtDate(thisWeek.releasedAt))} · ${claimed} of ${rewards.length} claimed</strong>`
+    : `<strong>This week (${escapeHtml(fmtMonth(thisWeek.month))} points) · goes out ${escapeHtml(fmtDate(thisWeek.releaseAt))} · ${rewards.length} customers</strong>
+       <span class="action-row"><button id="loyalty-release" type="button">Give out now</button><button id="loyalty-cancel" class="secondary" type="button">Cancel</button></span>`;
+  const scheduled = thisWeek.status === "scheduled";
+  const rewardRows = rewards.length
+    ? `<div class="table-wrap"><table class="loyalty-table"><thead><tr><th>#</th><th>Phone</th><th>Tier</th><th>Points</th><th>${scheduled ? "" : "Picked"}</th></tr></thead><tbody>${rewards.map((reward) => `<tr>
+        <td>${reward.rank}</td><td><span class="mono">${escapeHtml(reward.customerPhone)}</span></td><td>${escapeHtml(reward.tier)}</td><td><strong>${reward.points}</strong></td>
+        <td>${scheduled ? `<button class="device-remove-btn" type="button" data-loyalty-remove="${escapeHtml(reward.customerPhone)}">Remove</button>` : escapeHtml(reward.choiceName || (reward.status === "available" ? "Not yet" : reward.status))}</td></tr>`).join("")}</tbody></table></div>`
+    : '<div class="empty-state">Nobody qualified for this round.</div>';
+  box.innerHTML = `<div class="loyalty-head" data-round-id="${escapeHtml(thisWeek.id)}">${head}</div>${rewardRows}
+    <details class="loyalty-live"><summary>${escapeHtml(fmtMonth(month))} live ranking · ${standings.length} ranked</summary>${ranking}</details>`;
+}
+function formatHours(seconds) {
+  const hours = Math.round(Number(seconds || 0) / 3600);
+  return hours % 24 === 0 && hours >= 24 ? `${hours / 24} day${hours === 24 ? "" : "s"}` : `${hours}h`;
+}
+
+// ---------- Analytics ----------
+const analyticsState = { days: 30, data: null, loading: false };
+const fmtCompact = (value) => {
+  const n = Number(value || 0);
+  return n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1).replace(/\.0$/, "")}k` : String(Math.round(n));
+};
+function niceMax(value) {
+  if (value <= 0) return 4;
+  const step = Math.pow(10, Math.floor(Math.log10(value)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (m * step >= value) return m * step;
+  return 10 * step;
+}
+const SVG_NS = "http://www.w3.org/2000/svg";
+function svgEl(tag, attrs = {}) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [key, value] of Object.entries(attrs)) el.setAttribute(key, String(value));
+  return el;
+}
+let chartTooltip = null;
+function showTooltip(event, rows) {
+  if (!chartTooltip) {
+    chartTooltip = document.createElement("div");
+    chartTooltip.className = "chart-tooltip";
+    document.body.appendChild(chartTooltip);
+  }
+  chartTooltip.replaceChildren(...rows.map(([value, label, key]) => {
+    const row = document.createElement("div");
+    if (key) { const k = document.createElement("i"); k.className = key; row.appendChild(k); }
+    const strong = document.createElement("strong"); strong.textContent = value;
+    const span = document.createElement("span"); span.textContent = label;
+    row.append(strong, span);
+    return row;
+  }));
+  chartTooltip.classList.add("visible");
+  const box = chartTooltip.getBoundingClientRect();
+  const x = Math.min(window.innerWidth - box.width - 8, Math.max(8, event.clientX + 12));
+  const y = Math.max(8, event.clientY - box.height - 12);
+  chartTooltip.style.transform = `translate(${x}px, ${y}px)`;
+}
+function hideTooltip() { chartTooltip?.classList.remove("visible"); }
+
+// Columns from one baseline (<= 24px, 4px rounded tops), an optional line on
+// the same axis, recessive grid, selective x labels, per-column hover.
+function renderColumnChart(container, { labels, values, line = null, xLabel, tip }) {
+  const width = Math.max(280, container.clientWidth || 600);
+  const height = 230;
+  const m = { top: 12, right: 10, bottom: 26, left: 44 };
+  const plotW = width - m.left - m.right;
+  const plotH = height - m.top - m.bottom;
+  const yMax = niceMax(Math.max(...values, ...(line || []).filter((v) => v !== null), 0));
+  const y = (v) => m.top + plotH - (v / yMax) * plotH;
+  const band = plotW / values.length;
+  const barW = Math.max(2, Math.min(24, band - 2));
+  const svg = svgEl("svg", { viewBox: `0 0 ${width} ${height}`, width, height, role: "img" });
+  for (let i = 0; i <= 4; i += 1) {
+    const value = (yMax / 4) * i;
+    svg.appendChild(svgEl("line", { x1: m.left, x2: width - m.right, y1: y(value), y2: y(value), class: "chart-grid" }));
+    const label = svgEl("text", { x: m.left - 8, y: y(value) + 4, class: "chart-axis", "text-anchor": "end" });
+    label.textContent = fmtCompact(value);
+    svg.appendChild(label);
+  }
+  const every = Math.max(1, Math.ceil(values.length / Math.max(2, Math.floor(plotW / 56))));
+  values.forEach((value, i) => {
+    const cx = m.left + band * i + band / 2;
+    const top = y(value);
+    const h = m.top + plotH - top;
+    if (value > 0) {
+      const r = Math.min(4, h, barW / 2);
+      const x0 = cx - barW / 2, x1 = cx + barW / 2, base = m.top + plotH;
+      svg.appendChild(svgEl("path", { class: "chart-bar", d: `M${x0},${base} V${top + r} Q${x0},${top} ${x0 + r},${top} H${x1 - r} Q${x1},${top} ${x1},${top + r} V${base} Z` }));
+    }
+    if (i % every === 0) {
+      const t = svgEl("text", { x: cx, y: height - 8, class: "chart-axis", "text-anchor": "middle" });
+      t.textContent = xLabel(i);
+      svg.appendChild(t);
+    }
+  });
+  if (line) {
+    const points = line.map((v, i) => (v === null ? null : `${m.left + band * i + band / 2},${y(v)}`)).filter(Boolean);
+    if (points.length > 1) svg.appendChild(svgEl("polyline", { points: points.join(" "), class: "chart-line" }));
+  }
+  values.forEach((_value, i) => {
+    const hit = svgEl("rect", { x: m.left + band * i, y: m.top, width: band, height: plotH, class: "chart-hit", tabindex: 0 });
+    const show = (event) => {
+      hit.classList.add("hover");
+      const rect = hit.getBoundingClientRect();
+      showTooltip(event.clientX ? event : { clientX: rect.left + rect.width / 2, clientY: rect.top + 20 }, tip(i));
+    };
+    hit.addEventListener("pointermove", show);
+    hit.addEventListener("focus", show);
+    hit.addEventListener("pointerleave", () => { hit.classList.remove("hover"); hideTooltip(); });
+    hit.addEventListener("blur", () => { hit.classList.remove("hover"); hideTooltip(); });
+    svg.appendChild(hit);
+  });
+  container.replaceChildren(svg);
+}
+
+// Horizontal bars, value at the tip; past 8 rows the rest fold into "Other".
+function renderHBarChart(container, rows) {
+  const top = rows.slice(0, 8);
+  const rest = rows.slice(8);
+  if (rest.length) top.push({ name: `Other (${rest.length})`, ksh: rest.reduce((a, r) => a + r.ksh, 0), payments: rest.reduce((a, r) => a + r.payments, 0) });
+  const max = Math.max(1, ...top.map((row) => row.ksh));
+  container.replaceChildren(...top.map((row) => {
+    const item = document.createElement("div");
+    item.className = "hbar-row";
+    item.tabIndex = 0;
+    const name = document.createElement("span"); name.className = "hbar-name"; name.textContent = row.name;
+    const track = document.createElement("span"); track.className = "hbar-track";
+    const bar = document.createElement("i"); bar.className = "hbar-bar"; bar.style.width = `${Math.max(1, (row.ksh / max) * 100)}%`;
+    const value = document.createElement("span"); value.className = "hbar-value"; value.textContent = fmtMoney(row.ksh);
+    track.append(bar, value);
+    item.append(name, track);
+    const show = (event) => showTooltip(event.clientX ? event : (() => { const r = item.getBoundingClientRect(); return { clientX: r.left + r.width / 2, clientY: r.top }; })(), [[fmtMoney(row.ksh), row.name], [String(row.payments), "payments"]]);
+    item.addEventListener("pointermove", show);
+    item.addEventListener("focus", show);
+    item.addEventListener("pointerleave", hideTooltip);
+    item.addEventListener("blur", hideTooltip);
+    return item;
+  }));
+  if (!top.length) container.innerHTML = '<div class="empty-state">No sales in this range.</div>';
+}
+
+async function loadAnalytics(days = analyticsState.days) {
+  analyticsState.days = days;
+  document.querySelectorAll(".range-btn").forEach((b) => b.classList.toggle("active", b.dataset.range === String(days)));
+  const panel = document.querySelector('[data-page-panel="analytics"]');
+  panel?.classList.add("refreshing");
+  try {
+    analyticsState.data = await api(adminApi(`/analytics?days=${days}`));
+    renderAnalytics();
+  } catch (error) {
+    document.getElementById("analytics-numbers").textContent = error instanceof Error ? error.message : "Analytics unavailable";
+  } finally {
+    panel?.classList.remove("refreshing");
+  }
+}
+
+function renderAnalytics() {
+  const data = analyticsState.data;
+  if (!data) return;
+  const daily = data.daily || [];
+  const total = daily.reduce((a, d) => a + d.ksh, 0);
+  const payments = daily.reduce((a, d) => a + d.payments, 0);
+  const c = data.customers || {};
+  const busiest = [...(data.hours || [])].sort((a, b) => b.payments - a.payments)[0];
+  const metrics = state.summary?.metrics || {};
+  const numbers = [
+    [fmtMoney(total), data.allTime ? `all time (${data.days} days)` : `in ${data.days} days`],
+    [String(payments), "payments"],
+    [String(c.payers ?? 0), `customers · ${c.returning ?? 0} returning · ${c.newPayers ?? 0} new`],
+    [fmtMoney(c.payers ? Math.round(c.ksh / c.payers) : 0), "per customer"],
+    [busiest && busiest.payments ? `${String(busiest.hour).padStart(2, "0")}:00` : "–", "busiest hour"],
+    [metrics.projectedMonthKsh === undefined ? "–" : `~${fmtMoney(metrics.projectedMonthKsh)}`, "on pace this month"]
+  ];
+  document.getElementById("analytics-numbers").replaceChildren(...numbers.map(([value, label]) => {
+    const div = document.createElement("div");
+    const strong = document.createElement("strong"); strong.textContent = value;
+    const span = document.createElement("span"); span.textContent = label;
+    div.append(strong, span);
+    return div;
+  }));
+
+  const avg = daily.map((_d, i) => (i < 6 ? null : Math.round(daily.slice(i - 6, i + 1).reduce((a, d) => a + d.ksh, 0) / 7)));
+  const dayLabel = (key, opts) => new Date(`${key}T00:00:00Z`).toLocaleDateString("en-GB", { timeZone: "UTC", ...opts });
+  renderColumnChart(document.getElementById("chart-daily"), {
+    labels: daily.map((d) => d.day),
+    values: daily.map((d) => d.ksh),
+    line: avg,
+    xLabel: (i) => dayLabel(daily[i].day, { day: "numeric", month: "short" }),
+    tip: (i) => [
+      [fmtMoney(daily[i].ksh), dayLabel(daily[i].day, { weekday: "short", day: "numeric", month: "short" }), "key-bar"],
+      ...(avg[i] === null ? [] : [[fmtMoney(avg[i]), "7-day average", "key-line"]]),
+      [`${daily[i].payments}`, `payments · ${daily[i].payers} customers`]
+    ]
+  });
+  const hours = data.hours || [];
+  renderColumnChart(document.getElementById("chart-hours"), {
+    labels: hours.map((h) => h.hour),
+    values: hours.map((h) => h.payments),
+    xLabel: (i) => String(hours[i].hour).padStart(2, "0"),
+    tip: (i) => [[`${hours[i].payments} payments`, `${String(hours[i].hour).padStart(2, "0")}:00–${String(hours[i].hour).padStart(2, "0")}:59`], [fmtMoney(hours[i].ksh), "taken"]]
+  });
+  renderHBarChart(document.getElementById("chart-plans"), data.plans || []);
+  document.getElementById("table-daily").innerHTML = `<table><thead><tr><th>Day</th><th>KSh</th><th>Payments</th><th>Customers</th></tr></thead><tbody>${[...daily].reverse().map((d) => `<tr><td>${escapeHtml(dayLabel(d.day, { weekday: "short", day: "numeric", month: "short" }))}</td><td>${fmtMoney(d.ksh)}</td><td>${d.payments}</td><td>${d.payers}</td></tr>`).join("")}</tbody></table>`;
+}
+
+document.querySelector(".range-row")?.addEventListener("click", (event) => {
+  const button = event.target instanceof Element ? event.target.closest(".range-btn") : null;
+  if (button) void loadAnalytics(button.dataset.range === "all" ? "all" : Number(button.dataset.range));
+});
+let analyticsResizeTimer = 0;
+window.addEventListener("resize", () => {
+  clearTimeout(analyticsResizeTimer);
+  analyticsResizeTimer = window.setTimeout(() => { if (state.activePage === "analytics") renderAnalytics(); }, 150);
+});
 
 function renderAll() {
   renderSiteOptions();
@@ -912,6 +1152,7 @@ function renderAll() {
   renderDynamicPlanStatus();
   renderOutageCredits();
   renderPromo();
+  renderLoyalty();
   renderVouchers();
 
   const payments = state.cache.payments || [];
@@ -958,7 +1199,10 @@ function renderAll() {
     fmtDate(item.createdAt)
   ], 7);
 
-  renderAccessRows("entitlements", entitlements);
+  // Everyone with access, plus records that ended in the last 3 hours (the
+  // API already filters this way; kept here too for an older API).
+  const cutoff = Date.now() - 3 * 60 * 60 * 1000;
+  renderAccessRows("entitlements", entitlements.filter((item) => new Date(item.expiresAt).getTime() > cutoff || item.outagePausedAt || item.promoPausedAt));
   renderAccessDetail();
 
   renderRows("projections", state.cache.projections || [], (item) => [
@@ -988,7 +1232,7 @@ async function loadDashboard() {
   setAuthError("");
   refreshBtn.disabled = true;
   try {
-    const [summary, sites, plans, payments, entitlements, projections, accounting, networkStatus, governorStatus, dynamicPlanStatus, outageCredits, promo] = await Promise.all([
+    const [summary, sites, plans, payments, entitlements, projections, accounting, networkStatus, governorStatus, dynamicPlanStatus, outageCredits, promo, loyalty, promoHistory] = await Promise.all([
       api(adminApi("/summary")),
       api(endpoints.sites),
       api(endpoints.plans),
@@ -1000,9 +1244,12 @@ async function loadDashboard() {
       api(endpoints.governorStatus),
       api(endpoints.dynamicPlanStatus),
       api(endpoints.outageCredits),
-      api(endpoints.promo)
+      api(endpoints.promo),
+      // Optional: the dashboard still loads if this one call fails.
+      api(endpoints.loyalty).catch(() => null),
+      api(endpoints.promoHistory).catch(() => [])
     ]);
-    state.cache = { sites, plans, payments, entitlements, projections, accounting, networkStatus, governorStatus, dynamicPlanStatus, outageCredits, promo };
+    state.cache = { sites, plans, payments, entitlements, projections, accounting, networkStatus, governorStatus, dynamicPlanStatus, outageCredits, promo, loyalty, promoHistory };
     renderSummary(summary);
     renderAll();
     authPanel.classList.add("hidden");
@@ -1021,6 +1268,7 @@ async function loadDashboard() {
 
 function setPage(page) {
   state.activePage = page || "overview";
+  if (state.activePage === "analytics") void loadAnalytics();
   // The overview metric cards only belong on Overview; the sidebar carries
   // the at-a-glance status everywhere else.
   document.body.dataset.page = state.activePage;
@@ -1400,6 +1648,68 @@ promoForm?.addEventListener("submit", async (event) => {
   }
 });
 
+document.getElementById("loyalty-form")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const status = document.getElementById("loyalty-status");
+  const tiers = [...document.querySelectorAll("#loyalty-tiers .tier-row")].map((row) => {
+    const value = (key) => row.querySelector(`[data-tier="${key}"]`).value;
+    return { name: value("name").trim(), maxRank: Number(value("maxRank")), freeHours: Number(value("freeHours") || 0), bonusHours: Number(value("bonusHours") || 0), speedBoostPct: Number(value("speedBoostPct") || 0) };
+  });
+  if (!tiers.length) { status.textContent = "Add at least one tier"; return; }
+  const save = document.getElementById("loyalty-save");
+  save.disabled = true;
+  try {
+    await writeApi(adminApi("/loyalty"), "PUT", {
+      enabled: document.getElementById("loyalty-enabled").checked,
+      tiers,
+      claimDays: Number(document.getElementById("loyalty-claim-days").value),
+      minPaidDays: Number(document.getElementById("loyalty-min-days").value)
+    });
+    state.cache.loyalty = await api(endpoints.loyalty);
+    document.activeElement?.blur?.();
+    renderLoyalty();
+    status.textContent = "Saved";
+  } catch (error) {
+    status.textContent = error instanceof Error ? error.message : "Failed";
+  } finally {
+    save.disabled = false;
+  }
+});
+document.getElementById("loyalty-add-tier")?.addEventListener("click", () => {
+  document.getElementById("loyalty-tiers").insertAdjacentHTML("beforeend", tierRowHtml());
+});
+document.getElementById("loyalty-tiers")?.addEventListener("click", (event) => {
+  const button = event.target instanceof Element ? event.target.closest("[data-remove-tier]") : null;
+  if (button) button.closest("tr")?.remove();
+});
+
+document.getElementById("loyalty-round")?.addEventListener("click", async (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLButtonElement)) return;
+  const roundId = target.closest("#loyalty-round")?.querySelector("[data-round-id]")?.getAttribute("data-round-id");
+  let request = null;
+  if (target.id === "loyalty-pick") request = () => writeApi(adminApi("/loyalty/pick"), "POST", {});
+  else if (target.id === "loyalty-release" && roundId) {
+    if (!window.confirm("Give this week's free time out now?")) return;
+    request = () => writeApi(adminApi(`/loyalty/rounds/${encodeURIComponent(roundId)}/release`), "POST", {});
+  } else if (target.id === "loyalty-cancel" && roundId) {
+    if (!window.confirm("Cancel this week's round? Nobody gets it this week unless you pick again.")) return;
+    request = () => api(adminApi(`/loyalty/rounds/${encodeURIComponent(roundId)}`), { method: "DELETE" });
+  } else if (target.dataset.loyaltyRemove && roundId) {
+    request = () => writeApi(adminApi(`/loyalty/rounds/${encodeURIComponent(roundId)}/remove`), "POST", { phone: target.dataset.loyaltyRemove });
+  }
+  if (!request) return;
+  target.disabled = true;
+  try {
+    await request();
+    state.cache.loyalty = await api(endpoints.loyalty);
+    renderLoyalty();
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : "Failed");
+    target.disabled = false;
+  }
+});
+
 promoEndBtn?.addEventListener("click", async () => {
   const promo = state.cache.promo;
   const isLive = Boolean(promo?.activatedAt) && new Date(promo.startsAt).getTime() <= Date.now();
@@ -1422,18 +1732,6 @@ promoEndBtn?.addEventListener("click", async () => {
   }
 });
 
-document.getElementById("more-info-btn")?.addEventListener("click", (event) => {
-  const button = event.currentTarget;
-  const expanded = document.body.classList.toggle("show-more-info");
-  button.textContent = expanded ? "Less info" : "More info";
-  button.setAttribute("aria-expanded", String(expanded));
-});
-document.getElementById("toggle-sensitive-btn")?.addEventListener("click", (event) => {
-  const button = event.currentTarget;
-  const shown = document.body.classList.toggle("show-sensitive");
-  button.textContent = shown ? "Hide sensitive" : "Show sensitive";
-  button.setAttribute("aria-pressed", String(shown));
-});
 refreshBtn.addEventListener("click", () => { void checkHealth(); if (state.sessionToken) void loadDashboard(); });
 logoutBtn.addEventListener("click", () => clearSession({ forgetTrusted: true }));
 planCancel.addEventListener("click", resetPlanForm);
@@ -1536,9 +1834,3 @@ document.addEventListener("click", (event) => {
   }
 });
 
-// Tap a blurred value to reveal just that one -- the menu's "Show sensitive"
-// was hard to reach on phones.
-document.addEventListener("click", (event) => {
-  const target = event.target instanceof Element ? event.target.closest(".sensitive") : null;
-  if (target) target.classList.toggle("revealed");
-});

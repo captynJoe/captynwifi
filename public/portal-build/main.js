@@ -63,6 +63,10 @@ const manualConnectOpenBtn = requireElement("manual-connect-open-btn");
 const manualConnectForm = requireElement("manual-connect-form");
 const manualConnectSubmitBtn = requireElement("manual-connect-submit-btn");
 let pendingManualConnect = null;
+// Set when the number already has a full package on another device: paying
+// again adds this device to it (POST /payments/mpesa/stk addToPackage).
+let pendingAddToPackage = null;
+let addingDevice = false;
 const errorText = requireElement("error");
 const paymentModal = requireElement("payment-modal");
 const paymentModalIcon = requireElement("payment-modal-icon");
@@ -70,6 +74,7 @@ const paymentModalTitle = requireElement("payment-modal-title");
 const paymentModalMessage = requireElement("payment-modal-message");
 const paymentModalCancelBtn = requireElement("payment-modal-cancel-btn");
 const paymentModalRetryBtn = requireElement("payment-modal-retry-btn");
+const paymentModalAddBtn = requireElement("payment-modal-add-btn");
 const existingLoginToggle = requireElement("existing-login-toggle");
 const existingLoginForm = requireElement("existing-login-form");
 const existingUsernameInput = requireElement("existing-username");
@@ -272,6 +277,7 @@ async function loadNotifications(username) {
         // Same rule as credit loading: never block access on inbox niceties.
     }
     await loadRedeemableCredits(username);
+    void loadRewards();
 }
 async function activateCredit(creditId) {
     if (!creditId || activatingCreditId)
@@ -308,6 +314,147 @@ async function activateCredit(creditId) {
         showError(error instanceof Error ? error.message : "Unable to activate this credit.");
     }
 }
+// ---------- Weekly rewards ----------
+// This month's rank, points and tier, what it takes to climb, and this
+// week's reward cards (free time, or a package with bonus time and speed).
+const rewardsEl = document.getElementById("rewards");
+let rewardsData = null;
+let rewardBusy = false;
+function rewardIdentity() {
+    return { username: notifUsername || undefined, deviceMac: state.hotspot?.mac || undefined };
+}
+async function loadRewards() {
+    const identity = rewardIdentity();
+    if (!identity.username && !identity.deviceMac)
+        return;
+    const params = new URLSearchParams();
+    if (identity.username)
+        params.set("username", identity.username);
+    if (identity.deviceMac)
+        params.set("deviceMac", identity.deviceMac);
+    try {
+        const response = await fetch(api(`/loyalty/me?${params.toString()}`));
+        if (!response.ok)
+            return;
+        rewardsData = (await response.json())?.data || null;
+        renderRewards();
+    }
+    catch (_error) {
+        // Rewards are extra; never block access on them.
+    }
+}
+function renderRewards() {
+    if (!rewardsEl)
+        return;
+    const data = rewardsData;
+    if (!data?.enabled || !data.known || !data.standing) {
+        rewardsEl.classList.add("hidden");
+        return;
+    }
+    const standing = data.standing;
+    const tierIndex = (name) => Math.max(0, (data.tiers || []).findIndex((tier) => tier.name === name));
+    const monthName = new Date(`${data.month}-01T00:00:00Z`).toLocaleString("en", { month: "long", timeZone: "UTC" });
+    let standingHtml;
+    if (!standing.ranked) {
+        standingHtml = `<div class="rewards-standing"><strong class="rewards-rank">Not ranked yet</strong><span>${monthName}</span></div>
+      <p class="rewards-next">Pay on ${standing.daysToQualify} more day${standing.daysToQualify === 1 ? "" : "s"} this month to get ranked.</p>`;
+    }
+    else {
+        const gap = (g) => (g.ksh ? `${money(g.ksh)} more` : `${g.points} more points`);
+        const lines = [];
+        if (standing.nextRank)
+            lines.push(`${gap(standing.nextRank)} this month passes #${standing.nextRank.rank}`);
+        else
+            lines.push(`You're #1 this month`);
+        if (standing.nextTier && (!standing.nextRank || standing.nextTier.points > standing.nextRank.points))
+            lines.push(`${gap(standing.nextTier)} reaches ${esc(standing.nextTier.name)}`);
+        standingHtml = `<div class="rewards-standing">
+        ${standing.tier ? `<span class="tier-badge tier-${tierIndex(standing.tier) + 1}">${esc(standing.tier)}</span>` : ""}
+        <strong class="rewards-rank">#${standing.rank}</strong>
+        <span>${standing.points} points · ${monthName}</span>
+      </div>
+      <p class="rewards-next">${lines.map(esc).join(" · ")}</p>`;
+    }
+    const reward = data.reward;
+    let cardsHtml = "";
+    if (reward) {
+        const pickBy = new Date(reward.expiresAt).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+        const disabled = rewardBusy ? " disabled" : "";
+        const cards = [
+            `<button class="reward-card reward-free" type="button" data-reward-free${disabled}>
+        <span class="reward-kicker">Free</span><strong>${esc(duration(reward.freeSeconds))}</strong><span>Starts now on this device</span></button>`,
+            ...(reward.cards || []).map((card) => `<button class="reward-card" type="button" data-reward-plan="${esc(card.planId)}"${disabled}>
+        <span class="reward-kicker">Pay ${money(card.priceKsh)}</span><strong>${esc(card.name)}</strong>
+        <span>${esc(duration(card.durationSeconds))}${card.bonusSeconds ? ` <b>+${esc(duration(card.bonusSeconds))}</b>` : ""}</span>
+        <span>${friendlyRate(card.boostedRateLimit)}</span></button>`)
+        ];
+        cardsHtml = `<div class="reward-head"><strong>${esc(reward.tier)} reward · pick one</strong><span>by ${esc(pickBy)}</span></div>
+      <div class="reward-cards">${cards.join("")}</div>`;
+    }
+    rewardsEl.innerHTML = `<article class="rewards-card">${standingHtml}${cardsHtml}</article>`;
+    rewardsEl.classList.remove("hidden");
+}
+rewardsEl?.addEventListener("click", async (event) => {
+    const target = event.target instanceof Element ? event.target.closest(".reward-card") : null;
+    if (!target || rewardBusy || !rewardsData?.reward)
+        return;
+    const reward = rewardsData.reward;
+    const planId = target.getAttribute("data-reward-plan");
+    if (!state.hotspot?.mac) {
+        showError("Connect to the CAPTYN WiFi network, then reopen this page to use your reward.");
+        return;
+    }
+    rewardBusy = true;
+    renderRewards();
+    showError("");
+    try {
+        if (!planId) {
+            const response = await fetch(api(`/loyalty/rewards/${encodeURIComponent(reward.id)}/free`), {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(rewardIdentity())
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok)
+                throw new Error(payload.error || "Unable to use this reward.");
+            rewardsData.reward = null;
+            renderRewards();
+            showConnectedPanel(payload.data.entitlement, {
+                heading: payload.data.extended ? "Free time added" : "Reward on",
+                recoveryReference: payload.data.sourceReference,
+                hideCredentials: Boolean(state.hotspot?.login),
+                freshGrant: true
+            });
+        }
+        else {
+            showPaymentModal("connecting", "Sending prompt", "Sending prompt...");
+            const response = await fetch(api(`/loyalty/rewards/${encodeURIComponent(reward.id)}/pay`), {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ ...rewardIdentity(), planId })
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok)
+                throw new Error(payload.error || "Unable to start M-PESA payment.");
+            state.paymentId = payload.data.id;
+            state.paymentStartedAt = Date.now();
+            const message = payload.data.customerMessage || waitingMessage();
+            showPaymentModal("connecting", "Check your phone", message);
+            if (state.pollTimer)
+                clearInterval(state.pollTimer);
+            state.pollTimer = setInterval(pollPayment, 2500);
+            setTimeout(pollPayment, 1000);
+        }
+    }
+    catch (error) {
+        hidePaymentModal();
+        showError(error instanceof Error ? error.message : "Unable to use this reward.");
+    }
+    finally {
+        rewardBusy = false;
+        renderRewards();
+    }
+});
 function setNotifMenuOpen(open) {
     if (!notifMenu || !notifToggleBtn)
         return;
@@ -358,7 +505,22 @@ const servicePath = (path) => `${basePath}${path}`;
 function showError(message) {
     errorText.textContent = message || "";
     errorText.classList.toggle("hidden", !message);
+    if (message)
+        reportClientError(message, "shown");
 }
+// Tells the API what went wrong on this device (see /client-errors).
+function reportClientError(message, kind) {
+    try {
+        const body = JSON.stringify({ message: String(message).slice(0, 400), kind, deviceMac: state?.hotspot?.mac || null, page: location.pathname + location.search.slice(0, 200) });
+        const url = api("/client-errors");
+        if (!navigator.sendBeacon?.(url, new Blob([body], { type: "application/json" }))) {
+            void fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: true }).catch(() => { });
+        }
+    }
+    catch (_error) { }
+}
+window.addEventListener("error", (event) => reportClientError(`${event.message} @ ${event.filename}:${event.lineno}`, "exception"));
+window.addEventListener("unhandledrejection", (event) => reportClientError(String(event.reason?.message || event.reason), "rejection"));
 function money(value) { return `KSh ${Number(value || 0).toLocaleString()}`; }
 function duration(seconds) {
     const value = Number(seconds || 0);
@@ -382,11 +544,14 @@ function rateParts(rateLimit) {
         return { upload: 0, download: 0 };
     return { upload: Number(match[1]) || 0, download: Number(match[2]) || 0 };
 }
+// Every package bursts to twice its speed for short loads (see BURST_MULTIPLIER
+// in services/rateLimit.ts), so speeds read "x + burst".
+const BURST_MULTIPLIER = 2;
 function friendlyRate(rateLimit) {
     const { upload, download } = rateParts(rateLimit);
     if (!download && !upload)
         return rateLimit ? esc(rateLimit) : "Standard speed";
-    return `↓ ${download} Mbps · ↑ ${upload} Mbps`;
+    return `<span title="Bursts to ${download * BURST_MULTIPLIER} Mbps for quick loads">↓ ${download} Mbps <b class="burst">+ burst</b> · ↑ ${upload} Mbps</span>`;
 }
 function speedTierClass(plan) {
     const { download } = rateParts(plan.rateLimit);
@@ -540,13 +705,16 @@ function setConnectState(statusEl, formEl, state, message) {
     }
 }
 function showPaymentModal(kind, title, message) {
+    if (kind === "bad")
+        reportClientError(`${title}: ${message || ""}`, "payment");
     paymentModal.classList.remove("hidden");
-    const iconClass = kind === "connecting" ? "spin" : kind === "ok" ? "ok" : kind === "welcome-used" ? "laugh-cry" : "bad";
+    const iconClass = kind === "connecting" ? "spin" : kind === "ok" ? "ok" : kind === "welcome-used" ? "laugh-cry" : kind === "add-device" ? "add-device" : "bad";
     paymentModalIcon.className = `payment-modal-icon ${iconClass}`;
-    paymentModalIcon.textContent = kind === "welcome-used" ? "\u{1F62D}" : "";
+    paymentModalIcon.textContent = kind === "welcome-used" ? "\u{1F62D}" : kind === "add-device" ? "\u{1F4F1}" : "";
     paymentModalTitle.textContent = title;
     paymentModalMessage.textContent = message || "";
-    paymentModalCancelBtn.classList.toggle("hidden", kind !== "connecting");
+    paymentModalCancelBtn.classList.toggle("hidden", kind !== "connecting" && kind !== "add-device");
+    paymentModalAddBtn.classList.toggle("hidden", kind !== "add-device");
     paymentModalRetryBtn.classList.toggle("hidden", kind !== "bad" && kind !== "welcome-used");
     paymentModalRetryBtn.textContent = kind === "welcome-used" ? "Browse packages →" : "Try Again";
 }
@@ -1581,10 +1749,12 @@ async function pollPayment() {
         state.pollTimer = null;
         hidePaymentModal();
         showConnectedPanel(payment.entitlement, {
-            heading: payment.extended ? "Access extended" : "Access ready",
-            message: payment.extended
-                ? "Your existing package's time has been topped up. Activating WiFi on this device now."
-                : "Payment complete. Activating WiFi on this device now.",
+            heading: addingDevice ? "Device added" : payment.extended ? "Access extended" : "Access ready",
+            message: addingDevice
+                ? "This device is on your package now. Activating WiFi."
+                : payment.extended
+                    ? "Your existing package's time has been topped up. Activating WiFi on this device now."
+                    : "Payment complete. Activating WiFi on this device now.",
             recoveryReference: payment.receiptNumber || payment.providerReference || payment.sourceReference,
             hideCredentials: true,
             freshGrant: true
@@ -1670,6 +1840,9 @@ paymentForm.addEventListener("submit", async (event) => {
         return;
     }
     phoneInput.value = normalizedPhone;
+    await requestStkPayment(plan, normalizedPhone);
+});
+async function requestStkPayment(plan, normalizedPhone, addToPackage = false) {
     payButton.textContent = "Sending prompt...";
     setConnectState(paymentStatus, null, "connecting", "Sending prompt...");
     showPaymentModal("connecting", "Sending prompt", "Sending prompt...");
@@ -1678,11 +1851,16 @@ paymentForm.addEventListener("submit", async (event) => {
         const response = await fetch(api("/payments/mpesa/stk"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ planId: plan.id, phone: normalizedPhone, deviceMac: state.hotspot?.mac || undefined, deviceCount: checkoutDevices(plan) })
+            body: JSON.stringify({ planId: plan.id, phone: normalizedPhone, deviceMac: state.hotspot?.mac || undefined, deviceCount: checkoutDevices(plan), addToPackage: addToPackage || undefined })
         });
         const payload = await response.json().catch(() => ({}));
+        if (response.status === 409 && payload.code === "package_on_other_device") {
+            offerAddToPackage(plan, normalizedPhone, payload);
+            return;
+        }
         if (!response.ok)
             throw new Error(payload.error || "Unable to start M-PESA payment.");
+        addingDevice = addToPackage;
         state.paymentId = payload.data.id;
         state.paymentStartedAt = Date.now();
         payButton.textContent = "Waiting for M-PESA...";
@@ -1703,6 +1881,34 @@ paymentForm.addEventListener("submit", async (event) => {
         payButton.textContent = Number(plan.priceKsh || 0) === 0 ? paymentActionLabel(plan) : `Pay ${money(plan.priceKsh)}`;
         setStep("package");
     }
+}
+function resetPayButton(plan) {
+    payButton.disabled = false;
+    payButton.textContent = Number(plan.priceKsh || 0) === 0 ? paymentActionLabel(plan) : `Pay ${money(devicePriceFor(plan, checkoutDevices(plan)))}`;
+}
+// The number's package is full on another device, so this payment would
+// only add time there. Offer to add this device instead.
+function offerAddToPackage(plan, phone, payload) {
+    setConnectState(paymentStatus, null, "", "");
+    resetPayButton(plan);
+    setStep("package");
+    const add = payload.package?.addDevice;
+    if (!add) {
+        showPaymentModal("bad", "Package already in use", payload.error);
+        return;
+    }
+    pendingAddToPackage = { plan, phone };
+    const left = formatTimeLeft(new Date(payload.package.expiresAt).getTime() - Date.now());
+    showPaymentModal("add-device", "Running on another device", `This number's package has ${left}. Add this device to it, or use another number for a separate package.`);
+    paymentModalAddBtn.textContent = `Add this device · ${money(add.priceKsh)}`;
+}
+paymentModalAddBtn.addEventListener("click", () => {
+    if (!pendingAddToPackage)
+        return;
+    const { plan, phone } = pendingAddToPackage;
+    pendingAddToPackage = null;
+    payButton.disabled = true;
+    requestStkPayment(plan, phone, true);
 });
 paymentModalCancelBtn.addEventListener("click", () => {
     resetPaymentAttempt();
@@ -2083,6 +2289,7 @@ async function bootstrap() {
         return;
     }
     void loadRedeemableCredits(null);
+    void loadRewards();
     // Recognizes a returning device two ways, in order: this browser's own
     // remembered access (fast, no network call), then a server-side by-device
     // MAC lookup as a fallback for when storage didn't survive a fresh

@@ -88,6 +88,8 @@ model WifiPaymentIntent {
   deviceCount         Int?
   purpose             String                  @default("purchase")
   targetEntitlementId String?
+  // A weekly reward card this payment redeems (bonus time and speed).
+  loyaltyRewardId     String?
   provider            String                  @default("mpesa")
   providerReference   String?
   receiptNumber       String?
@@ -346,4 +348,67 @@ model WifiNotification {
   createdAt     DateTime  @default(now())
 
   @@index([customerPhone, readAt, createdAt])
+}
+
+// Weekly rewards for regulars. Points are a calendar-month score (spend 70,
+// regularity 30) that resets on the 1st and is never spent. Every Sunday the
+// ranking is frozen into tiers (Gold/Silver/Bronze...); on a random day that
+// week each ranked customer gets a WifiLoyaltyReward and picks one card:
+// free time, or one of a few suggested packages with bonus time and speed.
+model WifiLoyaltySetting {
+  id          String   @id @default("default")
+  enabled     Boolean  @default(false)
+  // [{ name, maxRank, freeHours, bonusHours, speedBoostPct }], best first.
+  tiers       Json?
+  claimDays   Int      @default(7)
+  minPaidDays Int      @default(3)
+  updatedAt   DateTime @updatedAt
+}
+
+model WifiLoyaltyRound {
+  id         String              @id @default(uuid())
+  // Nairobi Sunday that picked this round; one round per week.
+  weekOf     DateTime            @unique
+  // Points month the ranking came from, e.g. "2026-10".
+  month      String
+  releaseAt  DateTime
+  claimDays  Int
+  // scheduled | released
+  status     String              @default("scheduled")
+  releasedAt DateTime?
+  createdAt  DateTime            @default(now())
+  updatedAt  DateTime            @updatedAt
+  rewards    WifiLoyaltyReward[]
+
+  @@index([status, releaseAt])
+}
+
+model WifiLoyaltyReward {
+  id               String           @id @default(uuid())
+  roundId          String
+  round            WifiLoyaltyRound @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  customerPhone    String
+  deviceMac        String?
+  rank             Int
+  points           Int
+  spentKsh         Int
+  paidDays         Int
+  tier             String
+  freeSeconds      Int
+  bonusSeconds     Int
+  speedBoostPct    Int
+  // Suggested packages offered as cards next to the free-time card.
+  offerPlanIds     String[]
+  // scheduled (not out yet) | available | claimed
+  status           String           @default("scheduled")
+  // "free" or the chosen package's plan id
+  choice           String?
+  claimedAt        DateTime?
+  expiresAt        DateTime?
+  paymentIntentId  String?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  @@unique([roundId, customerPhone])
+  @@index([customerPhone, status])
 }

@@ -10,6 +10,8 @@ import { integrationRouter } from "./routes/integration.js";
 import { adminRouter } from "./routes/admin.js";
 import { adminAuthRouter } from "./routes/adminAuth.js";
 import { publicRouter, reconcilePendingMpesaPayments } from "./routes/public.js";
+import { runLoyaltyCycle } from "./services/loyalty.js";
+import { prisma } from "./prisma.js";
 
 const app = express();
 const publicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
@@ -33,6 +35,12 @@ app.get(["/portal", "/portal/"], (_req, res) => {
   res.sendFile(path.join(publicDir, "portal.html"));
 });
 app.use("/admin", express.static(publicDir));
+// /wifi/portal/ was a broken return address for a while (nginx maps /wifi/
+// onto /portal/), so browsers still autocomplete it: send them to the portal.
+app.get(/^\/portal\/portal(\/.*)?$/, (req, res) => {
+  const query = req.originalUrl.includes("?") ? req.originalUrl.slice(req.originalUrl.indexOf("?")) : "";
+  res.redirect(302, `/wifi/${query}`);
+});
 app.use("/portal", express.static(publicDir));
 app.use("/api/public", publicRouter);
 app.use("/api/admin-auth", adminAuthRouter);
@@ -69,3 +77,12 @@ setInterval(() => {
     })
     .catch((error) => console.error("M-PESA reconcile error:", error));
 }, 2 * 60 * 1000).unref();
+
+// Weekly regulars reward: picks on Sundays, releases on the round's random day.
+setInterval(() => {
+  runLoyaltyCycle(prisma)
+    .then(({ picked, released }) => {
+      if (picked || released) console.log(`Loyalty: picked ${picked}, credited ${released}`);
+    })
+    .catch((error) => console.error("Loyalty cycle error:", error));
+}, 10 * 60 * 1000).unref();

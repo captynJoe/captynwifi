@@ -471,3 +471,33 @@ button.extend-period-btn:hover, button#pay-button:hover { filter: brightness(1.0
 .package-view.active { border-color: transparent; background: linear-gradient(135deg, var(--brand-blue), var(--brand-cyan)); color: #00140a; }
 :root[data-theme="light"] .package-view.active { color: #fff; }
 .package-view[data-view="fast"].active { background: linear-gradient(135deg, #3f6bf0, var(--brand-cyan)); }
+
+/* "x + burst" on package speeds. */
+.burst { font-weight: 800; opacity: .78; }
+
+/* ---------- Weekly rewards ---------- */
+.rewards-card { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); }
+.rewards-standing { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.rewards-standing span { color: var(--muted); font-size: 13px; font-weight: 700; }
+.rewards-rank { font-family: var(--font-display); font-size: 24px; line-height: 1; color: var(--text-strong); }
+.rewards-next { margin: 0; color: var(--text); font-size: 13px; font-weight: 600; }
+.tier-badge { align-self: center; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 800; color: #1a1300 !important; background: #e8b12c; }
+.tier-badge.tier-2 { background: #c9ced8; }
+.tier-badge.tier-3 { background: #d39a6a; }
+.tier-badge.tier-4, .tier-badge.tier-5, .tier-badge.tier-6 { background: var(--surface-soft); color: var(--text) !important; }
+.reward-head { display: flex; justify-content: space-between; gap: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.reward-head strong { color: var(--text-strong); font-size: 14px; }
+.reward-head span { color: var(--muted); font-size: 12.5px; font-weight: 700; }
+.reward-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.reward-card {
+  display: grid; gap: 3px; align-content: start; justify-content: start; justify-items: start; text-align: left; min-height: 96px; padding: 12px;
+  border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-soft); color: var(--text);
+}
+.reward-card:hover { border-color: var(--brand-blue); transform: none; }
+.reward-card[disabled] { opacity: .6; }
+.reward-card strong { color: var(--text-strong); font-size: 16px; }
+.reward-card span { font-size: 12.5px; color: var(--muted); font-weight: 600; }
+.reward-card b { color: var(--green); }
+.reward-card b.burst { color: inherit; }
+.reward-free { border-color: var(--green); background: var(--green-soft); }
+.reward-kicker { color: var(--text) !important; font-weight: 800 !important; text-transform: uppercase; font-size: 11px !important; letter-spacing: .04em; }

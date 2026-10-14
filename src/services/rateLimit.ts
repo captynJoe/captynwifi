@@ -84,3 +84,21 @@ export function withBurst(rateLimit: string | null | undefined): string | null {
   const pair = (factor: number) => `${formatBps(parsed.uploadBps * factor)}/${formatBps(parsed.downloadBps * factor)}`;
   return `${baseRateLimit(rateLimit)} ${pair(BURST_MULTIPLIER)} ${pair(BURST_THRESHOLD_SHARE)} ${BURST_TIME_SECONDS}/${BURST_TIME_SECONDS}`;
 }
+
+// A loyalty speed boost: the base speeds raised by `percent` (bursts still
+// apply on top via withBurst).
+export function boostRateLimit(rateLimit: string | null | undefined, percent: number): string | null {
+  const parsed = parseMikrotikRateLimit(rateLimit);
+  if (!parsed || !(percent > 0)) return rateLimit ?? null;
+  const factor = 1 + percent / 100;
+  return formatMikrotikRateLimit({ uploadBps: parsed.uploadBps * factor, downloadBps: parsed.downloadBps * factor });
+}
+
+// The faster of two base speeds (by download), so a boost never slows anyone.
+export function fasterRateLimit(a: string | null | undefined, b: string | null | undefined): string | null {
+  const pa = parseMikrotikRateLimit(a);
+  const pb = parseMikrotikRateLimit(b);
+  if (!pa) return b ?? a ?? null;
+  if (!pb) return a ?? null;
+  return pb.downloadBps > pa.downloadBps ? (b ?? null) : (a ?? null);
+}

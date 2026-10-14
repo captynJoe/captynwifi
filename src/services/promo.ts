@@ -3,7 +3,7 @@ import { buildRadiusProjection, createRadiusSecret, normalizeDeviceMac } from ".
 import { applyRadiusProjectionRows, hasOtherActiveEntitlement } from "./radiusSqlApply.js";
 import { kickHotspotUser } from "./routeros.js";
 
-const PROMO_PLAN_SOURCE = "captyn_wifi_promo";
+export const PROMO_PLAN_SOURCE = "captyn_wifi_promo";
 const PROMO_PLAN_EXTERNAL_ID = "free-surfing-promo";
 
 export type StartPromoInput = {

@@ -6,7 +6,7 @@
     <title>CAPTYN WiFi</title>
     <script src="theme.js?v=2026080402"></script>
     <link rel="stylesheet" href="theme.css?v=2026080924" />
-    <link rel="stylesheet" href="portal.css?v=2026100711" />
+    <link rel="stylesheet" href="portal.css?v=2026101201" />
   </head>
   <body>
     <main class="portal-app">
@@ -43,6 +43,8 @@
       </section>
 
       <section id="credit-offers" class="credit-offers hidden" aria-label="Available WiFi credit"></section>
+
+      <section id="rewards" class="rewards hidden" aria-label="Your rewards"></section>
 
       <div id="checkout-backdrop" class="checkout-backdrop"></div>
 
@@ -187,10 +189,11 @@
         <h2 id="payment-modal-title">Check your phone</h2>
         <p id="payment-modal-message" class="payment-modal-message"></p>
         <button id="payment-modal-cancel-btn" class="ghost payment-modal-cancel" type="button">Cancel</button>
+        <button id="payment-modal-add-btn" class="primary payment-modal-retry hidden" type="button">Add this device</button>
         <button id="payment-modal-retry-btn" class="primary payment-modal-retry hidden" type="button">Try Again</button>
       </div>
     </div>
 
-    <script type="module" src="portal-build/main.js?v=2026100711" data-cfasync="false"></script>
+    <script type="module" src="portal-build/main.js?v=2026101201" data-cfasync="false"></script>
   </body>
 </html>
