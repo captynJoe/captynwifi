@@ -86,6 +86,14 @@ const publicReceiptLookupLimit = clientRateLimit({
   message: "Too many receipt lookups. Try again shortly."
 });
 
+const publicFunnelEventLimit = clientRateLimit({
+  name: "wifi-public-funnel-event",
+  windowMs: 60 * 1000,
+  max: 600,
+  key: ipKey,
+  message: "Too many requests. Try again shortly."
+});
+
 const publicPaymentIpLimit = clientRateLimit({
   name: "wifi-public-payment",
   windowMs: 60 * 1000,
@@ -118,6 +126,7 @@ const PUBLICLY_PURCHASABLE_SOURCES = ["captyn_admin", "captyn_dynamic"];
 
 const stkRequestSchema = z.object({
   planId: z.string().min(1),
+  funnelSessionId: z.string().uuid().optional(),
   phone: z.string().min(7),
   deviceMac: z.string().trim().optional().nullable(),
   deviceCount: z.coerce.number().int().min(1).max(MAX_DEVICES).optional(),
@@ -128,6 +137,7 @@ const stkRequestSchema = z.object({
 
 const addDeviceStkSchema = z.object({
   username: z.string().trim().min(1),
+  funnelSessionId: z.string().uuid().optional(),
   password: z.string().min(1),
   phone: z.string().min(7),
   deviceCount: z.coerce.number().int().min(2).max(MAX_DEVICES)
@@ -135,6 +145,7 @@ const addDeviceStkSchema = z.object({
 
 const freeAccessSchema = z.object({
   planId: z.string().min(1),
+  funnelSessionId: z.string().uuid().optional(),
   deviceMac: z.string().trim().optional().nullable()
 });
 
@@ -211,6 +222,7 @@ async function sumOutageCreditSeconds(entitlementId: string): Promise<number> {
 
 async function publicEntitlement(entitlement: {
   id: string;
+  planId: string;
   username: string;
   cleartextSecret: string;
   startsAt: Date;
@@ -224,6 +236,7 @@ async function publicEntitlement(entitlement: {
     prisma.wifiEntitlementDevice.findMany({ where: { entitlementId: entitlement.id }, orderBy: { addedAt: "asc" } })
   ]);
   return {
+    planId: entitlement.planId,
     username: entitlement.username,
     password: entitlement.cleartextSecret,
     // startsAt lets the portal draw time left as a share of the package.
@@ -549,7 +562,7 @@ async function activatePaymentIntent(intent: WifiPaymentIntent, confirmedAt = ne
   });
 }
 
-async function activateFreePlan(plan: WifiPlan, deviceMac: string | null) {
+async function activateFreePlan(plan: WifiPlan, deviceMac: string | null, funnelSessionId?: string) {
   const startsAt = new Date();
   const username = freeAccessUsername(deviceMac);
   const sourceRef = sourceReference();
@@ -578,6 +591,7 @@ async function activateFreePlan(plan: WifiPlan, deviceMac: string | null) {
         customerPhone: username,
         deviceMac,
         amountKsh: 0,
+        funnelSessionId,
         provider: "free",
         status: "activated",
         confirmedAt: startsAt
@@ -825,6 +839,30 @@ publicRouter.get("/sites", async (_req, res, next) => {
   }
 });
 
+const funnelEventSchema = z.object({
+  sessionId: z.string().uuid(),
+  event: z.enum(["package_view", "package_selected", "upgrade_selected", "checkout_started", "payment_prompt_started", "payment_prompt_failed", "checkout_cancelled"]),
+  planId: z.string().trim().min(1).max(100).optional().nullable(),
+  fromPlanId: z.string().trim().min(1).max(100).optional().nullable()
+});
+
+publicRouter.post("/funnel/events", publicFunnelEventLimit, async (req, res, next) => {
+  try {
+    const parsed = funnelEventSchema.parse(req.body);
+    await prisma.wifiFunnelEvent.create({
+      data: {
+        sessionId: parsed.sessionId,
+        event: parsed.event,
+        planId: parsed.planId ?? null,
+        fromPlanId: parsed.fromPlanId ?? null
+      }
+    });
+    return res.status(204).end();
+  } catch (error) {
+    return next(error);
+  }
+});
+
 publicRouter.post("/access/free", publicFreeAccessLimit, async (req, res, next) => {
   try {
     const parsed = freeAccessSchema.parse(req.body);
@@ -847,7 +885,7 @@ publicRouter.post("/access/free", publicFreeAccessLimit, async (req, res, next) 
       return res.status(400).json({ error: "Free access needs to come from the CAPTYN WiFi sign-in page so it can be tied to your device. Reconnect to the WiFi network and try again from there." });
     }
 
-    const activated = await activateFreePlan(plan, deviceMac);
+    const activated = await activateFreePlan(plan, deviceMac, parsed.funnelSessionId);
     if (activated.blocked) {
       return res.status(400).json({
         error: "This device already has active free WiFi access. It needs to expire before you can claim it again.",
@@ -929,7 +967,13 @@ publicRouter.get("/entitlements/by-device/:mac", publicDeviceLookupLimit, async 
     const mac = normalizeDeviceMac(req.params.mac);
     if (!mac) return res.status(400).json({ error: "Device MAC required" });
     const entitlement = await prisma.wifiEntitlement.findFirst({
-      where: { deviceMac: mac, ...activeAccessWhere(new Date()) },
+      where: {
+        ...activeAccessWhere(new Date()),
+        OR: [
+          { deviceMac: mac },
+          { devices: { some: { deviceMac: mac, signedOutAt: null } } }
+        ]
+      },
       orderBy: { expiresAt: "desc" }
     });
     if (!entitlement) return res.status(404).json({ error: "No active access for this device" });
@@ -1291,6 +1335,7 @@ publicRouter.post("/payments/mpesa/stk", publicPaymentIpLimit, async (req, res, 
           deviceCount: nextCount,
           purpose: "add_device",
           targetEntitlementId: existingActive.id,
+          funnelSessionId: parsed.funnelSessionId,
           provider: "mpesa",
           status: "pending_confirmation"
         }
@@ -1343,6 +1388,7 @@ publicRouter.post("/payments/mpesa/stk", publicPaymentIpLimit, async (req, res, 
         deviceMac: normalizeDeviceMac(parsed.deviceMac),
         amountKsh,
         deviceCount,
+        funnelSessionId: parsed.funnelSessionId,
         provider: "mpesa",
         status: "pending_confirmation"
       },
@@ -1438,6 +1484,7 @@ publicRouter.post("/payments/mpesa/add-device", publicPaymentIpLimit, async (req
         deviceCount: parsed.deviceCount,
         purpose: "add_device",
         targetEntitlementId: entitlement.id,
+        funnelSessionId: parsed.funnelSessionId,
         provider: "mpesa",
         status: "pending_confirmation"
       }

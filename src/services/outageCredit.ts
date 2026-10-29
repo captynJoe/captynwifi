@@ -348,7 +348,7 @@ export async function resumePausedEntitlements(prisma: PrismaClient): Promise<Re
         const inserted = await tx.$queryRaw<CreditInsertRow[]>`
           INSERT INTO "WifiOutageCredit" ("service", "outageStartedAt", "outageEndedAt", "creditedSeconds", "affectedEntitlements", "entitlementId")
           VALUES (${entitlement.outagePauseCause ?? "unknown"}, ${pausedAt}, ${decision.reconnectedAt}, ${decision.creditedSeconds}, 1, ${entitlement.id})
-          ON CONFLICT ("service", "outageStartedAt", "outageEndedAt") DO NOTHING
+          ON CONFLICT ("service", "outageStartedAt", "outageEndedAt", "entitlementId") DO NOTHING
           RETURNING "id"
         `;
         if (inserted[0]?.id) {

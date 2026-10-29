@@ -53,6 +53,7 @@ interface EntitlementDevice {
 }
 
 interface Entitlement {
+  planId?: string;
   username: string;
   password: string;
   expiresAt: string;
@@ -143,6 +144,9 @@ const accessPassword = requireElement<HTMLElement>("access-password");
 const accessRecovery = requireElement<HTMLElement>("access-recovery");
 const accessExpires = requireElement<HTMLElement>("access-expires");
 const accessOutageNote = requireElement<HTMLElement>("access-outage-note");
+const accessConnectPrompt = requireElement<HTMLElement>("access-connect-prompt");
+const accessConnectMessage = requireElement<HTMLElement>("access-connect-message");
+const accessConnectNow = requireElement<HTMLButtonElement>("access-connect-now");
 const accessDevices = requireElement<HTMLElement>("access-devices");
 const accessDevicesCount = requireElement<HTMLElement>("access-devices-count");
 const accessDevicesNotice = requireElement<HTMLElement>("access-devices-notice");
@@ -174,6 +178,8 @@ const manualConnectOpenBtn = requireElement<HTMLAnchorElement>("manual-connect-o
 const manualConnectForm = requireElement<HTMLFormElement>("manual-connect-form");
 const manualConnectSubmitBtn = requireElement<HTMLButtonElement>("manual-connect-submit-btn");
 let pendingManualConnect: { username: string; password: string } | null = null;
+let pendingFreshConnect: { username: string; password: string } | null = null;
+let freshConnectInterval: number | null = null;
 // Set when the number already has a full package on another device: paying
 // again adds this device to it (POST /payments/mpesa/stk addToPackage).
 let pendingAddToPackage: { plan: any; phone: string } | null = null;
@@ -587,6 +593,55 @@ document.addEventListener("keydown", (event) => {
 
 const basePath = window.location.pathname.startsWith("/wifi") ? "/wifi" : "";
 const api = (path) => `${basePath}/api/public${path}`;
+const FUNNEL_SESSION_KEY = "captynWifiFunnelSession";
+function createFunnelSessionId() {
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (char) => {
+    const random = Math.random() * 16 | 0;
+    return (char === "x" ? random : (random & 0x3 | 0x8)).toString(16);
+  });
+}
+function getFunnelSessionId() {
+  try {
+    let id = sessionStorage.getItem(FUNNEL_SESSION_KEY);
+    if (!id) { id = createFunnelSessionId(); sessionStorage.setItem(FUNNEL_SESSION_KEY, id); }
+    return id;
+  } catch (_error) { return createFunnelSessionId(); }
+}
+const funnelSessionId = getFunnelSessionId();
+const funnelSeenPlans = new Set<string>();
+let planViewObserver: IntersectionObserver | null = null;
+function trackFunnel(event: string, planId?: string, fromPlanId?: string) {
+  try {
+    const body = JSON.stringify({ sessionId: funnelSessionId, event, planId, fromPlanId });
+    const url = api("/funnel/events");
+    if (!navigator.sendBeacon?.(url, new Blob([body], { type: "application/json" }))) {
+      void fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: true }).catch(() => {});
+    }
+  } catch (_error) {}
+}
+function trackPlanViews() {
+  planViewObserver?.disconnect();
+  const cards = Array.from(plansEl.querySelectorAll<HTMLElement>(".plan-card[data-plan-id]"));
+  const recordView = (card: HTMLElement) => {
+    const planId = card.dataset.planId || "";
+    if (!planId || funnelSeenPlans.has(planId)) return;
+    funnelSeenPlans.add(planId);
+    trackFunnel("package_view", planId);
+  };
+  if (typeof IntersectionObserver === "undefined") {
+    cards.forEach(recordView);
+    return;
+  }
+  planViewObserver = new IntersectionObserver((entries, observer) => {
+    for (const entry of entries) {
+      if (entry.isIntersecting && entry.intersectionRatio >= 0.5) {
+        recordView(entry.target as HTMLElement);
+        observer.unobserve(entry.target);
+      }
+    }
+  }, { threshold: 0.5 });
+  cards.forEach((card) => planViewObserver?.observe(card));
+}
 const servicePath = (path) => `${basePath}${path}`;
 
 function showError(message) {
@@ -625,19 +680,22 @@ function rateParts(rateLimit) {
   if (!match) return { upload: 0, download: 0 };
   return { upload: Number(match[1]) || 0, download: Number(match[2]) || 0 };
 }
-// Every package bursts to twice its speed for short loads (see BURST_MULTIPLIER
-// in services/rateLimit.ts), so speeds read "x + burst".
+// Package speed labels show the base upload and download caps. The x2 marker
+// sits outside the tier badge so it reads as a separate brief-burst benefit.
 const BURST_MULTIPLIER = 2;
 function friendlyRate(rateLimit) {
   const { upload, download } = rateParts(rateLimit);
   if (!download && !upload) return rateLimit ? esc(rateLimit) : "Standard speed";
-  return `<span title="Bursts to ${download * BURST_MULTIPLIER} Mbps for quick loads">↓ ${download} Mbps <b class="burst">+ burst</b> · ↑ ${upload} Mbps</span>`;
+  return `<span class="rate-pair" title="Base caps; brief burst up to ${download * BURST_MULTIPLIER} Mbps download and ${upload * BURST_MULTIPLIER} Mbps upload when capacity allows"><span class="rate-value">↓ ${download} Mbps</span><span class="rate-value">↑ ${upload} Mbps</span></span>`;
+}
+function rateBoostMarkup() {
+  return '<span class="rate-boost" title="Brief speed burst up to 2× when capacity allows" aria-label="Speed X2: brief burst up to twice the package speed">Speed X2</span>';
 }
 function speedTierClass(plan: { rateLimit: string | null }) {
   const { download } = rateParts(plan.rateLimit);
   if (download <= 5) return "speed-starter";
-  if (download <= 10) return "speed-cruise"; // anything above 10 Mbps reads as a faster tier
-  if (download <= 20) return "speed-highspeed";
+  if (download <= 10) return "speed-cruise";
+  if (download <= 15) return "speed-glass";
   return "speed-gulfstream";
 }
 function normalizeMpesaPhoneInput(raw) {
@@ -1038,6 +1096,57 @@ async function saveAccessBeforeLeaving(username: string, password: string) {
     if (data?.expiresAt) saveRememberedAccess({ username, password, expiresAt: data.expiresAt, startsAt: data.startsAt, deviceLimit: data.deviceLimit });
   } catch (_error) {}
 }
+const FRESH_CONNECT_DELAY_SECONDS = 15;
+
+function connectFreshGrantNow() {
+  if (!pendingFreshConnect) return;
+  const credentials = pendingFreshConnect;
+  pendingFreshConnect = null;
+  if (freshConnectInterval) clearInterval(freshConnectInterval);
+  freshConnectInterval = null;
+  accessConnectPrompt.classList.add("hidden");
+  accessConnectNow.disabled = false;
+  noteAutoSignIn();
+  setTimeout(() => {
+    showManualConnectFallback(credentials.username, credentials.password, {
+      placement: manualConnectPlacement(),
+      message: "If this device didn't connect, tap below.",
+      buttonLabel: "Tap to connect"
+    });
+  }, 4000);
+  autoCompleteHotspotLogin(credentials.username, credentials.password, { topLevel: true });
+}
+
+function holdFreshGrantConnection(username: string, password: string) {
+  if (freshConnectInterval) clearInterval(freshConnectInterval);
+  pendingFreshConnect = { username, password };
+  accessConnectNow.disabled = false;
+  accessConnectPrompt.classList.remove("hidden");
+  let secondsLeft = FRESH_CONNECT_DELAY_SECONDS;
+  const renderCountdown = () => {
+    accessConnectMessage.textContent = `Copy your device code or add another device before connecting. Wi-Fi will connect automatically in ${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, "0")}.`;
+  };
+  renderCountdown();
+  freshConnectInterval = window.setInterval(() => {
+    if (!pendingFreshConnect) return;
+    secondsLeft -= 1;
+    if (secondsLeft <= 0) {
+      connectFreshGrantNow();
+      return;
+    }
+    renderCountdown();
+  }, 1000);
+}
+
+accessConnectNow.addEventListener("click", connectFreshGrantNow);
+access.addEventListener("click", (event) => {
+  if (!pendingFreshConnect || !(event.target instanceof HTMLElement)) return;
+  if (event.target.closest("#access-connect-now")) return;
+  if (freshConnectInterval) clearInterval(freshConnectInterval);
+  freshConnectInterval = null;
+  accessConnectMessage.textContent = "Take your time. Wi-Fi will connect when you tap Connect now.";
+});
+
 async function attemptAutoConnect(username, password, statusEl, formEl, { freshGrant = false } = {}) {
   const alreadyOnline = freshGrant ? false : await checkInternetReachable(900);
   // The router's login page is plain http and this portal is https, so a
@@ -1048,9 +1157,14 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
   // still appears if the navigation hasn't happened after a few seconds.
   if (!alreadyOnline && state.hotspot?.login) {
     setConnectState(statusEl, formEl, "connecting", "Signing this device in...");
-    noteAutoSignIn();
     await rememberDeviceForEntitlement(username, password);
     await saveAccessBeforeLeaving(username, password);
+    if (freshGrant) {
+      updateAccessCopy("Package ready");
+      holdFreshGrantConnection(username, password);
+      return;
+    }
+    noteAutoSignIn();
     setTimeout(() => {
       showManualConnectFallback(username, password, {
         placement: manualConnectPlacement(),
@@ -1245,7 +1359,7 @@ function planCard(plan, devices = plan.deviceLimit) {
       <span class="plan-main">
         <h3>${esc(displayPlanName(plan))}</h3>
         <span class="plan-facts">${duration(plan.durationSeconds)} · ${esc(devices)} device${Number(devices) === 1 ? "" : "s"}</span>
-        <span class="plan-speed ${speedTierClass(plan)}">${friendlyRate(plan.rateLimit)}</span>
+        <span class="speed-label"><span class="plan-speed ${speedTierClass(plan)}">${friendlyRate(plan.rateLimit)}</span>${rateBoostMarkup()}</span>
       </span>
       <span class="plan-side">
         ${badgeHtml}
@@ -1368,7 +1482,7 @@ function renderSelectedPlan() {
   payButton.textContent = Number(plan.priceKsh || 0) === 0 ? paymentActionLabel(plan) : `Pay ${money(price)}`;
   phoneInput.required = !isFree;
   phoneField?.classList.toggle("hidden", isFree);
-  selectedSummary.innerHTML = `<div class="summary-meta compact"><span class="summary-pill summary-duration">${duration(plan.durationSeconds)}</span><span class="summary-pill summary-speed ${speedTierClass(plan)}">${friendlyRate(plan.rateLimit)}</span></div>${devicePicker(plan)}${upgradeCard(plan)}`;
+  selectedSummary.innerHTML = `<div class="summary-meta compact"><span class="summary-pill summary-duration">${duration(plan.durationSeconds)}</span><span class="summary-speed-group"><span class="summary-pill summary-speed ${speedTierClass(plan)}">${friendlyRate(plan.rateLimit)}</span>${rateBoostMarkup()}</span></div>${devicePicker(plan)}${upgradeCard(plan)}`;
 }
 function comparePlansByPrice(a: PortalPlan, b: PortalPlan) {
   const priceDelta = Number(a?.priceKsh || 0) - Number(b?.priceKsh || 0);
@@ -1467,29 +1581,30 @@ function renderPackageBrowser() {
   const visiblePlans = customerPlans();
   if (!visiblePlans.length) {
     plansEl.innerHTML = '<div class="empty-state">No WiFi packages are published yet.</div>';
+    trackPlanViews();
     renderSelectedPlan();
     return;
   }
   renderPackageViews(visiblePlans);
   if (state.packageView === "multi") {
-    plansEl.innerHTML = `<div class="plan-sections">${renderPlanSection("Priced for 2 devices", visiblePlans.filter(isMultiDevicePlan), "", 2)}</div>`;
+    const shownPlans = visiblePlans.filter(isMultiDevicePlan);
+    plansEl.innerHTML = `<div class="plan-sections">${renderPlanSection("Priced for 2 devices", shownPlans, "", 2)}</div>`;
+    trackPlanViews();
     renderSelectedPlan();
     return;
   }
   if (state.packageView === "fast") {
-    plansEl.innerHTML = `<div class="plan-sections">${renderPlanSection("Faster speeds", visiblePlans.filter(isFastPlan), "fast")}</div>`;
+    const shownPlans = visiblePlans.filter(isFastPlan);
+    plansEl.innerHTML = `<div class="plan-sections">${renderPlanSection("Faster speeds", shownPlans, "fast")}</div>`;
+    trackPlanViews();
     renderSelectedPlan();
     return;
   }
-  const standard = visiblePlans.filter((plan) => !isFastPlan(plan));
-  const fast = visiblePlans.filter(isFastPlan);
-  plansEl.innerHTML = `
-    <div class="plan-sections">
-      ${renderPlanSection("By the hour", standard.filter((plan) => Number(plan.durationSeconds) < 86400))}
-      ${renderPlanSection("By the day", standard.filter((plan) => Number(plan.durationSeconds) >= 86400))}
-      ${renderPlanSection("Faster speeds", fast, "fast")}
-    </div>
-  `;
+  // All means every customer package in the same price order as the catalog.
+  // Splitting this view by speed/duration made the faster packages look like
+  // a separate filter result and easy to miss after the standard plans.
+  plansEl.innerHTML = `<div class="plan-sections">${renderPlanSection("All packages", visiblePlans)}</div>`;
+  trackPlanViews();
   renderSelectedPlan();
 }
 function renderPlans(sites) {
@@ -1508,9 +1623,11 @@ async function loadPlans() {
   if (!response.ok) throw new Error(payload.error || "Unable to load WiFi packages.");
   renderPlans(payload.data || []);
 }
-function selectPlan(planId) {
+function selectPlan(planId, isUpgrade = false) {
   const selected = state.plans.find((plan) => plan.id === planId);
   if (!selected) return;
+  const previousPlanId = state.selectedPlanId;
+  trackFunnel(isUpgrade ? "upgrade_selected" : "package_selected", planId, isUpgrade ? previousPlanId : undefined);
   state.selectedPlanId = planId;
   // Picked from "Multiple devices": start checkout at 2 devices.
   state.selectedDevices = state.packageView === "multi"
@@ -1755,6 +1872,7 @@ paymentForm.addEventListener("submit", async (event) => {
   const plan = currentPlan();
   if (!plan) { showError("Choose a package first."); return; }
   payButton.disabled = true;
+  trackFunnel("checkout_started", plan.id);
   const isFree = Number(plan.priceKsh || 0) === 0;
   if (isFree) {
     payButton.textContent = "Starting...";
@@ -1764,7 +1882,7 @@ paymentForm.addEventListener("submit", async (event) => {
       const response = await fetch(api("/access/free"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ planId: plan.id, deviceMac: state.hotspot?.mac || undefined })
+        body: JSON.stringify({ planId: plan.id, deviceMac: state.hotspot?.mac || undefined, funnelSessionId })
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -1840,7 +1958,7 @@ async function requestStkPayment(plan, normalizedPhone: string, addToPackage = f
     const response = await fetch(api("/payments/mpesa/stk"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ planId: plan.id, phone: normalizedPhone, deviceMac: state.hotspot?.mac || undefined, deviceCount: checkoutDevices(plan), addToPackage: addToPackage || undefined })
+      body: JSON.stringify({ planId: plan.id, phone: normalizedPhone, deviceMac: state.hotspot?.mac || undefined, deviceCount: checkoutDevices(plan), addToPackage: addToPackage || undefined, funnelSessionId })
     });
     const payload = await response.json().catch(() => ({}));
     if (response.status === 409 && payload.code === "package_on_other_device") {
@@ -1848,6 +1966,7 @@ async function requestStkPayment(plan, normalizedPhone: string, addToPackage = f
       return;
     }
     if (!response.ok) throw new Error(payload.error || "Unable to start M-PESA payment.");
+    trackFunnel("payment_prompt_started", plan.id);
     addingDevice = addToPackage;
     state.paymentId = payload.data.id;
     state.paymentStartedAt = Date.now();
@@ -1860,6 +1979,7 @@ async function requestStkPayment(plan, normalizedPhone: string, addToPackage = f
     state.pollTimer = setInterval(pollPayment, 2500);
     setTimeout(pollPayment, 1000);
   } catch (error) {
+    trackFunnel("payment_prompt_failed", plan.id);
     showError(error instanceof Error ? error.message : "Unable to start payment.");
     setConnectState(paymentStatus, null, "", "");
     hidePaymentModal();
@@ -1900,6 +2020,7 @@ paymentModalAddBtn.addEventListener("click", () => {
 });
 
 paymentModalCancelBtn.addEventListener("click", () => {
+  trackFunnel("checkout_cancelled", currentPlan()?.id);
   resetPaymentAttempt();
   setStep("package");
 });
@@ -1921,6 +2042,8 @@ plansEl.addEventListener("click", (event) => {
     renderPackageBrowser();
     return;
   }
+  const upgrade = target.closest(".upgrade-main");
+  if (upgrade instanceof HTMLElement) { selectPlan(upgrade.dataset.planId || "", true); return; }
   const card = target.closest("[data-plan-id]");
   if (card instanceof HTMLElement) selectPlan(card.dataset.planId || "");
 });
@@ -1936,6 +2059,8 @@ selectedSummary.addEventListener("click", (event) => {
     plansEl.scrollIntoView({ behavior: "smooth", block: "start" });
     return;
   }
+  const upgrade = target.closest(".upgrade-main");
+  if (upgrade instanceof HTMLElement) { selectPlan(upgrade.dataset.planId || "", true); return; }
   const compareCard = target.closest("[data-plan-id]");
   if (compareCard instanceof HTMLElement) selectPlan(compareCard.dataset.planId || "");
 });
@@ -2373,12 +2498,13 @@ addDevicePay.addEventListener("click", async () => {
     return;
   }
   addDevicePay.disabled = true;
+  trackFunnel("checkout_started", entitlement.planId);
   addDeviceStatus.textContent = "Check your phone for the M-PESA prompt.";
   try {
     const response = await fetch(api("/payments/mpesa/add-device"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: entitlement.username, password: entitlement.password, phone: phone.replace(/^\+/, ""), deviceCount: addDeviceChoice })
+      body: JSON.stringify({ username: entitlement.username, password: entitlement.password, phone: phone.replace(/^\+/, ""), deviceCount: addDeviceChoice, funnelSessionId })
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || payload.data?.status === "failed") throw new Error(payload.error || "Couldn't send the M-PESA prompt.");

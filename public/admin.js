@@ -1129,6 +1129,14 @@ function renderAnalytics() {
     tip: (i) => [[`${hours[i].payments} payments`, `${String(hours[i].hour).padStart(2, "0")}:00–${String(hours[i].hour).padStart(2, "0")}:59`], [fmtMoney(hours[i].ksh), "taken"]]
   });
   renderHBarChart(document.getElementById("chart-plans"), data.plans || []);
+  const funnelRows = data.funnel || [];
+  document.getElementById("table-funnel").innerHTML = funnelRows.length
+    ? `<table><thead><tr><th>Package</th><th>Seen</th><th>Picked</th><th>Upgrade picks</th><th>Pay started</th><th>Prompt sent</th><th>Prompt failed</th><th>Cancelled</th><th>Paid sessions</th></tr></thead><tbody>${funnelRows.map((row) => `<tr><td>${escapeHtml(row.name)}</td><td>${row.views}</td><td>${row.selected}</td><td>${row.upgrades}</td><td>${row.checkouts}</td><td>${row.prompts}</td><td>${row.failures}</td><td>${row.cancelled}</td><td>${row.purchases}</td></tr>`).join("")}</tbody></table>`
+    : '<p class="empty-state">No package funnel activity in this date range yet.</p>';
+  const upgradePaths = data.upgradePaths || [];
+  document.getElementById("table-upgrade-paths").innerHTML = upgradePaths.length
+    ? `<table><thead><tr><th>From</th><th>Picked</th><th>Sessions</th></tr></thead><tbody>${upgradePaths.map((row) => `<tr><td>${escapeHtml(row.fromName || "Package")}</td><td>${escapeHtml(row.toName || "Package")}</td><td>${row.sessions}</td></tr>`).join("")}</tbody></table>`
+    : '<p class="empty-state">No upgrade choices in this date range yet.</p>';
   document.getElementById("table-daily").innerHTML = `<table><thead><tr><th>Day</th><th>KSh</th><th>Payments</th><th>Customers</th></tr></thead><tbody>${[...daily].reverse().map((d) => `<tr><td>${escapeHtml(dayLabel(d.day, { weekday: "short", day: "numeric", month: "short" }))}</td><td>${fmtMoney(d.ksh)}</td><td>${d.payments}</td><td>${d.payers}</td></tr>`).join("")}</tbody></table>`;
 }
 

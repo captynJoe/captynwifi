@@ -93,6 +93,7 @@ model WifiPaymentIntent {
   provider            String                  @default("mpesa")
   providerReference   String?
   receiptNumber       String?
+  funnelSessionId     String?
   status              WifiPaymentIntentStatus @default(pending_confirmation)
   rawPayload          Json?
   createdAt           DateTime                @default(now())
@@ -106,6 +107,7 @@ model WifiPaymentIntent {
   @@index([siteId, status, createdAt])
   @@index([provider, providerReference])
   @@index([receiptNumber])
+  @@index([funnelSessionId, status, createdAt])
 }
 
 model WifiEntitlement {
@@ -277,6 +279,19 @@ model WifiDynamicPlanEvent {
 }
 
 
+model WifiFunnelEvent {
+  id         String   @id @default(uuid())
+  sessionId  String
+  event      String
+  planId     String?
+  fromPlanId String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt, event])
+  @@index([sessionId, createdAt])
+  @@index([planId, event, createdAt])
+}
+
 model WifiServiceHeartbeat {
   service    String   @id
   lastSeenAt DateTime
@@ -293,7 +308,8 @@ model WifiOutageCredit {
   entitlementId        String?
   createdAt            DateTime @default(now())
 
-  @@unique([service, outageStartedAt, outageEndedAt])
+  // Several customers can reconnect at the same timestamp; credit each entitlement separately.
+  @@unique([service, outageStartedAt, outageEndedAt, entitlementId], map: "WifiOutageCredit_per_entitlement_key")
   @@index([service, createdAt])
   @@index([outageStartedAt, outageEndedAt])
   @@index([entitlementId])

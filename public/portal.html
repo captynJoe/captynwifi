@@ -6,7 +6,7 @@
     <title>CAPTYN WiFi</title>
     <script src="theme.js?v=2026080402"></script>
     <link rel="stylesheet" href="theme.css?v=2026080924" />
-    <link rel="stylesheet" href="portal.css?v=2026101201" />
+    <link rel="stylesheet" href="portal.css?v=2026102604" />
   </head>
   <body>
     <main class="portal-app">
@@ -89,7 +89,7 @@
           </form>
           <p id="voucher-login-status" class="status-text"></p>
 
-          <button id="receipt-login-toggle" class="ghost existing-login-toggle" type="button">Use M-PESA receipt</button>
+          <button id="receipt-login-toggle" class="ghost existing-login-toggle" type="button">Lost access after a phone reset? Restore with M-PESA receipt</button>
           <form id="receipt-login-form" class="payment-form existing-login-form hidden">
             <label class="field" for="receipt-code-input"><span>M-PESA transaction ID</span><input id="receipt-code-input" name="receipt" type="text" autocapitalize="characters" autocomplete="off" placeholder="e.g. SFC1A2B3C4" required /></label>
             <label class="field" for="receipt-phone-input"><span>M-PESA phone</span><input id="receipt-phone-input" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+254" value="+254" required /></label>
@@ -131,6 +131,10 @@
           <p class="clock-exp">EXP <strong id="access-expires"></strong></p>
         </div>
         <p id="access-outage-note" class="access-outage-note hidden"></p>
+        <div id="access-connect-prompt" class="access-connect-prompt hidden">
+          <p id="access-connect-message">Copy your device code or add another device before connecting. Wi-Fi will connect automatically in 0:15.</p>
+          <button id="access-connect-now" type="button" class="primary">Connect now</button>
+        </div>
         <div id="access-devices" class="access-devices hidden">
           <div class="access-devices-head">
             <span id="access-devices-label">Devices</span>
@@ -194,6 +198,6 @@
       </div>
     </div>
 
-    <script type="module" src="portal-build/main.js?v=2026101201" data-cfasync="false"></script>
+    <script type="module" src="portal-build/main.js?v=2026102910" data-cfasync="false"></script>
   </body>
 </html>

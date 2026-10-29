@@ -126,20 +126,28 @@
 }
 .plan-card.limited .plan-price { color: var(--amber); }
 
-/* Speed pill, coloured by tier: red starter (5 Mbps and below), amber standard
-   (to 10), blue fast (above 10), cyan top (above 20). */
+/* Speed pill: red through 5 Mbps, amber through 10, glass through 15, cyan from 16 Mbps. */
 .plan-speed, .summary-speed {
   display: inline-flex; align-items: center; padding: 2px 8px; border: 1px solid; border-radius: 999px;
   font-size: 11px; font-weight: 800; white-space: nowrap;
 }
 .speed-starter { color: #e5484d; background: rgba(229, 72, 77, .10); border-color: rgba(229, 72, 77, .30); }
 .speed-cruise { color: #b7791f; background: rgba(214, 158, 46, .12); border-color: rgba(214, 158, 46, .32); }
-.speed-highspeed { color: #3f6bf0; background: rgba(63, 107, 240, .10); border-color: rgba(63, 107, 240, .30); }
+.speed-glass { color: var(--text); background: rgba(255, 255, 255, .10); border-color: rgba(255, 255, 255, .28); -webkit-backdrop-filter: blur(7px); backdrop-filter: blur(7px); }
+:root[data-theme="light"] .speed-glass { background: rgba(255, 255, 255, .58); border-color: rgba(148, 163, 184, .42); }
 .speed-gulfstream { color: #0891b2; background: rgba(8, 145, 178, .10); border-color: rgba(8, 145, 178, .30); }
 :root[data-theme="dark"] .speed-starter { color: #ff7b7b; }
 :root[data-theme="dark"] .speed-cruise { color: #ffd166; }
-:root[data-theme="dark"] .speed-highspeed { color: #8aa8ff; }
 :root[data-theme="dark"] .speed-gulfstream { color: var(--brand-cyan); }
+
+.summary-speed.speed-starter { color: #e5484d; background: rgba(229, 72, 77, .10); border-color: rgba(229, 72, 77, .30); }
+.summary-speed.speed-cruise { color: #b7791f; background: rgba(214, 158, 46, .12); border-color: rgba(214, 158, 46, .32); }
+.summary-speed.speed-glass { color: var(--text); background: rgba(255, 255, 255, .10); border-color: rgba(255, 255, 255, .28); -webkit-backdrop-filter: blur(7px); backdrop-filter: blur(7px); }
+:root[data-theme="light"] .summary-speed.speed-glass { background: rgba(255, 255, 255, .58); border-color: rgba(148, 163, 184, .42); }
+.summary-speed.speed-gulfstream { color: #0891b2; background: rgba(8, 145, 178, .10); border-color: rgba(8, 145, 178, .30); }
+:root[data-theme="dark"] .summary-speed.speed-starter { color: #ff7b7b; }
+:root[data-theme="dark"] .summary-speed.speed-cruise { color: #ffd166; }
+:root[data-theme="dark"] .summary-speed.speed-gulfstream { color: var(--brand-cyan); }
 
 /* ---------- Checkout ---------- */
 .checkout-panel { position: sticky; top: 72px; padding: 16px; display: grid; gap: 12px; }
@@ -195,6 +203,9 @@ button.credential:hover { border-color: var(--brand-blue); transform: none; box-
 .access-outage-note { padding: 10px 12px; border-radius: var(--radius-md); font-size: 13px; font-weight: 700; }
 .access-outage-note.paused { background: var(--red-soft); color: var(--red); }
 .access-outage-note.credited { background: var(--green-soft); color: var(--green); }
+.access-connect-prompt { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--brand-blue); border-radius: var(--radius-md); background: var(--brand-blue-soft); }
+.access-connect-prompt p { font-size: 13px; line-height: 1.45; font-weight: 700; color: var(--text); }
+.access-connect-prompt .primary { width: 100%; min-height: 44px; }
 .access-devices { display: grid; gap: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-md); }
 .access-devices.at-limit { border-color: var(--red); background: var(--red-soft); }
 .access-devices-head { display: flex; justify-content: space-between; font-size: 12px; font-weight: 800; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
@@ -472,8 +483,11 @@ button.extend-period-btn:hover, button#pay-button:hover { filter: brightness(1.0
 :root[data-theme="light"] .package-view.active { color: #fff; }
 .package-view[data-view="fast"].active { background: linear-gradient(135deg, #3f6bf0, var(--brand-cyan)); }
 
-/* "x + burst" on package speeds. */
-.burst { font-weight: 800; opacity: .78; }
+/* Keep the x2 burst marker outside the speed-tier badge. */
+.speed-label, .summary-speed-group { display: inline-flex; align-items: center; gap: 5px; }
+.rate-pair { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.rate-value { white-space: nowrap; }
+.rate-boost { display: inline-flex; align-items: center; color: #7dd3fc; font-size: 10px; font-weight: 900; line-height: 1; white-space: nowrap; }
 
 /* ---------- Weekly rewards ---------- */
 .rewards-card { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); }
@@ -498,6 +512,5 @@ button.extend-period-btn:hover, button#pay-button:hover { filter: brightness(1.0
 .reward-card strong { color: var(--text-strong); font-size: 16px; }
 .reward-card span { font-size: 12.5px; color: var(--muted); font-weight: 600; }
 .reward-card b { color: var(--green); }
-.reward-card b.burst { color: inherit; }
 .reward-free { border-color: var(--green); background: var(--green-soft); }
 .reward-kicker { color: var(--text) !important; font-weight: 800 !important; text-transform: uppercase; font-size: 11px !important; letter-spacing: .04em; }

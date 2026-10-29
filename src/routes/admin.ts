@@ -1377,6 +1377,47 @@ adminRouter.get("/analytics", async (req, res, next) => {
                COALESCE(SUM(per.ksh), 0)::int AS ksh
         FROM per JOIN firsts ON firsts.phone = per.phone`)
     ]);
+    const [funnelEvents, funnelPurchases, upgradePaths] = await Promise.all([
+      prisma.$queryRaw<Array<{ planId: string | null; name: string | null; event: string; sessions: number }>>(Prisma.sql`
+        SELECT e."planId", p.name, e.event, COUNT(DISTINCT e."sessionId")::int AS sessions
+        FROM "WifiFunnelEvent" e LEFT JOIN "WifiPlan" p ON p.id = e."planId"
+        WHERE e."createdAt" >= ${since}
+        GROUP BY e."planId", p.name, e.event`),
+      prisma.$queryRaw<Array<{ planId: string; sessions: number }>>(Prisma.sql`
+        SELECT "planId", COUNT(DISTINCT "funnelSessionId")::int AS sessions
+        FROM "WifiPaymentIntent"
+        WHERE "funnelSessionId" IS NOT NULL AND status IN ${BOOKED_PAYMENT_STATUSES}
+          AND "amountKsh" > 0 AND "createdAt" >= ${since}
+        GROUP BY "planId"`),
+      prisma.$queryRaw<Array<{ fromPlanId: string; planId: string; fromName: string | null; toName: string | null; sessions: number }>>(Prisma.sql`
+        SELECT e."fromPlanId" AS "fromPlanId", e."planId", from_plan.name AS "fromName", to_plan.name AS "toName", COUNT(DISTINCT e."sessionId")::int AS sessions
+        FROM "WifiFunnelEvent" e
+        LEFT JOIN "WifiPlan" from_plan ON from_plan.id = e."fromPlanId"
+        LEFT JOIN "WifiPlan" to_plan ON to_plan.id = e."planId"
+        WHERE e.event = 'upgrade_selected' AND e."createdAt" >= ${since}
+          AND e."fromPlanId" IS NOT NULL AND e."planId" IS NOT NULL
+        GROUP BY e."fromPlanId", e."planId", from_plan.name, to_plan.name
+        ORDER BY sessions DESC, "toName" ASC`)
+    ]);
+    const funnelByPlan = new Map<string, { planId: string; name: string; views: number; selected: number; upgrades: number; checkouts: number; prompts: number; failures: number; cancelled: number; purchases: number }>();
+    const funnelKeys: Record<string, "views" | "selected" | "upgrades" | "checkouts" | "prompts" | "failures" | "cancelled"> = {
+      package_view: "views", package_selected: "selected", upgrade_selected: "upgrades",
+      checkout_started: "checkouts", payment_prompt_started: "prompts",
+      payment_prompt_failed: "failures", checkout_cancelled: "cancelled"
+    };
+    for (const row of funnelEvents) {
+      if (!row.planId) continue;
+      const item = funnelByPlan.get(row.planId) ?? { planId: row.planId, name: row.name || "Package", views: 0, selected: 0, upgrades: 0, checkouts: 0, prompts: 0, failures: 0, cancelled: 0, purchases: 0 };
+      const key = funnelKeys[row.event];
+      if (key) item[key] = row.sessions;
+      funnelByPlan.set(row.planId, item);
+    }
+    for (const row of funnelPurchases) {
+      const item = funnelByPlan.get(row.planId) ?? { planId: row.planId, name: "Package", views: 0, selected: 0, upgrades: 0, checkouts: 0, prompts: 0, failures: 0, cancelled: 0, purchases: 0 };
+      item.purchases = row.sessions;
+      funnelByPlan.set(row.planId, item);
+    }
+    const funnel = Array.from(funnelByPlan.values()).sort((a, b) => b.views - a.views || b.purchases - a.purchases || a.name.localeCompare(b.name));
     const byDay = new Map(dailyRaw.map((row) => [row.day.toISOString().slice(0, 10), row]));
     const daily = Array.from({ length: days }, (_, index) => {
       const key = new Date(since.getTime() + 3 * 60 * 60 * 1000 + index * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -1390,6 +1431,8 @@ adminRouter.get("/analytics", async (req, res, next) => {
       daily,
       hours: Array.from({ length: 24 }, (_, hour) => ({ hour, ksh: byHour.get(hour)?.ksh ?? 0, payments: byHour.get(hour)?.payments ?? 0 })),
       plans,
+      funnel,
+      upgradePaths,
       customers: customers[0] ?? { payers: 0, returning: 0, newPayers: 0, ksh: 0 }
     });
   } catch (error) {
