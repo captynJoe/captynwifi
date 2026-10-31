@@ -1828,6 +1828,8 @@ extendPeriodBtn?.addEventListener("click", () => {
   plansEl.scrollIntoView({ behavior: "smooth", block: "start" });
 });
 
+const failedPaymentFunnelEvents = new Set<string>();
+
 async function pollPayment() {
   if (!state.paymentId) return;
   const response = await fetch(api(`/payments/${encodeURIComponent(state.paymentId)}`));
@@ -1842,6 +1844,10 @@ async function pollPayment() {
   } else if (payment.status === "payment_failed" || payment.status === "failed") {
     clearInterval(state.pollTimer);
     state.pollTimer = null;
+    if (typeof payment.id === "string" && !failedPaymentFunnelEvents.has(payment.id)) {
+      failedPaymentFunnelEvents.add(payment.id);
+      trackFunnel("payment_prompt_failed", payment.plan?.id || currentPlan()?.id);
+    }
     payButton.disabled = false;
     payButton.textContent = paymentActionLabel();
     const failureMessage = payment.failureReason || "Payment didn't go through. Tap Pay Now to try again.";
