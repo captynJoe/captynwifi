@@ -835,6 +835,7 @@ function showPaymentModal(kind, title, message) {
   paymentModalTitle.textContent = title;
   paymentModalMessage.textContent = message || "";
   paymentModalCancelBtn.classList.toggle("hidden", kind !== "connecting" && kind !== "add-device");
+  paymentModalCancelBtn.textContent = kind === "add-device" ? "Use another number" : "Cancel";
   paymentModalAddBtn.classList.toggle("hidden", kind !== "add-device");
   paymentModalRetryBtn.classList.toggle("hidden", kind !== "bad" && kind !== "welcome-used");
   paymentModalRetryBtn.textContent = kind === "welcome-used" ? "Browse packages →" : "Try Again";
@@ -2008,12 +2009,23 @@ function offerAddToPackage(plan, phone: string, payload) {
   setStep("package");
   const add = payload.package?.addDevice;
   if (!add) {
-    showPaymentModal("bad", "Package already in use", payload.error);
+    pendingAddToPackage = { plan, phone };
+    showPaymentModal(
+      "add-device",
+      "Package device limit reached",
+      `${payload.error} Change the M-PESA number to buy a separate package.`
+    );
+    paymentModalAddBtn.classList.add("hidden");
+    paymentModalCancelBtn.textContent = "Use another number";
     return;
   }
   pendingAddToPackage = { plan, phone };
   const left = formatTimeLeft(new Date(payload.package.expiresAt).getTime() - Date.now());
-  showPaymentModal("add-device", "Running on another device", `This number's package has ${left}. Add this device to it, or use another number for a separate package.`);
+  showPaymentModal(
+    "add-device",
+    "Get this device online",
+    `Your current package has ${left} left. Add this device for ${money(add.priceKsh)}; this adds a device slot and keeps the package time. To buy a separate package, use another M-PESA number.`
+  );
   paymentModalAddBtn.textContent = `Add this device · ${money(add.priceKsh)}`;
 }
 
@@ -2026,9 +2038,15 @@ paymentModalAddBtn.addEventListener("click", () => {
 });
 
 paymentModalCancelBtn.addEventListener("click", () => {
+  const chooseAnotherNumber = Boolean(pendingAddToPackage);
+  pendingAddToPackage = null;
   trackFunnel("checkout_cancelled", currentPlan()?.id);
   resetPaymentAttempt();
   setStep("package");
+  if (chooseAnotherNumber) {
+    showError("Change the M-PESA number to buy a separate package, or add this device to the current package.");
+    phoneInput.focus();
+  }
 });
 paymentModalRetryBtn.addEventListener("click", () => {
   resetPaymentAttempt();
@@ -2097,7 +2115,7 @@ state.hotspot = readHotspotParams();
 // "You are already logged in - access denied" -- reword it for customers.
 function friendlyHotspotError(raw: string): string {
   if (/already logged in|simultaneous/i.test(raw)) {
-    return "Your package is already in use on its other device. Sign that device out, or buy a package for this one with a different M-PESA number.";
+    return "Your package is active on another device. To get online here, choose a package and use the same M-PESA number; we’ll show the cost to add this device before sending a payment prompt. To buy a separate package, use a different M-PESA number.";
   }
   return raw;
 }
