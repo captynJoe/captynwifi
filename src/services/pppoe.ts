@@ -21,7 +21,7 @@ export async function activatePppoePayment(
   // Serialize renewals for a phone so two successful M-PESA prompts cannot
   // race and overwrite the same RADIUS credentials or lose a month of time.
   const lockKey = `pppoe:${payment.siteId}:${payment.customerPhone}`;
-  await tx.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`);
+  await tx.$queryRaw(Prisma.sql`SELECT 1 FROM pg_advisory_xact_lock(hashtext(${lockKey}))`);
 
   const alreadyApplied = await tx.wifiPppoeSubscription.findUnique({
     where: { paymentIntentId: payment.id },
