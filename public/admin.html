@@ -266,6 +266,13 @@
               <div><h2>PPPoE subscribers</h2><span id="pppoe-summary" class="field-hint">Monthly router accounts. Customers pay through the WiFi portal.</span></div>
               <a class="secondary" href="/wifi/pppoe" target="_blank" rel="noreferrer">Open customer checkout</a>
             </div>
+            <form id="pppoe-cash-form" class="inline-form">
+              <label>Customer phone<input id="pppoe-cash-phone" type="tel" inputmode="tel" placeholder="07… or +254…" required /></label>
+              <label>Paid monthly plan<select id="pppoe-cash-plan" required><option value="">Loading plans…</option></select></label>
+              <button id="pppoe-cash-submit" class="primary" type="submit">Issue cash-paid login</button>
+              <p id="pppoe-cash-status" class="field-hint" role="status">Use only after receiving cash. Credentials are shown once.</p>
+            </form>
+            <div id="pppoe-cash-result" class="hidden"></div>
             <div class="table-wrap access-scroll"><table><thead><tr><th>Phone</th><th>PPPoE username</th><th>Site</th><th>Package</th><th>Status</th><th>Started</th><th>Expires</th><th>Renewals</th></tr></thead><tbody id="pppoe-accounts-body"></tbody></table></div>
           </article>
         </section>
@@ -387,6 +394,6 @@
       </section>
     </main>
 
-    <script src="admin.js?v=2026110101" defer data-cfasync="false"></script>
+    <script src="admin.js?v=2026110102" defer data-cfasync="false"></script>
   </body>
 </html>

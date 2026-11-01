@@ -21,6 +21,7 @@ import { DYNAMIC_PLAN_SOURCE, refreshMirrorForBaseline } from "../services/dynam
 import { ensureConnectCode } from "../services/connectCode.js";
 import { deviceCap } from "../services/deviceLedger.js";
 import { CREDIT_REASONS, availableCreditSeconds, grantWifiCredit } from "../services/credits.js";
+import { activatePppoePayment, publicPppoeAccount } from "../services/pppoe.js";
 
 export const adminRouter = Router();
 
@@ -906,6 +907,54 @@ adminRouter.get("/pppoe-accounts", async (_req, res, next) => {
       }
     });
     return sendData(res, accounts.map(({ cleartextSecret: _secret, ...account }) => account));
+  } catch (error) {
+    return next(error);
+  }
+});
+
+const pppoeCashIssueSchema = z.object({
+  planId: z.string().trim().min(1),
+  phone: z.string().trim().min(1)
+});
+
+adminRouter.post("/pppoe-accounts/cash", async (req, res, next) => {
+  try {
+    const input = pppoeCashIssueSchema.parse(req.body);
+    const normalizedPhone = normalizeKenyaPhone(input.phone);
+    if (!/^\+254\d{9}$/.test(normalizedPhone)) {
+      return res.status(400).json({ error: "Enter a valid Kenyan phone number." });
+    }
+
+    const plan = await prisma.wifiPlan.findUnique({ where: { id: input.planId }, include: { site: true } });
+    if (!plan || !plan.enabled || plan.priceKsh <= 0 || plan.durationSeconds < 28 * 24 * 60 * 60) {
+      return res.status(400).json({ error: "Choose an enabled, paid monthly plan." });
+    }
+
+    const confirmedAt = new Date();
+    const result = await prisma.$transaction(async (tx) => {
+      const payment = await tx.wifiPaymentIntent.create({
+        data: {
+          siteId: plan.siteId,
+          planId: plan.id,
+          source: "captyn_cash",
+          accessType: "pppoe",
+          sourceReference: `cash-pppoe-${crypto.randomUUID()}`,
+          customerPhone: normalizedPhone,
+          amountKsh: plan.priceKsh,
+          provider: "cash",
+          status: "confirmed",
+          confirmedAt
+        },
+        include: { plan: true, site: true }
+      });
+      const activated = await activatePppoePayment(tx, payment, confirmedAt);
+      return { intent: activated.intent, account: activated.account };
+    });
+
+    return sendData(res, {
+      paymentIntentId: result.intent.id,
+      account: publicPppoeAccount(result.account, plan.name)
+    });
   } catch (error) {
     return next(error);
   }

@@ -110,6 +110,13 @@ const endpoints = {
   promoHistory: adminApi("/promo/history")
 };
 
+const pppoeCashForm = document.getElementById("pppoe-cash-form");
+const pppoeCashPhone = document.getElementById("pppoe-cash-phone");
+const pppoeCashPlan = document.getElementById("pppoe-cash-plan");
+const pppoeCashSubmit = document.getElementById("pppoe-cash-submit");
+const pppoeCashStatus = document.getElementById("pppoe-cash-status");
+const pppoeCashResult = document.getElementById("pppoe-cash-result");
+
 const voucherForm = document.getElementById("voucher-form");
 const voucherPhoneInput = document.getElementById("voucher-phone");
 const voucherPlanSelect = document.getElementById("voucher-plan");
@@ -1178,6 +1185,12 @@ function renderAll() {
   renderAccessRows("overview-access", entitlements.slice(0, 5), true);
 
   const pppoeAccounts = state.cache.pppoeAccounts || [];
+  const cashPlans = (state.cache.plans || []).filter((plan) => plan.enabled && Number(plan.priceKsh) > 0 && Number(plan.durationSeconds) >= 28 * 24 * 60 * 60);
+  if (pppoeCashPlan) {
+    const previous = pppoeCashPlan.value;
+    pppoeCashPlan.innerHTML = `<option value="">Select a paid monthly plan</option>${cashPlans.map((plan) => `<option value="${escapeHtml(plan.id)}">${escapeHtml(plan.name)} · ${fmtMoney(plan.priceKsh)} · ${escapeHtml(plan.site?.name || "")}</option>`).join("")}`;
+    if (cashPlans.some((plan) => plan.id === previous)) pppoeCashPlan.value = previous;
+  }
   const activePppoe = pppoeAccounts.filter((account) => account.status === "active" && new Date(account.expiresAt).getTime() > Date.now()).length;
   const pppoeSummary = document.getElementById("pppoe-summary");
   if (pppoeSummary) pppoeSummary.textContent = `${activePppoe} active · ${pppoeAccounts.length} total · Monthly router accounts`;
@@ -1252,6 +1265,35 @@ function renderAll() {
     fmtDate(item.updatedAt)
   ], 8);
 }
+
+pppoeCashForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const phone = pppoeCashPhone?.value.trim() || "";
+  const planId = pppoeCashPlan?.value || "";
+  const plan = (state.cache.plans || []).find((candidate) => candidate.id === planId);
+  if (!plan) {
+    setInlineStatus(pppoeCashStatus, "Choose an enabled paid monthly plan.", "field-hint error");
+    return;
+  }
+  if (!window.confirm(`Record KSh ${Number(plan.priceKsh).toLocaleString()} cash received from ${phone} for ${plan.name} and issue their PPPoE login?`)) return;
+  pppoeCashSubmit.disabled = true;
+  pppoeCashResult?.classList.add("hidden");
+  setInlineStatus(pppoeCashStatus, "Recording cash sale and issuing login…", "field-hint");
+  try {
+    const result = await writeApi(adminApi("/pppoe-accounts/cash"), "POST", { phone, planId });
+    const account = result.account;
+    if (pppoeCashResult) {
+      pppoeCashResult.innerHTML = `<strong>Give these to the customer now. Save them; the password is shown only once.</strong><p>Username: <code>${escapeHtml(account.username)}</code><br>Password: <code>${escapeHtml(account.password)}</code><br>Plan: ${escapeHtml(account.planName)}<br>Expires: ${escapeHtml(fmtDate(account.expiresAt))}</p>`;
+      pppoeCashResult.classList.remove("hidden");
+    }
+    setInlineStatus(pppoeCashStatus, "Cash sale recorded and PPPoE login issued.", "field-hint success");
+    await loadDashboard();
+  } catch (error) {
+    setInlineStatus(pppoeCashStatus, error instanceof Error ? error.message : "Could not issue PPPoE login.", "field-hint error");
+  } finally {
+    pppoeCashSubmit.disabled = false;
+  }
+});
 
 async function loadDashboard() {
   setAuthError("");
