@@ -91,6 +91,7 @@
               <button class="nav-item" type="button" data-page="vouchers">Vouchers</button>
               <button class="nav-item" type="button" data-page="payments">Payments</button>
               <button class="nav-item" type="button" data-page="access">Access</button>
+              <button class="nav-item" type="button" data-page="pppoe">PPPoE</button>
               <button class="nav-item" type="button" data-page="radius">RADIUS</button>
               <button class="nav-item" type="button" data-page="governor">Governor</button>
               <button class="nav-item" type="button" data-page="dynamic-plan">Dynamic Plan</button>
@@ -256,6 +257,16 @@
               <span id="access-detail-status"></span>
             </div>
             <div id="access-detail-body" class="access-detail-body"></div>
+          </article>
+        </section>
+
+        <section class="page-grid hidden" data-page-panel="pppoe">
+          <article class="surface span-12 table-panel">
+            <div class="panel-head">
+              <div><h2>PPPoE subscribers</h2><span id="pppoe-summary" class="field-hint">Monthly router accounts. Customers pay through the WiFi portal.</span></div>
+              <a class="secondary" href="/wifi/pppoe" target="_blank" rel="noreferrer">Open customer checkout</a>
+            </div>
+            <div class="table-wrap access-scroll"><table><thead><tr><th>Phone</th><th>PPPoE username</th><th>Site</th><th>Package</th><th>Status</th><th>Started</th><th>Expires</th><th>Renewals</th></tr></thead><tbody id="pppoe-accounts-body"></tbody></table></div>
           </article>
         </section>
 

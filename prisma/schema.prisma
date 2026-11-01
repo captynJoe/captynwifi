@@ -38,8 +38,9 @@ model WifiSite {
   updatedAt   DateTime     @updatedAt
   plans       WifiPlan[]
   intents     WifiPaymentIntent[]
-  entitlements WifiEntitlement[]
-  promos      WifiPromo[]
+  entitlements  WifiEntitlement[]
+  pppoeAccounts WifiPppoeAccount[]
+  promos        WifiPromo[]
 
   @@unique([source, externalId])
   @@index([source])
@@ -67,7 +68,9 @@ model WifiPlan {
   updatedAt         DateTime     @updatedAt
   site              WifiSite     @relation(fields: [siteId], references: [id], onDelete: Cascade)
   intents           WifiPaymentIntent[]
-  entitlements      WifiEntitlement[]
+  entitlements       WifiEntitlement[]
+  pppoeAccounts      WifiPppoeAccount[]
+  pppoeSubscriptions WifiPppoeSubscription[]
 
   @@unique([siteId, source, externalPackageId])
   @@index([siteId, enabled])
@@ -79,6 +82,7 @@ model WifiPaymentIntent {
   siteId              String
   planId              String
   source              String                  @default("captyn_housing")
+  accessType          String                  @default("hotspot")
   sourceReference     String
   customerPhone       String
   deviceMac           String?
@@ -102,12 +106,51 @@ model WifiPaymentIntent {
   site                WifiSite                @relation(fields: [siteId], references: [id], onDelete: Cascade)
   plan                WifiPlan                @relation(fields: [planId], references: [id], onDelete: Restrict)
   entitlement         WifiEntitlement?
+  pppoeSubscription   WifiPppoeSubscription?
 
   @@unique([source, sourceReference])
   @@index([siteId, status, createdAt])
   @@index([provider, providerReference])
   @@index([receiptNumber])
   @@index([funnelSessionId, status, createdAt])
+}
+
+
+model WifiPppoeAccount {
+  id              String   @id @default(uuid())
+  siteId          String
+  planId          String
+  customerPhone   String
+  username        String   @unique
+  cleartextSecret String
+  status          String   @default("active")
+  startsAt        DateTime
+  expiresAt       DateTime
+  rateLimit       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  site            WifiSite @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  plan            WifiPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
+  subscriptions   WifiPppoeSubscription[]
+
+  @@unique([siteId, customerPhone])
+  @@index([status, expiresAt])
+}
+
+model WifiPppoeSubscription {
+  id              String           @id @default(uuid())
+  accountId       String
+  paymentIntentId String           @unique
+  planId          String
+  amountKsh       Int
+  startsAt        DateTime
+  expiresAt       DateTime
+  createdAt       DateTime         @default(now())
+  account         WifiPppoeAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  paymentIntent   WifiPaymentIntent @relation(fields: [paymentIntentId], references: [id], onDelete: Cascade)
+  plan            WifiPlan         @relation(fields: [planId], references: [id], onDelete: Restrict)
+
+  @@index([accountId, startsAt])
 }
 
 model WifiEntitlement {

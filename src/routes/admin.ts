@@ -894,6 +894,23 @@ adminRouter.get("/entitlements", async (_req, res, next) => {
   }
 });
 
+adminRouter.get("/pppoe-accounts", async (_req, res, next) => {
+  try {
+    const accounts = await prisma.wifiPppoeAccount.findMany({
+      orderBy: [{ expiresAt: "desc" }, { updatedAt: "desc" }],
+      take: 1000,
+      include: {
+        site: { select: { id: true, name: true } },
+        plan: { select: { id: true, name: true, priceKsh: true, rateLimit: true } },
+        _count: { select: { subscriptions: true } }
+      }
+    });
+    return sendData(res, accounts.map(({ cleartextSecret: _secret, ...account }) => account));
+  } catch (error) {
+    return next(error);
+  }
+});
+
 adminRouter.get("/entitlements/:id", async (req, res, next) => {
   try {
     const entitlement = await prisma.wifiEntitlement.findUnique({

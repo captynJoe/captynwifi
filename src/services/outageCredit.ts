@@ -250,6 +250,7 @@ async function hasInterimDueActiveEntitlements(tx: Prisma.TransactionClient): Pr
 async function lastRadiusAccountingActivity(tx: Prisma.TransactionClient): Promise<Date | null> {
   const rows = await tx.$queryRaw<{ last: Date | null }[]>`
     SELECT max(coalesce(acctupdatetime, acctstarttime)) as last FROM radacct
+    WHERE class LIKE 'entitlement:%'
   `;
   return rows[0]?.last ?? null;
 }

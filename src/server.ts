@@ -34,6 +34,9 @@ app.get(["/admin", "/admin/"], (_req, res) => {
 app.get(["/portal", "/portal/"], (_req, res) => {
   res.sendFile(path.join(publicDir, "portal.html"));
 });
+app.get(["/pppoe", "/pppoe/", "/portal/pppoe", "/portal/pppoe/", "/wifi/pppoe", "/wifi/pppoe/"], (_req, res) => {
+  res.sendFile(path.join(publicDir, "pppoe.html"));
+});
 app.use("/admin", express.static(publicDir));
 // /wifi/portal/ was a broken return address for a while (nginx maps /wifi/
 // onto /portal/), so browsers still autocomplete it: send them to the portal.

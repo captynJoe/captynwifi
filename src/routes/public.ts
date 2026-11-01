@@ -17,6 +17,7 @@ import { deviceCap, payingDeviceNeedsSlot, publicDevice } from "../services/devi
 import { MAX_DEVICES, addDeviceQuote, deviceOptions, devicePrice, maxDevicesFor } from "../services/devicePricing.js";
 import { LOYALTY_REASON, PURCHASABLE_PLAN_WHERE, climbGap, monthStandings, nairobiMonthStart, tierForRank } from "../services/loyalty.js";
 import { boostRateLimit, fasterRateLimit } from "../services/rateLimit.js";
+import { activatePppoePayment, publicPppoeAccount } from "../services/pppoe.js";
 
 export const publicRouter = Router();
 
@@ -126,6 +127,7 @@ const PUBLICLY_PURCHASABLE_SOURCES = ["captyn_admin", "captyn_dynamic"];
 
 const stkRequestSchema = z.object({
   planId: z.string().min(1),
+  accessType: z.enum(["hotspot", "pppoe"]).optional(),
   funnelSessionId: z.string().uuid().optional(),
   phone: z.string().min(7),
   deviceMac: z.string().trim().optional().nullable(),
@@ -398,6 +400,9 @@ async function activatePaymentIntent(intent: WifiPaymentIntent, confirmedAt = ne
       include: { site: true, plan: true, entitlement: { include: { projection: true } } }
     });
     if (!paymentIntent) throw new Error("Payment intent not found");
+    if (paymentIntent.accessType === "pppoe") {
+      return activatePppoePayment(tx, paymentIntent, confirmedAt);
+    }
     if (paymentIntent.entitlement) {
       const updatedIntent = await tx.wifiPaymentIntent.update({
         where: { id: paymentIntent.id },
@@ -839,6 +844,21 @@ publicRouter.get("/sites", async (_req, res, next) => {
   }
 });
 
+const MIN_PPPOE_MONTH_SECONDS = 28 * 24 * 60 * 60;
+
+publicRouter.get("/pppoe/plans", async (_req, res, next) => {
+  try {
+    const plans = await prisma.wifiPlan.findMany({
+      where: { enabled: true, source: { in: PUBLICLY_PURCHASABLE_SOURCES }, priceKsh: { gt: 0 }, durationSeconds: { gte: MIN_PPPOE_MONTH_SECONDS } },
+      include: { site: { select: { id: true, name: true } } },
+      orderBy: [{ priceKsh: "asc" }, { name: "asc" }]
+    });
+    return res.json({ data: toJsonSafe(plans) });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 const funnelEventSchema = z.object({
   sessionId: z.string().uuid(),
   event: z.enum(["package_view", "package_selected", "upgrade_selected", "checkout_started", "payment_prompt_started", "payment_prompt_failed", "checkout_cancelled"]),
@@ -913,7 +933,7 @@ publicRouter.get("/payments/:id", async (req, res, next) => {
   try {
     const intent = await prisma.wifiPaymentIntent.findUnique({
       where: { id: req.params.id },
-      include: { site: true, plan: true, entitlement: true }
+      include: { site: true, plan: true, entitlement: true, pppoeSubscription: { include: { account: true, plan: true } } }
     });
     if (!intent) return res.status(404).json({ error: "Payment not found" });
 
@@ -922,8 +942,9 @@ publicRouter.get("/payments/:id", async (req, res, next) => {
     // — that FK is already claimed by whichever payment originally created the
     // entitlement. Fall back to the customer's current active entitlement so
     // the portal still sees a completed, connectable result for this payment.
-    const entitlement =
-      intent.entitlement ??
+    const entitlement = intent.accessType === "pppoe"
+      ? null
+      : intent.entitlement ??
       (intent.status === "activated"
         ? await prisma.wifiEntitlement.findFirst({
             where: { username: normalizeWifiUsername(intent.customerPhone), status: "active", expiresAt: { gt: new Date() } },
@@ -942,7 +963,12 @@ publicRouter.get("/payments/:id", async (req, res, next) => {
         site: intent.site,
         plan: intent.plan,
         entitlement: entitlement ? await publicEntitlement(entitlement) : null,
-        extended: !intent.entitlement && Boolean(entitlement),
+        pppoeAccount:
+          intent.pppoeSubscription?.account.status === "active" && intent.pppoeSubscription.account.expiresAt > new Date()
+            ? publicPppoeAccount(intent.pppoeSubscription.account, intent.pppoeSubscription.plan.name)
+            : null,
+        pppoeExpired: Boolean(intent.pppoeSubscription && intent.pppoeSubscription.account.expiresAt <= new Date()),
+        extended: intent.accessType !== "pppoe" && !intent.entitlement && Boolean(entitlement),
         failureReason: intent.status === "failed" ? mpesaFailureReason(intent.rawPayload) : null
       })
     });
@@ -1232,9 +1258,17 @@ publicRouter.post("/payments/lookup-by-receipt", publicReceiptLookupLimit, async
 
     const intent = await prisma.wifiPaymentIntent.findFirst({
       where: { receiptNumber: receipt, customerPhone: phone },
-      include: { entitlement: true }
+      include: { entitlement: true, pppoeSubscription: { include: { account: true, plan: true } } }
     });
     if (!intent) return res.status(404).json({ error: "No payment found for that M-PESA code." });
+
+    if (intent.accessType === "pppoe") {
+      const account = intent.pppoeSubscription?.account;
+      if (!account || account.status !== "active" || account.expiresAt <= new Date()) {
+        return res.status(404).json({ error: "That PPPoE subscription has expired." });
+      }
+      return res.json({ data: toJsonSafe(publicPppoeAccount(account, intent.pppoeSubscription?.plan.name)) });
+    }
 
     const entitlement =
       intent.entitlement ??
@@ -1287,6 +1321,17 @@ publicRouter.post("/payments/mpesa/stk", publicPaymentIpLimit, async (req, res, 
 
     const mpesa = getMpesaStatus();
     if (!mpesa.configured) return res.status(503).json({ error: "M-PESA is not configured for WiFi payments." });
+
+    if (parsed.accessType === "pppoe") {
+      if (plan.durationSeconds < MIN_PPPOE_MONTH_SECONDS || plan.priceKsh <= 0) return res.status(400).json({ error: "Choose a paid monthly PPPoE plan." });
+      const reference = sourceReference();
+      const intent = await prisma.wifiPaymentIntent.create({ data: { siteId: plan.siteId, planId: plan.id, source: "captyn_pppoe", accessType: "pppoe", sourceReference: reference, customerPhone: phone, amountKsh: plan.priceKsh, provider: "mpesa", status: "pending_confirmation" } });
+      const stk = await initiateWifiStkPush({ amount: plan.priceKsh, phoneNumber: phone, accountReference: reference.slice(0, 12), transactionDesc: `CAPTYN PPPoE ${plan.name}`.slice(0, 64), callbackUrl: config.mpesa.callbackUrl });
+      const checkoutRequestId = typeof stk.CheckoutRequestID === "string" ? stk.CheckoutRequestID : null;
+      const responseCode = typeof stk.ResponseCode === "string" ? stk.ResponseCode : null;
+      const updated = await prisma.wifiPaymentIntent.update({ where: { id: intent.id }, data: { providerReference: checkoutRequestId, status: responseCode === "0" ? "pending_confirmation" : "failed", rawPayload: stk as Prisma.InputJsonValue } });
+      return res.status(201).json({ data: toJsonSafe({ id: updated.id, status: updated.status, sourceReference: updated.sourceReference, checkoutRequestId, customerMessage: stk.CustomerMessage || stk.ResponseDescription || "Check your phone to complete payment.", amountKsh: updated.amountKsh, site: plan.site, plan }) });
+    }
 
     // A phone with access still running gets a top-up (activation extends
     // it), so charge for the devices that package actually covers -- a
@@ -1619,7 +1664,8 @@ publicRouter.post("/payments/mpesa/callback", async (req, res, next) => {
         amount,
         phone,
         paymentIntentId: intent.id,
-        entitlementId: activated.entitlement.id
+        entitlementId: "entitlement" in activated ? activated.entitlement?.id ?? null : null,
+        pppoeAccountId: "account" in activated ? activated.account.id : null
       })
     });
   } catch (error) {
@@ -2008,7 +2054,7 @@ export async function reconcilePendingMpesaPayments(): Promise<{ activated: numb
   const pending = await prisma.wifiPaymentIntent.findMany({
     where: {
       provider: "mpesa",
-      status: "pending_confirmation",
+      status: { in: ["pending_confirmation", "confirmed"] },
       providerReference: { not: null },
       createdAt: { lt: new Date(now - RECONCILE_AFTER_MS), gt: new Date(now - RECONCILE_WINDOW_MS) }
     },
@@ -2036,12 +2082,14 @@ export async function reconcilePendingMpesaPayments(): Promise<{ activated: numb
 
     if (isSuccessfulStkQuery(query, checkoutRequestId)) {
       const confirmedAt = new Date();
-      const claimed = await prisma.wifiPaymentIntent.updateMany({
-        where: { id: intent.id, status: "pending_confirmation" },
-        data: { status: "confirmed", confirmedAt, rawPayload }
-      });
-      if (claimed.count === 0) continue; // the callback settled it meanwhile
-      await activatePaymentIntent(intent, confirmedAt);
+      if (intent.status === "pending_confirmation") {
+        const claimed = await prisma.wifiPaymentIntent.updateMany({
+          where: { id: intent.id, status: "pending_confirmation" },
+          data: { status: "confirmed", confirmedAt, rawPayload }
+        });
+        if (claimed.count === 0) continue; // the callback settled it meanwhile
+      }
+      await activatePaymentIntent(intent, intent.confirmedAt ?? confirmedAt);
       activated += 1;
     } else {
       const updated = await prisma.wifiPaymentIntent.updateMany({

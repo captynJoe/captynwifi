@@ -198,3 +198,30 @@ export async function kickHotspotUser(username: string): Promise<RouterSessionKi
     client.close();
   }
 }
+
+
+export async function kickPppoeUser(username: string): Promise<RouterSessionKickResult> {
+  const skippedReason = missingRouterConfig();
+  if (skippedReason) return { enabled: config.routeros.enabled, attempted: false, removed: 0, skippedReason };
+
+  const client = new RouterOsApiClient();
+  try {
+    await client.connect();
+    await client.login();
+    const sessions = await client.command(["/ppp/active/print", `?name=${username}`]);
+    const ids = sessions
+      .filter((sentence) => sentence.type === "!re" && sentence.attrs[".id"])
+      .map((sentence) => sentence.attrs[".id"]);
+
+    let removed = 0;
+    for (const id of ids) {
+      await client.command(["/ppp/active/remove", `=numbers=${id}`]);
+      removed += 1;
+    }
+    return { enabled: true, attempted: true, removed };
+  } catch (error) {
+    return { enabled: true, attempted: true, removed: 0, error: error instanceof Error ? error.message : "RouterOS PPP action failed" };
+  } finally {
+    client.close();
+  }
+}

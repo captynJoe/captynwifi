@@ -4,7 +4,7 @@ import { prisma } from "../prisma.js";
 import { applyRadiusProjectionRows, hasOtherActiveEntitlement } from "../services/radiusSqlApply.js";
 import { applyOutageCredit, evaluateAccountingOutage, resumePausedEntitlements, touchOutageHeartbeat } from "../services/outageCredit.js";
 import { activateDuePromos, endPromo, getActivePromo } from "../services/promo.js";
-import { kickHotspotUser } from "../services/routeros.js";
+import { kickHotspotUser, kickPppoeUser } from "../services/routeros.js";
 
 async function applyProjection(id: string) {
   await prisma.$transaction(async (tx) => {
@@ -77,6 +77,28 @@ async function expireEntitlements() {
 // ever created. updatedAt is what moves this window: the STK-initiate step
 // touches it once right after creation, so this only counts idle time since
 // then, not time since the customer first tapped Pay.
+async function expirePppoeAccounts() {
+  const now = new Date();
+  const expired = await prisma.wifiPppoeAccount.findMany({
+    where: { status: "active", expiresAt: { lte: now } },
+    select: { id: true, username: true },
+    take: config.radiusSql.batchSize
+  });
+
+  for (const account of expired) {
+    await prisma.$transaction(async (tx) => {
+      const claimed = await tx.wifiPppoeAccount.updateMany({
+        where: { id: account.id, status: "active", expiresAt: { lte: now } },
+        data: { status: "expired" }
+      });
+      if (!claimed.count) return;
+      await tx.$executeRaw`DELETE FROM radcheck WHERE username = ${account.username}`;
+      await tx.$executeRaw`DELETE FROM radreply WHERE username = ${account.username}`;
+    });
+  }
+  return expired.length;
+}
+
 async function expireStalePaymentIntents() {
   const cutoff = new Date(Date.now() - config.mpesa.pendingTimeoutSeconds * 1000);
   const result = await prisma.wifiPaymentIntent.updateMany({
@@ -151,7 +173,9 @@ async function kickSessionsWithoutCredentials() {
   for (const { username } of rows) {
     if (now - (lastKickAttempt.get(username) ?? 0) < KICK_RETRY_MS) continue;
     lastKickAttempt.set(username, now);
-    const result = await kickHotspotUser(username);
+    const result = username.startsWith("ppp")
+      ? await kickPppoeUser(username)
+      : await kickHotspotUser(username);
     if (result.skippedReason) return kicked; // RouterOS API not configured -- nothing to retry
     if (result.error) console.warn(`Expired-session kick ${username} failed: ${result.error}`);
     kicked += result.removed;
@@ -176,6 +200,8 @@ async function closeStaleSessions() {
 
 async function tick() {
   await expireEntitlements();
+  const expiredPppoe = await expirePppoeAccounts();
+  if (expiredPppoe > 0) console.log(`Expired ${expiredPppoe} PPPoE subscription(s)`);
   const timedOutPayments = await expireStalePaymentIntents();
   if (timedOutPayments > 0) console.log(`Marked ${timedOutPayments} stale pending WiFi payment(s) as failed`);
   const applied = await applyPendingBatch();

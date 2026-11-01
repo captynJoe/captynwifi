@@ -98,6 +98,7 @@ const endpoints = {
   plans: adminApi("/plans"),
   payments: adminApi("/payment-intents"),
   entitlements: adminApi("/entitlements"),
+  pppoeAccounts: adminApi("/pppoe-accounts"),
   projections: adminApi("/radius-projections"),
   accounting: adminApi("/accounting-sessions"),
   networkStatus: adminApi("/network-status"),
@@ -1176,6 +1177,21 @@ function renderAll() {
 
   renderAccessRows("overview-access", entitlements.slice(0, 5), true);
 
+  const pppoeAccounts = state.cache.pppoeAccounts || [];
+  const activePppoe = pppoeAccounts.filter((account) => account.status === "active" && new Date(account.expiresAt).getTime() > Date.now()).length;
+  const pppoeSummary = document.getElementById("pppoe-summary");
+  if (pppoeSummary) pppoeSummary.textContent = `${activePppoe} active · ${pppoeAccounts.length} total · Monthly router accounts`;
+  renderRows("pppoe-accounts", pppoeAccounts, (account) => [
+    `<span class="mono">${escapeHtml(account.customerPhone)}</span>`,
+    `<span class="mono">${escapeHtml(account.username)}</span>`,
+    escapeHtml(account.site?.name),
+    `${escapeHtml(account.plan?.name)} · ${fmtMoney(account.plan?.priceKsh)}`,
+    status(account.status === "active" && new Date(account.expiresAt).getTime() <= Date.now() ? "expired" : account.status),
+    fmtDate(account.startsAt),
+    fmtDate(account.expiresAt),
+    escapeHtml(account._count?.subscriptions ?? 0)
+  ], 8);
+
   renderRows("sites", state.cache.sites || [], (item) => [
     escapeHtml(item.name),
     `<span class="mono">${escapeHtml(item.externalId)}</span>`,
@@ -1241,12 +1257,13 @@ async function loadDashboard() {
   setAuthError("");
   refreshBtn.disabled = true;
   try {
-    const [summary, sites, plans, payments, entitlements, projections, accounting, networkStatus, governorStatus, dynamicPlanStatus, outageCredits, promo, loyalty, promoHistory] = await Promise.all([
+    const [summary, sites, plans, payments, entitlements, pppoeAccounts, projections, accounting, networkStatus, governorStatus, dynamicPlanStatus, outageCredits, promo, loyalty, promoHistory] = await Promise.all([
       api(adminApi("/summary")),
       api(endpoints.sites),
       api(endpoints.plans),
       api(endpoints.payments),
       api(endpoints.entitlements),
+      api(endpoints.pppoeAccounts),
       api(endpoints.projections),
       api(endpoints.accounting),
       api(endpoints.networkStatus),
@@ -1258,7 +1275,7 @@ async function loadDashboard() {
       api(endpoints.loyalty).catch(() => null),
       api(endpoints.promoHistory).catch(() => [])
     ]);
-    state.cache = { sites, plans, payments, entitlements, projections, accounting, networkStatus, governorStatus, dynamicPlanStatus, outageCredits, promo, loyalty, promoHistory };
+    state.cache = { sites, plans, payments, entitlements, pppoeAccounts, projections, accounting, networkStatus, governorStatus, dynamicPlanStatus, outageCredits, promo, loyalty, promoHistory };
     renderSummary(summary);
     renderAll();
     authPanel.classList.add("hidden");
