@@ -1284,6 +1284,8 @@ document.getElementById("pppoe-new-plan")?.addEventListener("click", () => {
   planPppoeInput.checked = true;
   planDurationValueInput.value = "30";
   planDurationUnitSelect.value = "days";
+  planDevicesInput.value = "1";
+  planMaxDevicesSelect.value = "1";
 });
 
 pppoeCashForm?.addEventListener("submit", async (event) => {
