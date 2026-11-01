@@ -828,6 +828,7 @@ publicRouter.get("/sites", async (_req, res, next) => {
           // skips mirroring them (see maybeRotate()), so they also show as-is.
           where: {
             enabled: true,
+            pppoeEnabled: false,
             OR: [
               { source: "captyn_dynamic" },
               { source: "captyn_admin", priceKsh: 0 },
@@ -849,7 +850,7 @@ const MIN_PPPOE_MONTH_SECONDS = 28 * 24 * 60 * 60;
 publicRouter.get("/pppoe/plans", async (_req, res, next) => {
   try {
     const plans = await prisma.wifiPlan.findMany({
-      where: { enabled: true, source: { in: PUBLICLY_PURCHASABLE_SOURCES }, priceKsh: { gt: 0 }, durationSeconds: { gte: MIN_PPPOE_MONTH_SECONDS } },
+      where: { enabled: true, pppoeEnabled: true, source: { in: PUBLICLY_PURCHASABLE_SOURCES }, priceKsh: { gt: 0 }, durationSeconds: { gte: MIN_PPPOE_MONTH_SECONDS } },
       include: { site: { select: { id: true, name: true } } },
       orderBy: [{ priceKsh: "asc" }, { name: "asc" }]
     });
@@ -1322,8 +1323,10 @@ publicRouter.post("/payments/mpesa/stk", publicPaymentIpLimit, async (req, res, 
     const mpesa = getMpesaStatus();
     if (!mpesa.configured) return res.status(503).json({ error: "M-PESA is not configured for WiFi payments." });
 
+    if (parsed.accessType !== "pppoe" && plan.pppoeEnabled) return res.status(400).json({ error: "Choose this plan from the PPPoE router checkout." });
+
     if (parsed.accessType === "pppoe") {
-      if (plan.durationSeconds < MIN_PPPOE_MONTH_SECONDS || plan.priceKsh <= 0) return res.status(400).json({ error: "Choose a paid monthly PPPoE plan." });
+      if (!plan.pppoeEnabled || plan.durationSeconds < MIN_PPPOE_MONTH_SECONDS || plan.priceKsh <= 0) return res.status(400).json({ error: "Choose an enabled paid monthly PPPoE plan." });
       const reference = sourceReference();
       const intent = await prisma.wifiPaymentIntent.create({ data: { siteId: plan.siteId, planId: plan.id, source: "captyn_pppoe", accessType: "pppoe", sourceReference: reference, customerPhone: phone, amountKsh: plan.priceKsh, provider: "mpesa", status: "pending_confirmation" } });
       const stk = await initiateWifiStkPush({ amount: plan.priceKsh, phoneNumber: phone, accountReference: reference.slice(0, 12), transactionDesc: `CAPTYN PPPoE ${plan.name}`.slice(0, 64), callbackUrl: config.mpesa.callbackUrl });

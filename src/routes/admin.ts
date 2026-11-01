@@ -73,6 +73,7 @@ const planCreateSchema = z.object({
   priceKsh: z.coerce.number().int().nonnegative(),
   category: planCategorySchema.default("standard"),
   rateLimit: mikrotikRateLimit,
+  pppoeEnabled: z.coerce.boolean().default(false),
   deviceLimit: z.coerce.number().int().positive().default(1),
   maxDevices: z.coerce.number().int().min(1).max(3).default(3),
   enabled: z.coerce.boolean().default(true),
@@ -82,6 +83,7 @@ const planCreateSchema = z.object({
 });
 
 const planUpdateSchema = planCreateSchema.partial().extend({ enabled: z.coerce.boolean().optional() });
+const MIN_PPPOE_MONTH_SECONDS = 28 * 24 * 60 * 60;
 
 const voucherCreateSchema = z.object({
   planId: z.string().trim().min(1),
@@ -656,6 +658,9 @@ adminRouter.get("/plans", async (_req, res, next) => {
 adminRouter.post("/plans", async (req, res, next) => {
   try {
     const data = planCreateSchema.parse(req.body);
+    if (data.pppoeEnabled && (data.durationSeconds < MIN_PPPOE_MONTH_SECONDS || data.priceKsh <= 0 || !data.rateLimit)) {
+      return res.status(400).json({ error: "PPPoE plans must be paid monthly packages with upload and download speed limits." });
+    }
     const plan = await prisma.wifiPlan.create({
       data: {
         siteId: data.siteId,
@@ -666,6 +671,7 @@ adminRouter.post("/plans", async (req, res, next) => {
         priceKsh: data.priceKsh,
         category: data.category,
         rateLimit: data.rateLimit,
+        pppoeEnabled: data.pppoeEnabled,
         deviceLimit: data.deviceLimit,
         maxDevices: data.maxDevices,
         enabled: data.enabled,
@@ -688,6 +694,15 @@ adminRouter.patch("/plans/:id", async (req, res, next) => {
     // edit to the baseline instead.
     const target = await prisma.wifiPlan.findUnique({ where: { id: req.params.id }, select: { source: true, externalPackageId: true } });
     const planId = target?.source === DYNAMIC_PLAN_SOURCE && target.externalPackageId ? target.externalPackageId : req.params.id;
+    const current = await prisma.wifiPlan.findUnique({ where: { id: planId }, select: { durationSeconds: true, rateLimit: true, priceKsh: true, pppoeEnabled: true } });
+    if (!current) return res.status(404).json({ error: "Package not found." });
+    const nextPppoeEnabled = data.pppoeEnabled ?? current.pppoeEnabled;
+    const nextDurationSeconds = data.durationSeconds ?? current.durationSeconds;
+    const nextRateLimit = data.rateLimit ?? current.rateLimit;
+    const nextPriceKsh = data.priceKsh ?? current.priceKsh;
+    if (nextPppoeEnabled && (nextDurationSeconds < MIN_PPPOE_MONTH_SECONDS || nextPriceKsh <= 0 || !nextRateLimit)) {
+      return res.status(400).json({ error: "PPPoE plans must be paid monthly packages with upload and download speed limits." });
+    }
     const plan = await prisma.$transaction(async (tx) => {
       const updated = await tx.wifiPlan.update({
         where: { id: planId },
@@ -700,6 +715,7 @@ adminRouter.patch("/plans/:id", async (req, res, next) => {
           ...(data.priceKsh !== undefined ? { priceKsh: data.priceKsh } : {}),
           ...(data.category !== undefined ? { category: data.category } : {}),
           ...(data.rateLimit !== undefined ? { rateLimit: data.rateLimit } : {}),
+          ...(data.pppoeEnabled !== undefined ? { pppoeEnabled: data.pppoeEnabled } : {}),
           ...(data.deviceLimit !== undefined ? { deviceLimit: data.deviceLimit } : {}),
           ...(data.maxDevices !== undefined ? { maxDevices: data.maxDevices } : {}),
           ...(data.enabled !== undefined ? { enabled: data.enabled } : {}),
@@ -926,7 +942,7 @@ adminRouter.post("/pppoe-accounts/cash", async (req, res, next) => {
     }
 
     const plan = await prisma.wifiPlan.findUnique({ where: { id: input.planId }, include: { site: true } });
-    if (!plan || !plan.enabled || plan.priceKsh <= 0 || plan.durationSeconds < 28 * 24 * 60 * 60) {
+    if (!plan || !plan.enabled || !plan.pppoeEnabled || plan.priceKsh <= 0 || plan.durationSeconds < MIN_PPPOE_MONTH_SECONDS) {
       return res.status(400).json({ error: "Choose an enabled, paid monthly plan." });
     }
 

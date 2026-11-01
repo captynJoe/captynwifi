@@ -13,8 +13,8 @@ export async function activatePppoePayment(
   confirmedAt: Date
 ) {
   if (payment.accessType !== "pppoe") throw new Error("Payment is not a PPPoE purchase");
-  if (payment.plan.durationSeconds < MIN_MONTH_SECONDS || payment.amountKsh <= 0) {
-    throw new Error("PPPoE purchases require a paid monthly plan");
+  if (!payment.plan.pppoeEnabled || payment.plan.durationSeconds < MIN_MONTH_SECONDS || payment.amountKsh <= 0 || !payment.plan.rateLimit) {
+    throw new Error("PPPoE purchases require an enabled, speed-limited paid monthly plan");
   }
 
   // Serialize renewals for a phone so two successful M-PESA prompts cannot

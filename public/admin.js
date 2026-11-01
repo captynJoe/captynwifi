@@ -81,6 +81,7 @@ const planUploadInput = document.getElementById("plan-upload");
 const planDevicesInput = document.getElementById("plan-devices");
 const planMaxDevicesSelect = document.getElementById("plan-max-devices");
 const planEnabledInput = document.getElementById("plan-enabled");
+const planPppoeInput = document.getElementById("plan-pppoe");
 const planFeaturedInput = document.getElementById("plan-featured");
 const planManualPricingInput = document.getElementById("plan-manual-pricing");
 const planImageInput = document.getElementById("plan-image");
@@ -210,6 +211,10 @@ function parseRateLimit(rateLimit) {
   if (!match) return { download: "", upload: "" };
   return { upload: mbpsFromRatePart(match[1]), download: mbpsFromRatePart(match[2]) };
 }
+function pppoeRateLabel(rateLimit) {
+  const { download, upload } = parseRateLimit(rateLimit);
+  return download && upload ? `${upload} up / ${download} down Mbps` : "Set both speeds";
+}
 function friendlyRate(rateLimit) {
   const { download, upload } = parseRateLimit(rateLimit);
   if (!download && !upload) return rateLimit ? escapeHtml(rateLimit) : "Standard speed";
@@ -269,7 +274,7 @@ function enabledPlans() {
 // nothing is actually wrong with what customers see.
 function publiclyVisiblePlans() {
   return enabledPlans().filter(
-    (plan) => plan.source === "captyn_dynamic" || Number(plan.priceKsh) === 0 || plan.manualPricing
+    (plan) => !plan.pppoeEnabled && (plan.source === "captyn_dynamic" || Number(plan.priceKsh) === 0 || plan.manualPricing)
   );
 }
 
@@ -1185,7 +1190,14 @@ function renderAll() {
   renderAccessRows("overview-access", entitlements.slice(0, 5), true);
 
   const pppoeAccounts = state.cache.pppoeAccounts || [];
-  const cashPlans = (state.cache.plans || []).filter((plan) => plan.enabled && Number(plan.priceKsh) > 0 && Number(plan.durationSeconds) >= 28 * 24 * 60 * 60);
+  const pppoePlans = (state.cache.plans || []).filter((plan) => plan.pppoeEnabled);
+  document.getElementById("pppoe-plans-count").textContent = `${pppoePlans.length} plans`;
+  renderRows("pppoe-plans", pppoePlans.sort((a, b) => Number(a.priceKsh) - Number(b.priceKsh)), (plan) => [
+    escapeHtml(plan.name), fmtMoney(plan.priceKsh), pppoeRateLabel(plan.rateLimit),
+    plan.enabled ? status("published") : status("disabled"),
+    `<button class="secondary" type="button" data-edit-plan="${escapeHtml(plan.id)}">Edit</button>`
+  ], 5);
+  const cashPlans = pppoePlans.filter((plan) => plan.enabled && Number(plan.priceKsh) > 0 && Number(plan.durationSeconds) >= 28 * 24 * 60 * 60);
   if (pppoeCashPlan) {
     const previous = pppoeCashPlan.value;
     pppoeCashPlan.innerHTML = `<option value="">Select a paid monthly plan</option>${cashPlans.map((plan) => `<option value="${escapeHtml(plan.id)}">${escapeHtml(plan.name)} · ${fmtMoney(plan.priceKsh)} · ${escapeHtml(plan.site?.name || "")}</option>`).join("")}`;
@@ -1221,11 +1233,12 @@ function renderAll() {
     shortDuration(item.durationSeconds),
     fmtMoney(item.priceKsh),
     planCategory(item) === "limited" ? status("limited") : status("standard"),
-    friendlyRate(item.rateLimit),
+    item.pppoeEnabled ? pppoeRateLabel(item.rateLimit) : friendlyRate(item.rateLimit),
+    item.pppoeEnabled ? status("yes") : "-",
     escapeHtml(item.deviceLimit),
     item.enabled ? status("published") : status("disabled"),
     `<span class="action-row"><button class="secondary" type="button" data-edit-plan="${escapeHtml(item.id)}">Edit</button>${item.enabled ? '<a class="button-link secondary" href="/wifi/" target="_blank" rel="noreferrer">View</a>' : ""}</span>`
-  ], 9);
+  ], 10);
 
   renderRows("payments", payments, (item) => [
     `<span class="mono">${escapeHtml(item.sourceReference)}</span>`,
@@ -1265,6 +1278,13 @@ function renderAll() {
     fmtDate(item.updatedAt)
   ], 8);
 }
+
+document.getElementById("pppoe-new-plan")?.addEventListener("click", () => {
+  newPlan();
+  planPppoeInput.checked = true;
+  planDurationValueInput.value = "30";
+  planDurationUnitSelect.value = "days";
+});
 
 pppoeCashForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -1355,6 +1375,7 @@ function resetPlanForm() {
   planDownloadInput.value = "";
   planUploadInput.value = "";
   planEnabledInput.checked = true;
+  planPppoeInput.checked = false;
   planFeaturedInput.checked = false;
   planManualPricingInput.checked = false;
   planSubmit.textContent = "Save package";
@@ -1393,6 +1414,7 @@ function editPlan(planId) {
   planDevicesInput.value = String(plan.deviceLimit || 1);
   planMaxDevicesSelect.value = String(plan.maxDevices || 3);
   planEnabledInput.checked = Boolean(plan.enabled);
+  planPppoeInput.checked = Boolean(plan.pppoeEnabled);
   planFeaturedInput.checked = Boolean(plan.featured);
   planManualPricingInput.checked = Boolean(plan.manualPricing);
   planSubmit.textContent = "Update package";
@@ -1553,6 +1575,7 @@ planForm.addEventListener("submit", async (event) => {
       priceKsh: Number(planPriceInput.value || 0),
       category: planCategorySelect.value,
       rateLimit: composeRateLimit(planDownloadInput.value, planUploadInput.value),
+      pppoeEnabled: planPppoeInput.checked,
       deviceLimit: Number(planDevicesInput.value || 1),
       maxDevices: Math.max(Number(planDevicesInput.value || 1), Number(planMaxDevicesSelect.value || 3)),
       enabled: planEnabledInput.checked,

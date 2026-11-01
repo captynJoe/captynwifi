@@ -176,6 +176,8 @@
               <label class="field" for="plan-devices"><span>Devices</span><input id="plan-devices" name="deviceLimit" type="number" min="1" max="3" value="1" required /><em class="field-hint">Included in the price.</em></label>
               <label class="field" for="plan-max-devices"><span>Max devices</span><select id="plan-max-devices" name="maxDevices"><option value="1">1</option><option value="2">2</option><option value="3" selected>3</option></select><em class="field-hint">Customers can add up to this many at checkout (×1.6 for 2, ×2.1 for 3).</em></label>
               <label class="check-field inline" for="plan-enabled"><input id="plan-enabled" name="enabled" type="checkbox" checked /><span>Published</span></label>
+              <label class="check-field inline" for="plan-pppoe"><input id="plan-pppoe" name="pppoeEnabled" type="checkbox" /><span>Monthly PPPoE plan</span></label>
+              <em class="field-hint full-row">PPPoE plans are shown on the router internet checkout, not the Hotspot package list. Set both upload and download speeds; each field can be edited later.</em>
               <label class="check-field inline" for="plan-featured"><input id="plan-featured" name="featured" type="checkbox" /><span>Featured</span></label>
               <label class="check-field inline" for="plan-manual-pricing"><input id="plan-manual-pricing" name="manualPricing" type="checkbox" /><span>Manual pricing</span></label>
               <em class="field-hint full-row">Featured packages show first, ahead of cheaper non-featured ones. Manual pricing pins this exact price -- it won't get auto-adjusted for network conditions, and won't sell during a CRITICAL congestion lockout once you've re-enabled it after one.</em>
@@ -200,7 +202,7 @@
           </article>
           <article class="surface span-12 table-panel">
             <div class="panel-head"><h2>All Packages</h2><span id="plans-count"></span></div>
-            <div class="table-wrap"><table><thead><tr><th>Name</th><th>Site</th><th>Duration</th><th>Price</th><th>Category</th><th>Speed</th><th>Devices</th><th>Client Portal</th><th>Actions</th></tr></thead><tbody id="plans-body"></tbody></table></div>
+            <div class="table-wrap"><table><thead><tr><th>Name</th><th>Site</th><th>Duration</th><th>Price</th><th>Category</th><th>Speed</th><th>PPPoE</th><th>Devices</th><th>Client Portal</th><th>Actions</th></tr></thead><tbody id="plans-body"></tbody></table></div>
           </article>
         </section>
 
@@ -273,6 +275,9 @@
               <p id="pppoe-cash-status" class="field-hint" role="status">Use only after receiving cash. Credentials are shown once.</p>
             </form>
             <div id="pppoe-cash-result" class="hidden"></div>
+            <div class="panel-head"><h2>Monthly PPPoE plans</h2><span id="pppoe-plans-count"></span><button id="pppoe-new-plan" class="secondary" type="button">Add plan</button></div>
+            <p class="field-hint">Edit prices and matching upload/download caps here. Plan changes apply to new sales and renewals; active subscribers keep their assigned speed until renewal.</p>
+            <div class="table-wrap"><table><thead><tr><th>Plan</th><th>Price</th><th>Upload / download</th><th>Published</th><th>Actions</th></tr></thead><tbody id="pppoe-plans-body"></tbody></table></div>
             <div class="table-wrap access-scroll"><table><thead><tr><th>Phone</th><th>PPPoE username</th><th>Site</th><th>Package</th><th>Status</th><th>Started</th><th>Expires</th><th>Renewals</th></tr></thead><tbody id="pppoe-accounts-body"></tbody></table></div>
           </article>
         </section>

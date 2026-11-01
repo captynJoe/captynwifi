@@ -56,6 +56,7 @@ model WifiPlan {
   priceKsh          Int
   category          String       @default("standard")
   rateLimit         String?
+  pppoeEnabled      Boolean      @default(false)
   deviceLimit       Int          @default(1)
   // Most devices customers can choose at checkout (device selector); the
   // package's own deviceLimit is the starting count.

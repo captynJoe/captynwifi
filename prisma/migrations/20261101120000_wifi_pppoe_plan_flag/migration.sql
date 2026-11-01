@@ -1,0 +1,1 @@
+ALTER TABLE "WifiPlan" ADD COLUMN "pppoeEnabled" BOOLEAN NOT NULL DEFAULT false;
