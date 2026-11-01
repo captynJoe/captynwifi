@@ -2,7 +2,6 @@ import { Prisma } from "@prisma/client";
 import { config } from "../config.js";
 import { applyRadiusProjectionRows } from "./radiusSqlApply.js";
 import { createRadiusSecret, normalizeWifiUsername } from "./radiusProjection.js";
-import { withBurst } from "./rateLimit.js";
 
 const MIN_MONTH_SECONDS = 28 * 24 * 60 * 60;
 
@@ -72,7 +71,7 @@ export async function activatePppoePayment(
     { attribute: "Simultaneous-Use", op: ":=", value: 1 }
   ];
   const replyItems = [
-    ...(rateLimit ? [{ attribute: "Mikrotik-Rate-Limit", op: ":=", value: withBurst(rateLimit) ?? rateLimit }] : []),
+    ...(rateLimit ? [{ attribute: "Mikrotik-Rate-Limit", op: ":=", value: rateLimit }] : []),
     { attribute: "Session-Timeout", op: ":=", value: seconds },
     { attribute: "Acct-Interim-Interval", op: ":=", value: config.defaultAcctInterimSeconds },
     { attribute: "Service-Type", op: ":=", value: "Framed-User" },
