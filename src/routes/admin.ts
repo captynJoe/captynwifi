@@ -235,19 +235,23 @@ async function applyEntitlementRadius(
   });
 }
 
-// Midnight in Nairobi (UTC+3, no daylight saving), as a UTC instant.
+const NAIROBI_OFFSET_MS = 3 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// Nairobi is UTC+3 year-round. Return its local calendar boundary as a UTC instant.
 function startOfNairobiDay(now: Date): Date {
-  const offsetMs = 3 * 60 * 60 * 1000;
-  const local = new Date(now.getTime() + offsetMs);
-  return new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate()) - offsetMs);
+  const local = new Date(now.getTime() + NAIROBI_OFFSET_MS);
+  return new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate()) - NAIROBI_OFFSET_MS);
+}
+function startOfNairobiMonth(now: Date, monthsBack = 0): Date {
+  const local = new Date(now.getTime() + NAIROBI_OFFSET_MS);
+  return new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth() - monthsBack, 1) - NAIROBI_OFFSET_MS);
 }
 
 // Month-end estimate: what's booked so far plus the last 7 days' daily
-// average for every day left, so it follows the current pace rather than
-// the month's slow start.
+// average for every day left, using Nairobi's calendar month.
 function projectMonth(now: Date, monthToDateKsh: number, last7DaysKsh: number): number {
-  const monthEnd = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1);
-  const daysLeft = Math.max(0, (monthEnd - now.getTime()) / (24 * 60 * 60 * 1000));
+  const daysLeft = Math.max(0, (startOfNairobiMonth(now, -1).getTime() - now.getTime()) / DAY_MS);
   return Math.round(monthToDateKsh + (last7DaysKsh / 7) * daysLeft);
 }
 
@@ -256,6 +260,9 @@ const BOOKED_PAYMENT_STATUSES = Prisma.sql`('confirmed', 'paid_pending_activatio
 adminRouter.get("/summary", async (_req, res, next) => {
   try {
     const now = new Date();
+    const monthStart = startOfNairobiMonth(now);
+    const previousMonthStart = startOfNairobiMonth(now, 1);
+    const previousMonthToDateEnd = new Date(previousMonthStart.getTime() + now.getTime() - monthStart.getTime());
     const [
       siteCount,
       planCount,
@@ -295,7 +302,7 @@ adminRouter.get("/summary", async (_req, res, next) => {
       prisma.wifiPaymentIntent.aggregate({
         where: {
           status: { in: ["confirmed", "paid_pending_activation", "activated"] },
-          createdAt: { gte: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)) }
+          createdAt: { gte: monthStart }
         },
         _sum: { amountKsh: true },
         _count: true
@@ -314,20 +321,20 @@ adminRouter.get("/summary", async (_req, res, next) => {
         where: {
           status: { in: ["confirmed", "paid_pending_activation", "activated"] },
           createdAt: {
-            gte: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)),
-            lt: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1) + (now.getTime() - Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)))
+            gte: previousMonthStart,
+            lt: previousMonthToDateEnd
           }
         },
         _sum: { amountKsh: true }
       }),
       prisma.$queryRaw<Array<{ month: Date; bookedKsh: number; count: number }>>(
         Prisma.sql`
-          SELECT date_trunc('month', "createdAt") as month,
+          SELECT date_trunc('month', "createdAt" + INTERVAL '3 hours') as month,
                  COALESCE(SUM("amountKsh"), 0)::int as "bookedKsh",
                  COUNT(*)::int as count
           FROM "WifiPaymentIntent"
           WHERE status IN ${BOOKED_PAYMENT_STATUSES}
-            AND "createdAt" >= date_trunc('month', NOW()) - INTERVAL '11 months'
+            AND "createdAt" >= ${startOfNairobiMonth(now, 11)}
           GROUP BY 1
           ORDER BY 1 DESC
         `

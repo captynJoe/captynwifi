@@ -135,7 +135,7 @@ function fmtDate(value) {
   if (!value) return "-";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return text(value);
-  return date.toLocaleString();
+  return date.toLocaleString(undefined, { timeZone: "Africa/Nairobi" });
 }
 function fmtMoney(value) { return `KSh ${Number(value || 0).toLocaleString()}`; }
 function fmtMonth(value) {
@@ -379,7 +379,8 @@ function renderTrendPill(elementId, changePercent, label = "") {
 }
 
 function previousMonthKey(now = new Date()) {
-  const date = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+  const nairobiNow = new Date(now.getTime() + 3 * 60 * 60 * 1000);
+  const date = new Date(Date.UTC(nairobiNow.getUTCFullYear(), nairobiNow.getUTCMonth() - 1, 1));
   return date.toISOString().slice(0, 7);
 }
 function renderSummary(summary) {
