@@ -7,7 +7,7 @@
     <script src="theme.js?v=2026080402"></script>
     <link rel="icon" href="captyn-mark.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="theme.css?v=2026103102" />
-    <link rel="stylesheet" href="admin.css?v=2026101401" />
+    <link rel="stylesheet" href="admin.css?v=2026110201" />
   </head>
   <body>
     <header class="topbar">
@@ -263,22 +263,43 @@
         </section>
 
         <section class="page-grid hidden" data-page-panel="pppoe">
-          <article class="surface span-12 table-panel">
-            <div class="panel-head">
-              <div><h2>PPPoE subscribers</h2><span id="pppoe-summary" class="field-hint">Monthly router accounts. Customers pay through the WiFi portal.</span></div>
-              <a class="secondary" href="/wifi/pppoe" target="_blank" rel="noreferrer">Open customer checkout</a>
+          <article class="surface span-12 pppoe-overview">
+            <div class="pppoe-overview-copy">
+              <div><h2>Router subscriptions</h2></div>
+              <span id="pppoe-summary" class="pppoe-summary">0 active · 0 total</span>
             </div>
-            <form id="pppoe-cash-form" class="inline-form">
-              <label>Customer phone<input id="pppoe-cash-phone" type="tel" inputmode="tel" placeholder="07… or +254…" required /></label>
-              <label>Paid monthly plan<select id="pppoe-cash-plan" required><option value="">Loading plans…</option></select></label>
-              <button id="pppoe-cash-submit" class="primary" type="submit">Issue cash-paid login</button>
-              <p id="pppoe-cash-status" class="field-hint" role="status">Use only after receiving cash. Credentials are shown once.</p>
+            <a class="secondary pppoe-checkout-link" href="/wifi/pppoe" target="_blank" rel="noreferrer">View customer checkout</a>
+          </article>
+
+          <article class="surface span-12 pppoe-card">
+            <div class="pppoe-section-head">
+              <div><h2>Record a cash sale</h2><p>After receiving payment, create a router login for the customer.</p></div>
+              <span class="pppoe-one-time">Login details shown once</span>
+            </div>
+            <form id="pppoe-cash-form" class="pppoe-cash-form">
+              <label class="field" for="pppoe-cash-phone"><span>Customer phone</span><input id="pppoe-cash-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="07xx xxx xxx" required /><em class="field-hint">Used to identify the subscription.</em></label>
+              <label id="pppoe-cash-site-field" class="field" for="pppoe-cash-site"><span>Area</span><select id="pppoe-cash-site" required><option value="">Loading areas…</option></select><em class="field-hint">Choose where the router is connected.</em></label>
+              <label class="field" for="pppoe-cash-plan"><span>Plan</span><select id="pppoe-cash-plan" required disabled><option value="">Choose an area first</option></select><em class="field-hint">Price and speed are shown for each plan.</em></label>
+              <button id="pppoe-cash-submit" class="primary pppoe-submit" type="submit" disabled>Record sale &amp; create login</button>
+              <p id="pppoe-cash-status" class="pppoe-cash-status" role="status">Record a cash payment to create a customer login.</p>
             </form>
-            <div id="pppoe-cash-result" class="hidden"></div>
-            <div class="panel-head"><h2>Monthly PPPoE plans</h2><span id="pppoe-plans-count"></span><button id="pppoe-new-plan" class="secondary" type="button">Add plan</button></div>
-            <p class="field-hint">Edit prices and matching upload/download caps here. Plan changes apply to new sales and renewals; active subscribers keep their assigned speed until renewal.</p>
+            <div id="pppoe-cash-result" class="pppoe-cash-result hidden"></div>
+          </article>
+
+          <article class="surface span-12 pppoe-card table-panel">
+            <div class="pppoe-section-head pppoe-table-head">
+              <div><h2>Plans &amp; pricing</h2><p>Price and speed limits for new sales and renewals.</p></div>
+              <div class="pppoe-head-actions"><span id="pppoe-plans-count"></span><button id="pppoe-new-plan" class="secondary" type="button">Add plan</button></div>
+            </div>
             <div class="table-wrap"><table><thead><tr><th>Plan</th><th>Price</th><th>Upload / download</th><th>Published</th><th>Actions</th></tr></thead><tbody id="pppoe-plans-body"></tbody></table></div>
-            <div class="table-wrap access-scroll"><table><thead><tr><th>Phone</th><th>PPPoE username</th><th>Site</th><th>Package</th><th>Status</th><th>Started</th><th>Expires</th><th>Renewals</th></tr></thead><tbody id="pppoe-accounts-body"></tbody></table></div>
+            <p class="pppoe-table-note">Existing customers keep their current speed until renewal.</p>
+          </article>
+
+          <article class="surface span-12 pppoe-card table-panel">
+            <div class="pppoe-section-head pppoe-table-head">
+              <div><h2>Customer accounts</h2><p>Router login status and renewal history.</p></div>
+            </div>
+            <div class="table-wrap access-scroll"><table><thead><tr><th>Phone</th><th>Router username</th><th>Area</th><th>Plan</th><th>Status</th><th>Started</th><th>Expires</th><th>Renewals</th></tr></thead><tbody id="pppoe-accounts-body"></tbody></table></div>
           </article>
         </section>
 
@@ -399,6 +420,6 @@
       </section>
     </main>
 
-    <script src="admin.js?v=2026110102" defer data-cfasync="false"></script>
+    <script src="admin.js?v=2026110201" defer data-cfasync="false"></script>
   </body>
 </html>

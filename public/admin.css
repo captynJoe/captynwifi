@@ -533,3 +533,65 @@ img.brand-mark { background: none; border-radius: 10px; object-fit: contain; }
 /* Access list: its own tall scroll area with the header pinned. */
 .access-scroll { max-height: calc(100vh - 190px); min-height: 320px; overflow: auto; }
 .access-scroll thead th { position: sticky; top: 0; z-index: 1; }
+
+
+/* PPPoE admin: separate cash sales, plan prices, and customer accounts. */
+.pppoe-overview {
+  display: flex; align-items: center; justify-content: space-between; gap: 18px;
+  padding: 20px 22px; background: linear-gradient(115deg, var(--surface), var(--brand-blue-soft));
+}
+.pppoe-overview-copy { display: flex; align-items: center; gap: 22px; min-width: 0; }
+.pppoe-overview h2 { font-size: clamp(19px, 2vw, 23px); }
+.pppoe-summary { display: inline-flex; align-items: center; min-height: 30px; padding: 0 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--text); font-size: 12px; font-weight: 750; white-space: nowrap; }
+.pppoe-checkout-link { width: auto; flex: 0 0 auto; }
+.pppoe-card { min-width: 0; }
+.pppoe-section-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 20px 15px; border-bottom: 1px solid var(--line); }
+.pppoe-section-head h2 { font-size: 16px; }
+.pppoe-section-head p { margin-top: 5px; color: var(--muted); font-size: 12.5px; line-height: 1.45; }
+.pppoe-one-time { flex: 0 0 auto; padding: 6px 10px; border: 1px solid var(--amber-soft); border-radius: 999px; background: var(--amber-soft); color: var(--amber); font-size: 11px; font-weight: 750; }
+.pppoe-cash-form { display: grid; grid-template-columns: minmax(170px, 1.05fr) minmax(150px, .85fr) minmax(190px, 1.1fr) auto; align-items: end; gap: 14px; padding: 18px 20px 10px; }
+.pppoe-cash-form .field { min-width: 0; gap: 6px; }
+.pppoe-cash-form .field > span { color: var(--text-strong); font-size: 12px; font-weight: 750; }
+.pppoe-cash-form .field input, .pppoe-cash-form .field select { min-width: 0; min-height: 44px; }
+.pppoe-cash-form .field-hint { font-size: 11px; }
+.pppoe-submit { width: auto; min-height: 44px; white-space: normal; line-height: 1.25; }
+.pppoe-submit:disabled { opacity: .48; cursor: not-allowed; transform: none; box-shadow: none; }
+.pppoe-cash-status { grid-column: 1 / -1; min-height: 18px; margin: 0; color: var(--muted); font-size: 12px; font-weight: 600; }
+.pppoe-cash-status.success { color: var(--green); }
+.pppoe-cash-status.error { color: var(--red); }
+.pppoe-cash-result { margin: 0 20px 20px; padding: 16px; border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: linear-gradient(120deg, var(--green-soft), var(--surface-soft)); }
+.pppoe-issued-head, .pppoe-issued-head > div { display: flex; align-items: center; gap: 12px; }
+.pppoe-issued-head { justify-content: space-between; margin-bottom: 14px; }
+.pppoe-issued-head h3 { font-size: 14px; }
+.pppoe-issued-head p { margin-top: 3px; color: var(--muted); font-size: 12px; }
+.pppoe-issued-credentials { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.pppoe-issued-credentials > div { display: grid; gap: 7px; min-width: 0; padding: 11px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); }
+.pppoe-issued-credentials span { color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.pppoe-issued-credentials code { color: var(--text-strong); font-size: 14px; font-weight: 750; overflow-wrap: anywhere; }
+.pppoe-issued-meta { margin-top: 11px; color: var(--muted); font-size: 11.5px; font-weight: 650; }
+.pppoe-table-head { border-bottom: 1px solid var(--line); }
+.pppoe-head-actions { display: flex; align-items: center; gap: 12px; }
+.pppoe-head-actions > span { color: var(--muted); font-size: 12px; font-weight: 700; }
+.pppoe-head-actions button { width: auto; }
+.pppoe-table-note { padding: 11px 18px 14px; color: var(--muted); font-size: 11.5px; }
+[data-page-panel="pppoe"] table { min-width: 760px; }
+[data-page-panel="pppoe"] .access-scroll { min-height: 0; max-height: 470px; }
+@media (max-width: 980px) {
+  .pppoe-cash-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pppoe-submit { width: 100%; min-height: 46px; }
+}
+@media (max-width: 640px) {
+  .pppoe-overview { align-items: flex-start; flex-direction: column; padding: 18px; }
+  .pppoe-overview-copy { align-items: flex-start; flex-direction: column; gap: 10px; }
+  .pppoe-checkout-link { width: 100%; }
+  .pppoe-section-head { align-items: flex-start; flex-direction: column; padding: 16px; }
+  .pppoe-cash-form { grid-template-columns: 1fr; padding: 16px; }
+  .pppoe-cash-status { grid-column: auto; }
+  .pppoe-cash-result { margin: 0 16px 16px; }
+  .pppoe-issued-head { align-items: flex-start; flex-direction: column; }
+  .pppoe-issued-credentials { grid-template-columns: 1fr; }
+  .pppoe-table-head { align-items: flex-start; }
+  .pppoe-head-actions { width: 100%; justify-content: space-between; }
+}
+
+.pppoe-cash-form .field select:disabled { opacity: .82; cursor: default; }

@@ -113,10 +113,13 @@ const endpoints = {
 
 const pppoeCashForm = document.getElementById("pppoe-cash-form");
 const pppoeCashPhone = document.getElementById("pppoe-cash-phone");
+const pppoeCashSite = document.getElementById("pppoe-cash-site");
+const pppoeCashSiteField = document.getElementById("pppoe-cash-site-field");
 const pppoeCashPlan = document.getElementById("pppoe-cash-plan");
 const pppoeCashSubmit = document.getElementById("pppoe-cash-submit");
 const pppoeCashStatus = document.getElementById("pppoe-cash-status");
 const pppoeCashResult = document.getElementById("pppoe-cash-result");
+let pppoeCashSubmitting = false;
 
 const voucherForm = document.getElementById("voucher-form");
 const voucherPhoneInput = document.getElementById("voucher-phone");
@@ -1198,14 +1201,37 @@ function renderAll() {
     `<button class="secondary" type="button" data-edit-plan="${escapeHtml(plan.id)}">Edit</button>`
   ], 5);
   const cashPlans = pppoePlans.filter((plan) => plan.enabled && Number(plan.priceKsh) > 0 && Number(plan.durationSeconds) >= 28 * 24 * 60 * 60);
-  if (pppoeCashPlan) {
-    const previous = pppoeCashPlan.value;
-    pppoeCashPlan.innerHTML = `<option value="">Select a paid monthly plan</option>${cashPlans.map((plan) => `<option value="${escapeHtml(plan.id)}">${escapeHtml(plan.name)} · ${fmtMoney(plan.priceKsh)} · ${escapeHtml(plan.site?.name || "")}</option>`).join("")}`;
-    if (cashPlans.some((plan) => plan.id === previous)) pppoeCashPlan.value = previous;
+  const cashSiteIds = new Set(cashPlans.map((plan) => plan.site?.id).filter(Boolean));
+  const cashSites = (state.cache.sites || []).filter((site) => cashSiteIds.has(site.id));
+  const currentSiteId = pppoeCashSite?.value || "";
+  if (pppoeCashSite) {
+    pppoeCashSite.innerHTML = cashSites.length
+      ? `<option value="">Choose an area</option>${cashSites.map((site) => `<option value="${escapeHtml(site.id)}">${escapeHtml(site.name)}</option>`).join("")}`
+      : '<option value="">No available plans</option>';
+    if (cashSites.some((site) => site.id === currentSiteId)) pppoeCashSite.value = currentSiteId;
+    else if (cashSites.length === 1) pppoeCashSite.value = cashSites[0].id;
+    pppoeCashSite.disabled = cashSites.length <= 1;
+    if (pppoeCashSiteField) {
+      pppoeCashSiteField.classList.remove("hidden");
+      const hint = pppoeCashSiteField.querySelector(".field-hint");
+      if (hint) hint.textContent = cashSites.length === 1 ? "Only area with available plans." : "Choose where the router is connected.";
+    }
   }
+  function renderCashPlanOptions(preferredPlanId = "") {
+    if (!pppoeCashPlan) return;
+    const siteId = pppoeCashSite?.value || "";
+    const areaPlans = cashPlans.filter((plan) => plan.site?.id === siteId);
+    pppoeCashPlan.innerHTML = siteId
+      ? `<option value="">Choose a plan</option>${areaPlans.map((plan) => `<option value="${escapeHtml(plan.id)}">${escapeHtml(plan.name)} · ${fmtMoney(plan.priceKsh)}</option>`).join("")}`
+      : '<option value="">Choose an area first</option>';
+    pppoeCashPlan.disabled = areaPlans.length === 0;
+    if (areaPlans.some((plan) => plan.id === preferredPlanId)) pppoeCashPlan.value = preferredPlanId;
+  }
+  renderCashPlanOptions(pppoeCashPlan?.value || "");
+  syncPppoeCashSubmit();
   const activePppoe = pppoeAccounts.filter((account) => account.status === "active" && new Date(account.expiresAt).getTime() > Date.now()).length;
   const pppoeSummary = document.getElementById("pppoe-summary");
-  if (pppoeSummary) pppoeSummary.textContent = `${activePppoe} active · ${pppoeAccounts.length} total · Monthly router accounts`;
+  if (pppoeSummary) pppoeSummary.textContent = `${activePppoe} active · ${pppoeAccounts.length} total`;
   renderRows("pppoe-accounts", pppoeAccounts, (account) => [
     `<span class="mono">${escapeHtml(account.customerPhone)}</span>`,
     `<span class="mono">${escapeHtml(account.username)}</span>`,
@@ -1288,32 +1314,54 @@ document.getElementById("pppoe-new-plan")?.addEventListener("click", () => {
   planMaxDevicesSelect.value = "1";
 });
 
+function syncPppoeCashSubmit() {
+  if (pppoeCashSubmit) pppoeCashSubmit.disabled = pppoeCashSubmitting || !pppoeCashPhone?.value.trim() || !pppoeCashPlan?.value;
+}
+
+pppoeCashSite?.addEventListener("change", () => {
+  if (!pppoeCashPlan) return;
+  pppoeCashPlan.value = "";
+  const siteId = pppoeCashSite.value;
+  const availablePlans = ((state.cache.plans || []).filter((plan) => plan.pppoeEnabled && plan.enabled && Number(plan.priceKsh) > 0 && Number(plan.durationSeconds) >= 28 * 24 * 60 * 60)).filter((plan) => plan.site?.id === siteId);
+  pppoeCashPlan.innerHTML = siteId
+    ? `<option value="">Choose a plan</option>${availablePlans.map((plan) => `<option value="${escapeHtml(plan.id)}">${escapeHtml(plan.name)} · ${fmtMoney(plan.priceKsh)}</option>`).join("")}`
+    : '<option value="">Choose an area first</option>';
+  pppoeCashPlan.disabled = availablePlans.length === 0;
+  syncPppoeCashSubmit();
+});
+pppoeCashPlan?.addEventListener("change", syncPppoeCashSubmit);
+pppoeCashPhone?.addEventListener("input", syncPppoeCashSubmit);
+
 pppoeCashForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const phone = pppoeCashPhone?.value.trim() || "";
   const planId = pppoeCashPlan?.value || "";
   const plan = (state.cache.plans || []).find((candidate) => candidate.id === planId);
   if (!plan) {
-    setInlineStatus(pppoeCashStatus, "Choose an enabled paid monthly plan.", "field-hint error");
+    setInlineStatus(pppoeCashStatus, "Choose an area and an available plan.", "pppoe-cash-status error");
     return;
   }
-  if (!window.confirm(`Record KSh ${Number(plan.priceKsh).toLocaleString()} cash received from ${phone} for ${plan.name} and issue their PPPoE login?`)) return;
-  pppoeCashSubmit.disabled = true;
+  if (!window.confirm(`Record KSh ${Number(plan.priceKsh).toLocaleString()} received from ${phone} for ${plan.name}, then create their router login?`)) return;
+  pppoeCashSubmitting = true;
+  syncPppoeCashSubmit();
   pppoeCashResult?.classList.add("hidden");
-  setInlineStatus(pppoeCashStatus, "Recording cash sale and issuing login…", "field-hint");
+  setInlineStatus(pppoeCashStatus, "Saving cash sale and creating login…", "pppoe-cash-status");
   try {
     const result = await writeApi(adminApi("/pppoe-accounts/cash"), "POST", { phone, planId });
     const account = result.account;
     if (pppoeCashResult) {
-      pppoeCashResult.innerHTML = `<strong>Give these to the customer now. Save them; the password is shown only once.</strong><p>Username: <code>${escapeHtml(account.username)}</code><br>Password: <code>${escapeHtml(account.password)}</code><br>Plan: ${escapeHtml(account.planName)}<br>Expires: ${escapeHtml(fmtDate(account.expiresAt))}</p>`;
+      pppoeCashResult.innerHTML = `<div class="pppoe-issued-head"><div><div><h3>Router login created</h3><p>Share these details with the customer now. The password is shown only once.</p></div></div><span class="pppoe-one-time">Save before closing</span></div><div class="pppoe-issued-credentials"><div><span>Username</span><code>${escapeHtml(account.username)}</code></div><div><span>Password</span><code>${escapeHtml(account.password)}</code></div></div><p class="pppoe-issued-meta">${escapeHtml(account.planName)} · Expires ${escapeHtml(fmtDate(account.expiresAt))}</p>`;
       pppoeCashResult.classList.remove("hidden");
     }
-    setInlineStatus(pppoeCashStatus, "Cash sale recorded and PPPoE login issued.", "field-hint success");
+    pppoeCashPhone.value = "";
+    pppoeCashPlan.value = "";
+    setInlineStatus(pppoeCashStatus, "Cash sale recorded successfully.", "pppoe-cash-status success");
     await loadDashboard();
   } catch (error) {
-    setInlineStatus(pppoeCashStatus, error instanceof Error ? error.message : "Could not issue PPPoE login.", "field-hint error");
+    setInlineStatus(pppoeCashStatus, error instanceof Error ? error.message : "Could not create router login.", "pppoe-cash-status error");
   } finally {
-    pppoeCashSubmit.disabled = false;
+    pppoeCashSubmitting = false;
+    syncPppoeCashSubmit();
   }
 });
 
