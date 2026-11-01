@@ -48,7 +48,7 @@ full customer experience lives on CAPTYN WiFi at `https://captyn.shop/wifi/`.
 | Router file | Shown when |
 |---|---|
 | `login.html` | A device that isn't signed in -- forwards `$(mac)`, `$(ip)`, `$(link-login-only)`, `$(link-orig-esc)` and `$(error)` to the portal |
-| `alogin.html` | Right after a successful sign-in, then on to the portal |
+| `alogin.html` | Right after a successful sign-in; stays visible until the customer taps Continue |
 | `status.html` | A signed-in device opening the router |
 | `logout.html` | After signing out |
 | `error.html` | When the router can't sign a device in |
