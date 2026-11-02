@@ -11,6 +11,7 @@ import { adminRouter } from "./routes/admin.js";
 import { adminAuthRouter } from "./routes/adminAuth.js";
 import { publicRouter, reconcilePendingMpesaPayments } from "./routes/public.js";
 import { runLoyaltyCycle } from "./services/loyalty.js";
+import { captureNetworkCapacitySample } from "./services/networkCapacityMonitor.js";
 import { prisma } from "./prisma.js";
 
 const app = express();
@@ -89,3 +90,14 @@ setInterval(() => {
     })
     .catch((error) => console.error("Loyalty cycle error:", error));
 }, 10 * 60 * 1000).unref();
+
+
+function captureCapacitySample() {
+  void captureNetworkCapacitySample().catch((error) => {
+    console.error("WiFi capacity sample error:", error);
+  });
+}
+
+// Persist one WAN / Ethernet / queue snapshot each minute for busy-hour review.
+captureCapacitySample();
+setInterval(captureCapacitySample, 60 * 1000).unref();

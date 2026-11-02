@@ -26,6 +26,7 @@ const state = {
   trustedDeviceToken: readStoredValue(TRUSTED_DEVICE_KEY, window.localStorage),
   sessionUser: null,
   activePage: "overview",
+  capacityHours: 24,
   editingPlanId: "",
   selectedEntitlementId: "",
   accessDetail: null,
@@ -951,7 +952,48 @@ function renderCapacityStatus() {
   </tr>`).join("") : '<tr><td colspan="5" class="empty-state">No active dynamic queues returned.</td></tr>';
 }
 
+function renderCapacityHistory() {
+  const history = state.cache.capacityHistory || {};
+  const body = document.getElementById("capacity-history-body");
+  const checked = document.getElementById("capacity-history-checked");
+  if (!body) return;
+  checked.textContent = history.generatedAt ? `Updated ${fmtDate(history.generatedAt)}` : "";
+  document.querySelectorAll("[data-capacity-hours]").forEach((button) => {
+    button.classList.toggle("active", Number(button.dataset.capacityHours) === state.capacityHours);
+  });
+  if (history.error) {
+    body.innerHTML = `<tr><td colspan="6" class="empty-state">${escapeHtml(history.error)}</td></tr>`;
+    return;
+  }
+  const rows = history.rows || [];
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="6" class="empty-state">No samples yet. Monitoring will build this history over time.</td></tr>';
+    return;
+  }
+  const timeFormatter = new Intl.DateTimeFormat("en-KE", {
+    timeZone: "Africa/Nairobi", weekday: "short", month: "short", day: "numeric", hour: "2-digit"
+  });
+  body.innerHTML = rows.map((row) => `<tr>
+    <td>${escapeHtml(timeFormatter.format(new Date(row.hour)))}</td>
+    <td>${escapeHtml(formatMbps(row.avgDownloadMbps))} / ${escapeHtml(formatMbps(row.peakDownloadMbps))}</td>
+    <td>${escapeHtml(formatMbps(row.avgUploadMbps))} / ${escapeHtml(formatMbps(row.peakUploadMbps))}</td>
+    <td>${Number(row.overcommittedSamples || 0)}</td>
+    <td>${Number(row.unavailableSamples || 0)}</td>
+    <td>${Number(row.slowPortSamples || 0)}</td>
+  </tr>`).join("");
+}
+
+async function loadCapacityHistory() {
+  try {
+    state.cache.capacityHistory = await api(adminApi(`/capacity-history?hours=${state.capacityHours}`));
+  } catch (error) {
+    state.cache.capacityHistory = { error: error instanceof Error ? error.message : "Could not load network history." };
+  }
+  renderCapacityHistory();
+}
+
 let capacityRefreshTimer = 0;
+let capacityHistoryTimer = 0;
 let capacityLoading = false;
 async function loadCapacityStatus() {
   if (capacityLoading) return;
@@ -1252,6 +1294,7 @@ function renderAll() {
   renderPlanCards();
   renderNetworkStatus();
   renderCapacityStatus();
+  renderCapacityHistory();
   renderGovernorStatus();
   renderDynamicPlanStatus();
   renderOutageCredits();
@@ -1487,9 +1530,12 @@ function setPage(page) {
   state.activePage = page || "overview";
   if (state.activePage === "analytics") void loadAnalytics();
   clearInterval(capacityRefreshTimer);
+  clearInterval(capacityHistoryTimer);
   if (state.activePage === "capacity") {
     void loadCapacityStatus();
+    void loadCapacityHistory();
     capacityRefreshTimer = window.setInterval(() => { if (state.activePage === "capacity") void loadCapacityStatus(); }, 15000);
+    capacityHistoryTimer = window.setInterval(() => { if (state.activePage === "capacity") void loadCapacityHistory(); }, 5 * 60 * 1000);
   }
   // The overview metric cards only belong on Overview; the sidebar carries
   // the at-a-glance status everywhere else.
@@ -1958,7 +2004,11 @@ promoEndBtn?.addEventListener("click", async () => {
 });
 
 refreshBtn.addEventListener("click", () => { void checkHealth(); if (state.sessionToken) void loadDashboard(); });
-document.getElementById("capacity-refresh")?.addEventListener("click", () => { void loadCapacityStatus(); });
+document.getElementById("capacity-refresh")?.addEventListener("click", () => { void loadCapacityStatus(); void loadCapacityHistory(); });
+document.querySelectorAll("[data-capacity-hours]").forEach((button) => button.addEventListener("click", () => {
+  state.capacityHours = Number(button.dataset.capacityHours) === 168 ? 168 : 24;
+  void loadCapacityHistory();
+}));
 logoutBtn.addEventListener("click", () => clearSession({ forgetTrusted: true }));
 planCancel.addEventListener("click", resetPlanForm);
 document.getElementById("new-package-btn")?.addEventListener("click", newPlan);

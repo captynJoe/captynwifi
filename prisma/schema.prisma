@@ -283,6 +283,23 @@ model WifiAccountingSession {
   @@index([lastInterimAt])
 }
 
+model WifiNetworkCapacitySample {
+  id                       String   @id @default(uuid())
+  createdAt                DateTime @default(now())
+  connected                Boolean
+  wanLinkMbps              Float?
+  wanDownloadMbps          Float?
+  wanUploadMbps            Float?
+  activeQueueCount         Int      @default(0)
+  guaranteedUploadMbps     Float    @default(0)
+  guaranteedDownloadMbps   Float    @default(0)
+  overcommitted            Boolean  @default(false)
+  ethernetLinks            Json?
+
+  @@index([createdAt])
+  @@index([connected, createdAt])
+}
+
 model WifiGovernorEvent {
   id                 String   @id @default(uuid())
   state              String

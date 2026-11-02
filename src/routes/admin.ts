@@ -401,6 +401,50 @@ adminRouter.get("/capacity-status", async (_req, res, next) => {
   }
 });
 
+
+adminRouter.get("/capacity-history", async (req, res, next) => {
+  try {
+    const requestedHours = String(req.query.hours || "24");
+    const hours = requestedHours === "168" ? 168 : requestedHours === "24" ? 24 : null;
+    if (!hours) return res.status(400).json({ error: "Choose a 24-hour or 7-day range." });
+
+    const rows = await prisma.$queryRaw<Array<{
+      hour: Date;
+      samples: number;
+      avgDownloadMbps: number | null;
+      peakDownloadMbps: number | null;
+      avgUploadMbps: number | null;
+      peakUploadMbps: number | null;
+      unavailableSamples: number;
+      overcommittedSamples: number;
+      slowPortSamples: number;
+    }>>(Prisma.sql`
+      SELECT date_trunc('hour', "createdAt") AS hour,
+             count(*)::int AS samples,
+             round(avg("wanDownloadMbps")::numeric, 1)::float AS "avgDownloadMbps",
+             round(max("wanDownloadMbps")::numeric, 1)::float AS "peakDownloadMbps",
+             round(avg("wanUploadMbps")::numeric, 1)::float AS "avgUploadMbps",
+             round(max("wanUploadMbps")::numeric, 1)::float AS "peakUploadMbps",
+             count(*) FILTER (WHERE NOT connected)::int AS "unavailableSamples",
+             count(*) FILTER (WHERE overcommitted)::int AS "overcommittedSamples",
+             count(*) FILTER (WHERE EXISTS (
+               SELECT 1
+               FROM jsonb_array_elements("ethernetLinks") AS port
+               WHERE port->>'name' <> 'ether1'
+                 AND port->>'status' = 'link-ok'
+                 AND nullif(port->>'rateMbps', 'null')::float < 1000
+             ))::int AS "slowPortSamples"
+      FROM "WifiNetworkCapacitySample"
+      WHERE "createdAt" >= now() - (${hours} * interval '1 hour')
+      GROUP BY 1
+      ORDER BY 1 DESC
+    `);
+    return sendData(res, { generatedAt: new Date(), hours, rows });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 adminRouter.get("/network-status", async (_req, res, next) => {
   try {
     const now = new Date();

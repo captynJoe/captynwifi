@@ -312,6 +312,11 @@
             <p class="capacity-note">Live traffic is a point-in-time sample. Queue minimums are configured per active session; their total can exceed the WAN capacity, so every minimum cannot be delivered during congestion.</p>
           </article>
           <article class="surface span-12 table-panel">
+            <div class="panel-head capacity-history-head"><h2>Busy-hour history</h2><div class="capacity-history-controls"><button class="secondary active" type="button" data-capacity-hours="24">24 hours</button><button class="secondary" type="button" data-capacity-hours="168">7 days</button><span id="capacity-history-checked"></span></div></div>
+            <div class="table-wrap"><table><thead><tr><th>Hour (EAT)</th><th>Download avg / peak</th><th>Upload avg / peak</th><th>Queue overcommit samples</th><th>Router unavailable</th><th>LAN ports below 1 Gbps</th></tr></thead><tbody id="capacity-history-body"><tr><td colspan="6" class="empty-state">Collecting network history…</td></tr></tbody></table></div>
+            <p class="capacity-note">Samples are collected once per minute. History begins when this monitoring release starts; it does not include earlier traffic.</p>
+          </article>
+          <article class="surface span-12 table-panel">
             <div class="panel-head"><h2>Ethernet links</h2><span>Router ports 1–8</span></div>
             <div class="table-wrap"><table><thead><tr><th>Port</th><th>Link</th><th>Negotiated rate</th><th>Duplex</th><th>Partner advertises</th></tr></thead><tbody id="capacity-ethernet-body"><tr><td colspan="5" class="empty-state">Waiting for router data…</td></tr></tbody></table></div>
           </article>

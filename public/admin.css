@@ -611,3 +611,10 @@ img.brand-mark { background: none; border-radius: 10px; object-fit: contain; }
 .capacity-link.down { color: var(--amber); }
 @media (max-width: 800px) { .capacity-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 520px) { .capacity-summary { grid-template-columns: 1fr 1fr; } .capacity-actions { gap: 6px; } }
+.capacity-history-head { align-items: center; }
+.capacity-history-controls { display: flex; align-items: center; gap: 7px; }
+.capacity-history-controls button { width: auto; min-height: 32px; padding: 0 11px; font-size: 12px; }
+.capacity-history-controls button.active { border-color: var(--brand-navy); background: var(--brand-navy); color: #fff; }
+.capacity-history-controls span { margin-left: 5px; color: var(--muted); font-size: 11px; }
+[data-page-panel="capacity"] table { min-width: 760px; }
+@media (max-width: 640px) { .capacity-history-head { align-items: flex-start; flex-direction: column; } .capacity-history-controls { width: 100%; flex-wrap: wrap; } }
