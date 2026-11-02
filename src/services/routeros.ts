@@ -145,6 +145,140 @@ function missingRouterConfig() {
   return null;
 }
 
+
+export type RouterCapacityStatus = {
+  configured: boolean;
+  connected: boolean;
+  generatedAt: string;
+  error?: string;
+  wan: { interface: string; status: string; rate: string; rateMbps: number | null; rxMbps: number | null; txMbps: number | null };
+  ethernet: Array<{ name: string; status: string; rate: string; rateMbps: number | null; fullDuplex: boolean | null; partnerAdvertising: string }>;
+  queues: Array<{ name: string; target: string; limitAt: string; maxLimit: string; rate: string }>;
+  queueSummary: { activeCount: number; guaranteedUploadMbps: number; guaranteedDownloadMbps: number };
+};
+
+function sentencesToRows(sentences: RouterSentence[]) {
+  return sentences.filter((sentence) => sentence.type === "!re").map((sentence) => sentence.attrs);
+}
+
+function rateMbps(value: string | undefined): number | null {
+  if (!value) return null;
+  const match = value.trim().match(/^([\d.]+)\s*(k|M|G)?(?:bps)?$/i);
+  if (!match) return null;
+  const amount = Number(match[1]);
+  const unit = (match[2] || "").toLowerCase();
+  if (!Number.isFinite(amount)) return null;
+  return amount * (unit === "g" ? 1000 : unit === "m" ? 1 : unit === "k" ? 0.001 : 0.000001);
+}
+
+function ratePairMbps(value: string | undefined) {
+  const [upload = "", download = ""] = (value || "").split("/");
+  return { upload: rateMbps(upload), download: rateMbps(download) };
+}
+
+/** Read-only live link, WAN traffic and active simple-queue capacity snapshot. */
+export async function getRouterCapacityStatus(): Promise<RouterCapacityStatus> {
+  const generatedAt = new Date().toISOString();
+  const missingConfig = missingRouterConfig();
+  const unavailable: RouterCapacityStatus = {
+    configured: !missingConfig,
+    connected: false,
+    generatedAt,
+    error: missingConfig || undefined,
+    wan: { interface: "ether1", status: "unknown", rate: "", rateMbps: null, rxMbps: null, txMbps: null },
+    ethernet: [],
+    queues: [],
+    queueSummary: { activeCount: 0, guaranteedUploadMbps: 0, guaranteedDownloadMbps: 0 }
+  };
+  if (!unavailable.configured) return unavailable;
+
+  const client = new RouterOsApiClient();
+  try {
+    await client.connect();
+    await client.login();
+    const ethernet: RouterCapacityStatus["ethernet"] = [];
+    for (let port = 1; port <= 8; port += 1) {
+      const name = `ether${port}`;
+      try {
+        const rows = sentencesToRows(await client.command([
+          "/interface/ethernet/monitor", `=numbers=${name}`, "=once="
+        ]));
+        const row = rows[0] || {};
+        ethernet.push({
+          name,
+          status: row.status || "unknown",
+          rate: row.rate || "",
+          rateMbps: rateMbps(row.rate),
+          fullDuplex: row["full-duplex"] === undefined ? null : row["full-duplex"] === "true",
+          partnerAdvertising: row["link-partner-advertising"] || ""
+        });
+      } catch {
+        ethernet.push({ name, status: "unavailable", rate: "", rateMbps: null, fullDuplex: null, partnerAdvertising: "" });
+      }
+    }
+
+    let rxMbps: number | null = null;
+    let txMbps: number | null = null;
+    try {
+      const traffic = sentencesToRows(await client.command([
+        "/interface/monitor-traffic", "=interface=ether1", "=once="
+      ]))[0] || {};
+      const rx = Number(traffic["rx-bits-per-second"]);
+      const tx = Number(traffic["tx-bits-per-second"]);
+      rxMbps = Number.isFinite(rx) ? rx / 1_000_000 : null;
+      txMbps = Number.isFinite(tx) ? tx / 1_000_000 : null;
+    } catch {
+      // Traffic counters are optional; physical link status remains useful.
+    }
+
+    const wanPort = ethernet.find((port) => port.name === "ether1");
+    const queues = sentencesToRows(await client.command([
+      "/queue/simple/print",
+      "=.proplist=name,target,limit-at,max-limit,rate",
+      "?dynamic=true"
+    ])).map((row) => ({
+      name: row.name || "Queue",
+      target: row.target || "",
+      limitAt: row["limit-at"] || "0/0",
+      maxLimit: row["max-limit"] || "0/0",
+      rate: row.rate || ""
+    }));
+    const guaranteed = queues.reduce((sum, queue) => {
+      const pair = ratePairMbps(queue.limitAt);
+      return { upload: sum.upload + (pair.upload || 0), download: sum.download + (pair.download || 0) };
+    }, { upload: 0, download: 0 });
+
+    return {
+      configured: true,
+      connected: true,
+      generatedAt,
+      wan: {
+        interface: "ether1",
+        status: wanPort?.status || "unknown",
+        rate: wanPort?.rate || "",
+        rateMbps: wanPort?.rateMbps ?? null,
+        rxMbps,
+        txMbps
+      },
+      ethernet,
+      queues,
+      queueSummary: {
+        activeCount: queues.length,
+        guaranteedUploadMbps: Math.round(guaranteed.upload * 10) / 10,
+        guaranteedDownloadMbps: Math.round(guaranteed.download * 10) / 10
+      }
+    };
+  } catch (error) {
+    return {
+      ...unavailable,
+      connected: false,
+      error: error instanceof Error ? error.message : "RouterOS read failed"
+    };
+  } finally {
+    client.close();
+  }
+}
+
 // Like kickHotspotUser, but only the session from one device -- used when a
 // customer signs out a single device on a multi-device package.
 export async function kickHotspotDevice(deviceMac: string): Promise<RouterSessionKickResult> {

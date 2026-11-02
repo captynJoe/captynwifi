@@ -7,7 +7,7 @@
     <script src="theme.js?v=2026080402"></script>
     <link rel="icon" href="captyn-mark.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="theme.css?v=2026103102" />
-    <link rel="stylesheet" href="admin.css?v=2026110201" />
+    <link rel="stylesheet" href="admin.css?v=2026110202" />
   </head>
   <body>
     <header class="topbar">
@@ -92,6 +92,7 @@
               <button class="nav-item" type="button" data-page="payments">Payments</button>
               <button class="nav-item" type="button" data-page="access">Access</button>
               <button class="nav-item" type="button" data-page="pppoe">PPPoE</button>
+              <button class="nav-item" type="button" data-page="capacity">Capacity</button>
               <button class="nav-item" type="button" data-page="radius">RADIUS</button>
               <button class="nav-item" type="button" data-page="governor">Governor</button>
               <button class="nav-item" type="button" data-page="dynamic-plan">Dynamic Plan</button>
@@ -303,6 +304,23 @@
           </article>
         </section>
 
+        <section class="page-grid hidden" data-page-panel="capacity">
+          <article class="surface span-12">
+            <div class="panel-head"><h2>Internet capacity</h2><div class="capacity-actions"><span id="capacity-checked"></span><button id="capacity-refresh" class="secondary" type="button">Refresh</button></div></div>
+            <div id="capacity-message" class="capacity-message empty-state">Loading live router capacity…</div>
+            <div id="capacity-summary" class="capacity-summary"></div>
+            <p class="capacity-note">Live traffic is a point-in-time sample. Queue minimums are configured per active session; their total can exceed the WAN capacity, so every minimum cannot be delivered during congestion.</p>
+          </article>
+          <article class="surface span-12 table-panel">
+            <div class="panel-head"><h2>Ethernet links</h2><span>Router ports 1–8</span></div>
+            <div class="table-wrap"><table><thead><tr><th>Port</th><th>Link</th><th>Negotiated rate</th><th>Duplex</th><th>Partner advertises</th></tr></thead><tbody id="capacity-ethernet-body"><tr><td colspan="5" class="empty-state">Waiting for router data…</td></tr></tbody></table></div>
+          </article>
+          <article class="surface span-12 table-panel">
+            <div class="panel-head"><h2>Active bandwidth queues</h2><span id="capacity-queue-count"></span></div>
+            <div class="table-wrap"><table><thead><tr><th>Queue</th><th>Client / target</th><th>Minimum up / down</th><th>Maximum up / down</th><th>Current rate</th></tr></thead><tbody id="capacity-queues-body"><tr><td colspan="5" class="empty-state">Waiting for router data…</td></tr></tbody></table></div>
+          </article>
+        </section>
+
         <section class="page-grid hidden" data-page-panel="radius">
           <article class="surface span-12">
             <div class="panel-head"><h2>Network Diagnostics</h2><span id="network-status-generated"></span></div>
@@ -420,6 +438,6 @@
       </section>
     </main>
 
-    <script src="admin.js?v=2026110201" defer data-cfasync="false"></script>
+    <script src="admin.js?v=2026110202" defer data-cfasync="false"></script>
   </body>
 </html>

@@ -12,7 +12,7 @@ import { config } from "../config.js";
 import { getMpesaStatus } from "../services/mpesa.js";
 import { buildRadiusProjection, normalizeDeviceMac, normalizeWifiUsername } from "../services/radiusProjection.js";
 import { applyRadiusProjectionRows, hasOtherActiveEntitlement } from "../services/radiusSqlApply.js";
-import { kickHotspotUser } from "../services/routeros.js";
+import { getRouterCapacityStatus, kickHotspotUser } from "../services/routeros.js";
 import { issueVoucher } from "../services/voucherIssuance.js";
 import { normalizeKenyaPhone } from "../lib/phone.js";
 import { PROMO_PLAN_SOURCE, endPromo, getActivePromo, startPromo } from "../services/promo.js";
@@ -392,6 +392,14 @@ adminRouter.get("/summary", async (_req, res, next) => {
   }
 });
 
+
+adminRouter.get("/capacity-status", async (_req, res, next) => {
+  try {
+    return sendData(res, await getRouterCapacityStatus());
+  } catch (error) {
+    return next(error);
+  }
+});
 
 adminRouter.get("/network-status", async (_req, res, next) => {
   try {

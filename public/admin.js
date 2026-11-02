@@ -103,6 +103,7 @@ const endpoints = {
   projections: adminApi("/radius-projections"),
   accounting: adminApi("/accounting-sessions"),
   networkStatus: adminApi("/network-status"),
+  capacityStatus: adminApi("/capacity-status"),
   governorStatus: adminApi("/governor-status"),
   dynamicPlanStatus: adminApi("/dynamic-plan-status"),
   outageCredits: adminApi("/outage-credits"),
@@ -890,6 +891,83 @@ function renderPromo() {
     : "";
 }
 
+function formatMbps(value) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return "—";
+  const rate = Number(value);
+  return rate < 0.1 ? `${Math.round(rate * 1000)} Kbps` : `${rate.toFixed(rate >= 100 ? 0 : 1)} Mbps`;
+}
+
+function renderCapacityStatus() {
+  const data = state.cache.capacityStatus || {};
+  const message = document.getElementById("capacity-message");
+  const summary = document.getElementById("capacity-summary");
+  const checked = document.getElementById("capacity-checked");
+  const ethernetBody = document.getElementById("capacity-ethernet-body");
+  const queuesBody = document.getElementById("capacity-queues-body");
+  const queueCount = document.getElementById("capacity-queue-count");
+  if (!message || !summary || !ethernetBody || !queuesBody) return;
+  checked.textContent = data.generatedAt ? `Checked ${fmtDate(data.generatedAt)}` : "";
+  if (!data.configured || !data.connected) {
+    message.className = "capacity-message empty-state";
+    message.textContent = data.error || "RouterOS monitoring is not configured.";
+    summary.innerHTML = "";
+    ethernetBody.innerHTML = '<tr><td colspan="5" class="empty-state">Router link data is unavailable.</td></tr>';
+    queuesBody.innerHTML = '<tr><td colspan="5" class="empty-state">Queue data is unavailable.</td></tr>';
+    queueCount.textContent = "";
+    return;
+  }
+
+  const wan = data.wan || {};
+  const queueSummary = data.queueSummary || {};
+  const linkMbps = Number(wan.rateMbps);
+  const overcommitted = Number.isFinite(linkMbps) && linkMbps > 0 && (
+    Number(queueSummary.guaranteedUploadMbps || 0) > linkMbps || Number(queueSummary.guaranteedDownloadMbps || 0) > linkMbps
+  );
+  message.className = `capacity-message ${overcommitted ? "warn" : "ok"}`;
+  message.textContent = overcommitted
+    ? "Active queue minimums exceed the negotiated ISP link capacity. During busy periods, the router cannot deliver every configured minimum at once."
+    : "RouterOS is reachable. Queue minimums fit within the negotiated link rate at this snapshot.";
+  summary.innerHTML = [
+    ["ISP physical link", wan.rate || "Unknown", wan.status === "link-ok" ? "Link up" : (wan.status || "Unknown")],
+    ["Download now", formatMbps(wan.rxMbps), "WAN receive"],
+    ["Upload now", formatMbps(wan.txMbps), "WAN transmit"],
+    ["Active queue minimums", `${formatMbps(queueSummary.guaranteedDownloadMbps)} ↓ · ${formatMbps(queueSummary.guaranteedUploadMbps)} ↑`, `${queueSummary.activeCount || 0} active queues`]
+  ].map(([label, value, detail]) => `<div class="capacity-stat"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><em>${escapeHtml(detail)}</em></div>`).join("");
+
+  const ports = data.ethernet || [];
+  ethernetBody.innerHTML = ports.length ? ports.map((port) => {
+    const up = port.status === "link-ok";
+    const slow = up && Number(port.rateMbps) > 0 && Number(port.rateMbps) < 1000;
+    const label = port.name === "ether1" ? "ISP uplink" : port.name;
+    return `<tr class="${slow ? "capacity-slow" : ""}"><td>${escapeHtml(label)}</td><td><span class="capacity-link ${up ? "up" : "down"}">${up ? "Up" : escapeHtml(port.status || "Unknown")}</span></td><td>${escapeHtml(port.rate || "—")}${slow ? " · below 1 Gbps" : ""}</td><td>${port.fullDuplex === null ? "—" : port.fullDuplex ? "Full" : "Half"}</td><td>${escapeHtml(port.partnerAdvertising || "—")}</td></tr>`;
+  }).join("") : '<tr><td colspan="5" class="empty-state">No Ethernet port data returned.</td></tr>';
+
+  const queues = data.queues || [];
+  queueCount.textContent = `${queues.length} active`;
+  queuesBody.innerHTML = queues.length ? queues.map((queue) => `<tr>
+    <td>${escapeHtml(queue.name)}</td><td>${escapeHtml(queue.target || "—")}</td>
+    <td>${escapeHtml(queue.limitAt || "—")}</td><td>${escapeHtml(queue.maxLimit || "—")}</td>
+    <td>${escapeHtml(queue.rate || "—")}</td>
+  </tr>`).join("") : '<tr><td colspan="5" class="empty-state">No active dynamic queues returned.</td></tr>';
+}
+
+let capacityRefreshTimer = 0;
+let capacityLoading = false;
+async function loadCapacityStatus() {
+  if (capacityLoading) return;
+  capacityLoading = true;
+  const refresh = document.getElementById("capacity-refresh");
+  if (refresh) refresh.disabled = true;
+  try {
+    state.cache.capacityStatus = await api(endpoints.capacityStatus);
+  } catch (error) {
+    state.cache.capacityStatus = { configured: true, connected: false, error: error instanceof Error ? error.message : "Could not load router capacity." };
+  }
+  renderCapacityStatus();
+  capacityLoading = false;
+  if (refresh) refresh.disabled = false;
+}
+
 function renderNetworkStatus() {
   const diagnostics = state.cache.networkStatus || {};
   const items = diagnostics.pipeline || [];
@@ -1173,6 +1251,7 @@ function renderAll() {
   renderBulkVoucherPlanOptions();
   renderPlanCards();
   renderNetworkStatus();
+  renderCapacityStatus();
   renderGovernorStatus();
   renderDynamicPlanStatus();
   renderOutageCredits();
@@ -1407,6 +1486,11 @@ async function loadDashboard() {
 function setPage(page) {
   state.activePage = page || "overview";
   if (state.activePage === "analytics") void loadAnalytics();
+  clearInterval(capacityRefreshTimer);
+  if (state.activePage === "capacity") {
+    void loadCapacityStatus();
+    capacityRefreshTimer = window.setInterval(() => { if (state.activePage === "capacity") void loadCapacityStatus(); }, 15000);
+  }
   // The overview metric cards only belong on Overview; the sidebar carries
   // the at-a-glance status everywhere else.
   document.body.dataset.page = state.activePage;
@@ -1874,6 +1958,7 @@ promoEndBtn?.addEventListener("click", async () => {
 });
 
 refreshBtn.addEventListener("click", () => { void checkHealth(); if (state.sessionToken) void loadDashboard(); });
+document.getElementById("capacity-refresh")?.addEventListener("click", () => { void loadCapacityStatus(); });
 logoutBtn.addEventListener("click", () => clearSession({ forgetTrusted: true }));
 planCancel.addEventListener("click", resetPlanForm);
 document.getElementById("new-package-btn")?.addEventListener("click", newPlan);

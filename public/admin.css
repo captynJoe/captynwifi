@@ -595,3 +595,19 @@ img.brand-mark { background: none; border-radius: 10px; object-fit: contain; }
 }
 
 .pppoe-cash-form .field select:disabled { opacity: .82; cursor: default; }
+
+.capacity-actions { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; font-weight: 650; }
+.capacity-message { margin: 0 0 14px; padding: 11px 14px; border: 1px solid var(--line); border-radius: 10px; text-align: left; }
+.capacity-message.warn { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 35%, var(--line)); background: var(--amber-soft); }
+.capacity-message.ok { color: var(--green); border-color: color-mix(in srgb, var(--green) 30%, var(--line)); background: var(--green-soft); }
+.capacity-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.capacity-stat { display: grid; gap: 5px; min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); }
+.capacity-stat > span, .capacity-stat > em { color: var(--muted); font-size: 12px; font-style: normal; font-weight: 650; }
+.capacity-stat > strong { color: var(--text-strong); font-size: 19px; overflow-wrap: anywhere; }
+.capacity-note { margin: 12px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.capacity-slow { background: color-mix(in srgb, var(--amber-soft) 35%, transparent); }
+.capacity-link { font-weight: 750; }
+.capacity-link.up { color: var(--green); }
+.capacity-link.down { color: var(--amber); }
+@media (max-width: 800px) { .capacity-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 520px) { .capacity-summary { grid-template-columns: 1fr 1fr; } .capacity-actions { gap: 6px; } }
