@@ -1,6 +1,5 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { config } from "../config.js";
-import { buildRadiusProjection } from "./radiusProjection.js";
 import { applyRadiusProjectionRows, hasOtherActiveEntitlement } from "./radiusSqlApply.js";
 
 type HeartbeatRow = { lastSeenAt: Date };
@@ -22,11 +21,14 @@ type EntitlementForCredit = {
   id: string;
   customerPhone: string;
   username: string;
-  cleartextSecret: string;
   deviceMac: string | null;
+  siteId: string;
+  planId: string;
   expiresAt: Date;
   rateLimit: string | null;
   deviceLimit: number;
+  outagePausedAt: Date | null;
+  outagePauseCause: string | null;
 };
 
 export const ACCOUNTING_OUTAGE_SERVICE = "captyn-wifi-radius-accounting";
@@ -104,71 +106,81 @@ async function upsertHeartbeat(tx: Prisma.TransactionClient, service: string, no
   `;
 }
 
+function creditDurationLabel(totalSeconds: number) {
+  const totalMinutes = Math.round(totalSeconds / 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours > 0 && minutes > 0) return `${hours}h ${minutes}m`;
+  if (hours > 0) return `${hours}h`;
+  return `${minutes}m`;
+}
+
 async function creditEntitlement(
   tx: Prisma.TransactionClient,
   entitlement: EntitlementForCredit,
-  creditedSeconds: number,
+  remainingSeconds: number,
   now: Date
 ) {
-  const expiresAt = new Date(entitlement.expiresAt.getTime() + creditedSeconds * 1000);
-  const durationSeconds = Math.max(60, secondsBetween(now, expiresAt));
+  const pausedAt = entitlement.outagePausedAt ?? now;
+  const sourceReference = `outage:${entitlement.outagePauseCause ?? "unknown"}:${pausedAt.toISOString()}:${entitlement.id}`;
+  let credit = await tx.wifiCredit.findFirst({ where: { sourceReference } });
 
-  // status is force-set back to "active" here (not just expiresAt) as a
-  // defensive backstop -- see the matching comment in promo.ts's endPromo,
-  // which is what surfaced this pattern: if expireEntitlements' paused-clock
-  // exclusion is ever missing or wrong for some future pause mechanism, this
-  // stops a customer being stuck on "expired" forever even after their time
-  // is correctly credited back.
+  if (!credit) {
+    const customerPhone = entitlement.customerPhone || entitlement.username;
+    credit = await tx.wifiCredit.create({
+      data: {
+        customerPhone,
+        deviceMac: entitlement.deviceMac,
+        siteId: entitlement.siteId,
+        planId: entitlement.planId,
+        durationSeconds: remainingSeconds,
+        rateLimit: entitlement.rateLimit,
+        deviceLimit: entitlement.deviceLimit,
+        reason: "OUTAGE_COMPENSATION",
+        sourceReference,
+        createdBy: "outage-protection",
+        metadata: {
+          kind: "remaining-time-at-outage",
+          entitlementId: entitlement.id,
+          outageStartedAt: pausedAt.toISOString(),
+          outageCause: entitlement.outagePauseCause
+        }
+      }
+    });
+    await tx.wifiNotification.create({
+      data: {
+        customerPhone,
+        type: "credit_granted",
+        title: "Your remaining WiFi time was credited",
+        body: `Your package had ${creditDurationLabel(remainingSeconds)} of paid WiFi time left when service went down. We saved that time as WiFi credit. Tap Activate when you want it to start.`,
+        data: {
+          creditId: credit.id,
+          durationSeconds: remainingSeconds,
+          reason: "OUTAGE_COMPENSATION",
+          expiresAt: null,
+          deviceMac: entitlement.deviceMac,
+          planId: entitlement.planId
+        }
+      }
+    });
+  }
+
+  // Replace the interrupted entitlement with its unused balance. This avoids
+  // adding the outage duration on top of the customer's remaining package time.
   await tx.wifiEntitlement.update({
     where: { id: entitlement.id },
-    data: { status: "active", expiresAt }
+    data: { status: "expired", expiresAt: pausedAt, outagePausedAt: null, outagePauseCause: null }
   });
 
-  // The radacct row that triggered this resume is matched on username alone
-  // (see resumePausedEntitlements), and username is shared across every
-  // purchase a phone number ever makes -- so it can belong to a newer
-  // entitlement for the same phone that's already active, not to this one
-  // reconnecting. Writing this (possibly stale/expired) entitlement's own
-  // secret and expiry into radcheck/radreply in that case would clobber the
-  // newer entitlement's live credentials out from under a customer who's
-  // mid-session. The time credit above is safe to keep either way -- only
-  // the RADIUS side effect needs to stay out of a still-active sibling's way.
-  if (await hasOtherActiveEntitlement(tx, entitlement.username, entitlement.id, now)) return;
-
-  const projection = buildRadiusProjection({
-    entitlementId: entitlement.id,
-    phone: entitlement.customerPhone,
-    username: entitlement.username,
-    password: entitlement.cleartextSecret,
-    deviceMac: entitlement.deviceMac,
-    expiresAt,
-    durationSeconds,
-    rateLimit: entitlement.rateLimit,
-    deviceLimit: entitlement.deviceLimit
-  });
-
-  await applyRadiusProjectionRows(tx, projection.username, projection.checkItems, projection.replyItems);
-
-  await tx.wifiRadiusProjection.upsert({
-    where: { entitlementId: entitlement.id },
-    create: {
-      entitlementId: entitlement.id,
-      username: projection.username,
-      checkItems: projection.checkItems,
-      replyItems: projection.replyItems,
-      status: "applied",
-      appliedAt: now,
-      lastError: null
-    },
-    update: {
-      username: projection.username,
-      checkItems: projection.checkItems,
-      replyItems: projection.replyItems,
-      status: "applied",
-      appliedAt: now,
-      lastError: null
-    }
-  });
+  // RADIUS rows are keyed by username, which repeat purchases share. Clear
+  // the old package only when no newer active entitlement owns those rows.
+  if (!(await hasOtherActiveEntitlement(tx, entitlement.username, entitlement.id, now))) {
+    await applyRadiusProjectionRows(tx, entitlement.username, [], []);
+    await tx.wifiRadiusProjection.updateMany({
+      where: { entitlementId: entitlement.id },
+      data: { checkItems: [], replyItems: [], status: "applied", appliedAt: now, lastError: null }
+    });
+  }
 }
 
 // Marks every currently-active, not-already-paused entitlement as paused as
@@ -229,19 +241,26 @@ export async function applyOutageCredit(prisma: PrismaClient): Promise<PauseSumm
     await upsertHeartbeat(tx, service, now);
 
     return { paused: pausedCount > 0, pausedCount, outageSeconds };
-  });
+  }, { maxWait: 10_000, timeout: 30_000 });
 }
 
 export async function touchOutageHeartbeat(prisma: PrismaClient) {
-  await prisma.$transaction((tx) => upsertHeartbeat(tx, config.outageCredit.serviceName, new Date()));
+  await prisma.$transaction((tx) => upsertHeartbeat(tx, config.outageCredit.serviceName, new Date()), {
+    maxWait: 10_000,
+    timeout: 30_000
+  });
 }
 
 async function hasInterimDueActiveEntitlements(tx: Prisma.TransactionClient): Promise<boolean> {
   const rows = await tx.$queryRaw<{ exists: boolean }[]>`
     SELECT EXISTS (
-      SELECT 1 FROM "WifiEntitlement"
-      WHERE status = 'active' AND "expiresAt" > now()
-        AND "startsAt" <= now() - ("acctInterimSeconds" * interval '1 second')
+      SELECT 1
+      FROM radacct r
+      JOIN "WifiEntitlement" e ON e.username = r.username
+      WHERE e.status = 'active' AND e."expiresAt" > now()
+        AND r.acctstoptime IS NULL
+        AND coalesce(r.acctupdatetime, r.acctstarttime)
+          <= now() - (e."acctInterimSeconds" * interval '1 second')
     ) as "exists"
   `;
   return rows[0]?.exists ?? false;
@@ -249,8 +268,11 @@ async function hasInterimDueActiveEntitlements(tx: Prisma.TransactionClient): Pr
 
 async function lastRadiusAccountingActivity(tx: Prisma.TransactionClient): Promise<Date | null> {
   const rows = await tx.$queryRaw<{ last: Date | null }[]>`
-    SELECT max(coalesce(acctupdatetime, acctstarttime)) as last FROM radacct
-    WHERE class LIKE 'entitlement:%'
+    SELECT max(coalesce(r.acctupdatetime, r.acctstarttime)) as last
+    FROM radacct r
+    JOIN "WifiEntitlement" e ON e.username = r.username
+    WHERE e.status = 'active' AND e."expiresAt" > now()
+      AND r.acctstoptime IS NULL
   `;
   return rows[0]?.last ?? null;
 }
@@ -299,13 +321,13 @@ export async function evaluateAccountingOutage(prisma: PrismaClient): Promise<Pa
     await upsertHeartbeat(tx, ACCOUNTING_OUTAGE_SERVICE, decision.nextCheckpoint);
 
     return { paused: pausedCount > 0, pausedCount, outageSeconds: decision.creditedSeconds };
-  });
+  }, { maxWait: 10_000, timeout: 30_000 });
 }
 
-// Per-device resume sweep, independent of which lane triggered the pause and
-// independent of whether the outage itself has "ended" fleet-wide -- a
-// straggler whose device hasn't personally reconnected yet stays paused even
-// after everyone else is back online.
+// Resume once fleet accounting proves the network has recovered. Each paused
+// package is replaced with its unused balance at the original pause time, even
+// if that customer's device has not produced a new RADIUS session yet. When a
+// device session is present, use its MAC and timestamp for the audit end time.
 export async function resumePausedEntitlements(prisma: PrismaClient): Promise<ResumeSummary> {
   return prisma.$transaction(async (tx) => {
     const now = new Date();
@@ -317,8 +339,9 @@ export async function resumePausedEntitlements(prisma: PrismaClient): Promise<Re
         id: true,
         customerPhone: true,
         username: true,
-        cleartextSecret: true,
         deviceMac: true,
+        siteId: true,
+        planId: true,
         expiresAt: true,
         rateLimit: true,
         deviceLimit: true,
@@ -326,6 +349,12 @@ export async function resumePausedEntitlements(prisma: PrismaClient): Promise<Re
         outagePauseCause: true
       }
     });
+
+    const recoveryRows = await tx.$queryRaw<HeartbeatRow[]>`
+      SELECT "lastSeenAt" FROM "WifiServiceHeartbeat"
+      WHERE "service" = ${ACCOUNTING_OUTAGE_SERVICE} LIMIT 1
+    `;
+    const fleetRecoveredAt = recoveryRows[0]?.lastSeenAt ?? null;
 
     let resumed = 0;
     let totalCreditedSeconds = 0;
@@ -337,34 +366,33 @@ export async function resumePausedEntitlements(prisma: PrismaClient): Promise<Re
       const reconnectRows = await tx.$queryRaw<{ acctstarttime: Date }[]>`
         SELECT acctstarttime FROM radacct
         WHERE username = ${entitlement.username} AND acctstarttime > ${pausedAt}
+          AND (
+            ${entitlement.deviceMac}::text IS NULL
+            OR regexp_replace(upper(coalesce(callingstationid, '')), '[^A-F0-9]', '', 'g')
+              = regexp_replace(upper(${entitlement.deviceMac}::text), '[^A-F0-9]', '', 'g')
+          )
         ORDER BY acctstarttime ASC
         LIMIT 1
       `;
-      const reconnectedAt = reconnectRows[0]?.acctstarttime ?? null;
+      const deviceReconnectedAt = reconnectRows[0]?.acctstarttime ?? null;
+      const reconnectedAt = deviceReconnectedAt ?? (fleetRecoveredAt && fleetRecoveredAt > pausedAt ? fleetRecoveredAt : null);
+      if (!reconnectedAt) continue;
 
-      const decision = decideResumeAction(pausedAt, reconnectedAt, now, config.outageCredit.reconnectWindowSeconds);
-      if (decision.type === "still-paused") continue;
-
-      if (decision.creditedSeconds > 0) {
-        const inserted = await tx.$queryRaw<CreditInsertRow[]>`
-          INSERT INTO "WifiOutageCredit" ("service", "outageStartedAt", "outageEndedAt", "creditedSeconds", "affectedEntitlements", "entitlementId")
-          VALUES (${entitlement.outagePauseCause ?? "unknown"}, ${pausedAt}, ${decision.reconnectedAt}, ${decision.creditedSeconds}, 1, ${entitlement.id})
-          ON CONFLICT ("service", "outageStartedAt", "outageEndedAt", "entitlementId") DO NOTHING
-          RETURNING "id"
-        `;
-        if (inserted[0]?.id) {
-          await creditEntitlement(tx, entitlement, decision.creditedSeconds, now);
-          totalCreditedSeconds += decision.creditedSeconds;
-        }
+      const remainingSeconds = secondsBetween(pausedAt, entitlement.expiresAt);
+      const service = entitlement.outagePauseCause ?? "unknown";
+      const inserted = await tx.$queryRaw<CreditInsertRow[]>`
+        INSERT INTO "WifiOutageCredit" ("service", "outageStartedAt", "outageEndedAt", "creditedSeconds", "affectedEntitlements", "entitlementId")
+        VALUES (${service}, ${pausedAt}, ${reconnectedAt}, ${remainingSeconds}, 1, ${entitlement.id})
+        ON CONFLICT ("service", "outageStartedAt", "outageEndedAt", "entitlementId") DO NOTHING
+        RETURNING "id"
+      `;
+      if (inserted[0]?.id) {
+        await creditEntitlement(tx, entitlement, remainingSeconds, now);
+        totalCreditedSeconds += remainingSeconds;
       }
-
-      await tx.wifiEntitlement.update({
-        where: { id: entitlement.id },
-        data: { outagePausedAt: null, outagePauseCause: null }
-      });
       resumed += 1;
     }
 
     return { resumed, totalCreditedSeconds };
-  });
+  }, { maxWait: 10_000, timeout: 30_000 });
 }
