@@ -292,10 +292,6 @@ export async function evaluateAccountingOutage(prisma: PrismaClient): Promise<Pa
   return prisma.$transaction(async (tx) => {
     const now = new Date();
 
-    if (!(await hasInterimDueActiveEntitlements(tx))) {
-      return { paused: false, pausedCount: 0, outageSeconds: 0 };
-    }
-
     const lastActivity = await lastRadiusAccountingActivity(tx);
     if (!lastActivity) {
       return { paused: false, pausedCount: 0, outageSeconds: 0 };
@@ -305,15 +301,21 @@ export async function evaluateAccountingOutage(prisma: PrismaClient): Promise<Pa
       SELECT "lastSeenAt" FROM "WifiServiceHeartbeat" WHERE "service" = ${ACCOUNTING_OUTAGE_SERVICE} LIMIT 1
     `;
     const checkpoint = checkpointRows[0]?.lastSeenAt ?? lastActivity;
+    if (!checkpointRows[0]) {
+      await upsertHeartbeat(tx, ACCOUNTING_OUTAGE_SERVICE, checkpoint);
+    }
 
     const decision = decideAccountingOutageAction(checkpoint, lastActivity, now, config.outageCredit.accountingGraceSeconds);
 
+    // Advance on fresh activity first: a newly reconnected session is normally
+    // too fresh for the interim-due predicate, but it is the evidence that
+    // releases every entitlement paused during the outage.
     if (decision.type === "advance") {
       await upsertHeartbeat(tx, ACCOUNTING_OUTAGE_SERVICE, decision.checkpoint);
       return { paused: false, pausedCount: 0, outageSeconds: 0 };
     }
 
-    if (decision.type === "healthy") {
+    if (decision.type === "healthy" || !(await hasInterimDueActiveEntitlements(tx))) {
       return { paused: false, pausedCount: 0, outageSeconds: secondsBetween(checkpoint, now) };
     }
 
