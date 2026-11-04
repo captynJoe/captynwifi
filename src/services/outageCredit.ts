@@ -1,6 +1,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { config } from "../config.js";
-import { applyRadiusProjectionRows, hasOtherActiveEntitlement } from "./radiusSqlApply.js";
+import { applyRadiusProjectionRows } from "./radiusSqlApply.js";
+import { buildRadiusProjection } from "./radiusProjection.js";
 
 type HeartbeatRow = { lastSeenAt: Date };
 
@@ -21,6 +22,7 @@ type EntitlementForCredit = {
   id: string;
   customerPhone: string;
   username: string;
+  cleartextSecret: string;
   deviceMac: string | null;
   siteId: string;
   planId: string;
@@ -32,6 +34,7 @@ type EntitlementForCredit = {
 };
 
 export const ACCOUNTING_OUTAGE_SERVICE = "captyn-wifi-radius-accounting";
+const LEGACY_OUTAGE_CREDIT_PREFIX = "outage-recovery-2026-11-03:";
 
 export type AccountingOutageDecision =
   | { type: "advance"; checkpoint: Date }
@@ -122,65 +125,88 @@ async function creditEntitlement(
   now: Date
 ) {
   const pausedAt = entitlement.outagePausedAt ?? now;
-  const sourceReference = `outage:${entitlement.outagePauseCause ?? "unknown"}:${pausedAt.toISOString()}:${entitlement.id}`;
-  let credit = await tx.wifiCredit.findFirst({ where: { sourceReference } });
-
-  if (!credit) {
-    const customerPhone = entitlement.customerPhone || entitlement.username;
-    credit = await tx.wifiCredit.create({
-      data: {
-        customerPhone,
-        deviceMac: entitlement.deviceMac,
-        siteId: entitlement.siteId,
-        planId: entitlement.planId,
-        durationSeconds: remainingSeconds,
-        rateLimit: entitlement.rateLimit,
-        deviceLimit: entitlement.deviceLimit,
-        reason: "OUTAGE_COMPENSATION",
-        sourceReference,
-        createdBy: "outage-protection",
-        metadata: {
-          kind: "remaining-time-at-outage",
-          entitlementId: entitlement.id,
-          outageStartedAt: pausedAt.toISOString(),
-          outageCause: entitlement.outagePauseCause
-        }
-      }
-    });
-    await tx.wifiNotification.create({
-      data: {
-        customerPhone,
-        type: "credit_granted",
-        title: "Your remaining WiFi time was credited",
-        body: `Your package had ${creditDurationLabel(remainingSeconds)} of paid WiFi time left when service went down. We saved that time as WiFi credit. Tap Activate when you want it to start.`,
-        data: {
-          creditId: credit.id,
-          durationSeconds: remainingSeconds,
-          reason: "OUTAGE_COMPENSATION",
-          expiresAt: null,
-          deviceMac: entitlement.deviceMac,
-          planId: entitlement.planId
-        }
-      }
-    });
-  }
-
-  // Replace the interrupted entitlement with its unused balance. This avoids
-  // adding the outage duration on top of the customer's remaining package time.
-  await tx.wifiEntitlement.update({
-    where: { id: entitlement.id },
-    data: { status: "expired", expiresAt: pausedAt, outagePausedAt: null, outagePauseCause: null }
+  // Keep the paid entitlement and credentials in place. Resume its clock with
+  // exactly the time left when the outage began; outage duration is never
+  // added. Turning this into a separate wallet credit had logged users out and
+  // required manual activation even when their sessions had been working.
+  const currentPaidSibling = await tx.wifiEntitlement.findFirst({
+    where: {
+      username: entitlement.username,
+      id: { not: entitlement.id },
+      status: "active",
+      expiresAt: { gt: now },
+      outagePausedAt: null,
+      promoPausedAt: null
+    },
+    orderBy: { expiresAt: "desc" }
   });
-
-  // RADIUS rows are keyed by username, which repeat purchases share. Clear
-  // the old package only when no newer active entitlement owns those rows.
-  if (!(await hasOtherActiveEntitlement(tx, entitlement.username, entitlement.id, now))) {
-    await applyRadiusProjectionRows(tx, entitlement.username, [], []);
-    await tx.wifiRadiusProjection.updateMany({
-      where: { entitlementId: entitlement.id },
-      data: { checkItems: [], replyItems: [], status: "applied", appliedAt: now, lastError: null }
+  const target = currentPaidSibling ?? entitlement;
+  const timeBase = target.expiresAt > now ? target.expiresAt : now;
+  const expiresAt = new Date(timeBase.getTime() + remainingSeconds * 1000);
+  const resumed = await tx.wifiEntitlement.update({
+    where: { id: target.id },
+    data: { status: "active", expiresAt, outagePausedAt: null, outagePauseCause: null }
+  });
+  if (target.id !== entitlement.id) {
+    await tx.wifiEntitlement.update({
+      where: { id: entitlement.id },
+      data: { status: "expired", expiresAt: pausedAt, outagePausedAt: null, outagePauseCause: null }
     });
   }
+  const projection = buildRadiusProjection({
+    entitlementId: resumed.id,
+    phone: resumed.customerPhone,
+    username: resumed.username,
+    password: resumed.cleartextSecret,
+    deviceMac: resumed.deviceMac,
+    expiresAt,
+    durationSeconds: Math.max(60, remainingSeconds),
+    rateLimit: resumed.rateLimit,
+    deviceLimit: resumed.deviceLimit
+  });
+  await applyRadiusProjectionRows(tx, projection.username, projection.checkItems, projection.replyItems);
+  const existingProjection = await tx.wifiRadiusProjection.findUnique({ where: { entitlementId: resumed.id } });
+  if (existingProjection) {
+    await tx.wifiRadiusProjection.update({
+      where: { id: existingProjection.id },
+      data: {
+        username: projection.username,
+        checkItems: projection.checkItems,
+        replyItems: projection.replyItems,
+        status: "applied",
+        appliedAt: now,
+        lastError: null
+      }
+    });
+  } else {
+    await tx.wifiRadiusProjection.create({
+      data: {
+        entitlementId: resumed.id,
+        username: projection.username,
+        checkItems: projection.checkItems,
+        replyItems: projection.replyItems,
+        status: "applied",
+        appliedAt: now
+      }
+    });
+  }
+
+  await tx.wifiNotification.create({
+    data: {
+      customerPhone: entitlement.customerPhone || entitlement.username,
+      type: "outage_resolved",
+      title: "Your WiFi time is restored",
+      body: `Your connection is ready again. We restored the ${creditDurationLabel(remainingSeconds)} remaining on your package when the outage began.`,
+      data: {
+        entitlementId: entitlement.id,
+        durationSeconds: remainingSeconds,
+        reason: "OUTAGE_COMPENSATION",
+        outageStartedAt: pausedAt.toISOString(),
+        deviceMac: entitlement.deviceMac,
+        planId: entitlement.planId
+      }
+    }
+  });
 }
 
 // Marks every currently-active, not-already-paused entitlement as paused as
@@ -341,6 +367,7 @@ export async function resumePausedEntitlements(prisma: PrismaClient): Promise<Re
         id: true,
         customerPhone: true,
         username: true,
+        cleartextSecret: true,
         deviceMac: true,
         siteId: true,
         planId: true,
@@ -360,6 +387,51 @@ export async function resumePausedEntitlements(prisma: PrismaClient): Promise<Re
 
     let resumed = 0;
     let totalCreditedSeconds = 0;
+
+    // Repair the one-time conversion deployed for the Nov 3 outage. Restore
+    // unactivated wallet rows to their original paid entitlement; consumed
+    // credits already created a working replacement entitlement and are left
+    // alone. Expiring the wallet row makes this safe to rerun after restarts.
+    const legacyCredits = await tx.wifiCredit.findMany({
+      where: {
+        sourceReference: { startsWith: LEGACY_OUTAGE_CREDIT_PREFIX },
+        consumedAt: null,
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }]
+      },
+      take: config.outageCredit.batchSize,
+      orderBy: { createdAt: "asc" }
+    });
+    for (const credit of legacyCredits) {
+      const entitlementId = credit.sourceReference
+        ?.slice(LEGACY_OUTAGE_CREDIT_PREFIX.length)
+        .replace(/:remaining-at-outage$/, "");
+      if (!entitlementId) continue;
+      const entitlement = await tx.wifiEntitlement.findUnique({ where: { id: entitlementId } });
+      if (!entitlement || entitlement.status !== "expired" || entitlement.outagePausedAt !== null) continue;
+      const audit = await tx.wifiOutageCredit.findFirst({
+        where: { entitlementId },
+        orderBy: { createdAt: "desc" }
+      });
+      if (!audit || audit.creditedSeconds <= 0) continue;
+
+      await creditEntitlement(tx, {
+        id: entitlement.id,
+        customerPhone: entitlement.customerPhone,
+        username: entitlement.username,
+        cleartextSecret: entitlement.cleartextSecret,
+        deviceMac: entitlement.deviceMac,
+        siteId: entitlement.siteId,
+        planId: entitlement.planId,
+        expiresAt: entitlement.expiresAt,
+        rateLimit: entitlement.rateLimit,
+        deviceLimit: entitlement.deviceLimit,
+        outagePausedAt: audit.outageStartedAt,
+        outagePauseCause: audit.service
+      }, audit.creditedSeconds, now);
+      await tx.wifiCredit.update({ where: { id: credit.id }, data: { expiresAt: now } });
+      resumed += 1;
+      totalCreditedSeconds += audit.creditedSeconds;
+    }
 
     for (const entitlement of paused) {
       const pausedAt = entitlement.outagePausedAt;
