@@ -502,7 +502,7 @@ img.brand-mark { background: none; border-radius: 10px; object-fit: contain; }
 .chart svg { display: block; width: 100%; height: auto; }
 .chart-grid { stroke: var(--line); stroke-width: 1; }
 .chart-axis { fill: var(--muted); font-size: 11px; font-weight: 600; }
-.chart-outage-label { fill: var(--red); font-size: 8px; font-weight: 900; letter-spacing: .04em; }
+.chart-outage-label { fill: var(--red); font-size: 12px; font-weight: 900; }
 .chart-bar { fill: var(--chart-1); }
 .chart-line { fill: none; stroke: var(--chart-2); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .chart-hit { fill: transparent; cursor: default; outline: none; }
