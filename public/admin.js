@@ -1125,7 +1125,7 @@ function hideTooltip() { chartTooltip?.classList.remove("visible"); }
 
 // Columns from one baseline (<= 24px, 4px rounded tops), an optional line on
 // the same axis, recessive grid, selective x labels, per-column hover.
-function renderColumnChart(container, { labels, values, line = null, xLabel, tip }) {
+function renderColumnChart(container, { labels, values, line = null, xLabel, tip, marker = null }) {
   const width = Math.max(280, container.clientWidth || 600);
   const height = 230;
   const m = { top: 12, right: 10, bottom: 26, left: 44 };
@@ -1152,6 +1152,18 @@ function renderColumnChart(container, { labels, values, line = null, xLabel, tip
       const r = Math.min(4, h, barW / 2);
       const x0 = cx - barW / 2, x1 = cx + barW / 2, base = m.top + plotH;
       svg.appendChild(svgEl("path", { class: "chart-bar", d: `M${x0},${base} V${top + r} Q${x0},${top} ${x0 + r},${top} H${x1 - r} Q${x1},${top} ${x1},${top + r} V${base} Z` }));
+    }
+    if (marker?.(i)) {
+      const markerY = value > 0 ? Math.max(m.top + 24, top + 18) : m.top + 18;
+      const outage = svgEl("text", {
+        x: cx,
+        y: markerY,
+        class: "chart-outage-label",
+        "text-anchor": "middle",
+        transform: `rotate(-90 ${cx} ${markerY})`
+      });
+      outage.textContent = "OUTAGE";
+      svg.appendChild(outage);
     }
     if (i % every === 0) {
       const t = svgEl("text", { x: cx, y: height - 8, class: "chart-axis", "text-anchor": "middle" });
@@ -1251,10 +1263,12 @@ function renderAnalytics() {
     labels: daily.map((d) => d.day),
     values: daily.map((d) => d.ksh),
     line: avg,
+    marker: (i) => (Number(daily[i].outageSeconds) || 0) > 2 * 60 * 60,
     xLabel: (i) => dayLabel(daily[i].day, { day: "numeric", month: "short" }),
     tip: (i) => [
       [fmtMoney(daily[i].ksh), dayLabel(daily[i].day, { weekday: "short", day: "numeric", month: "short" }), "key-bar"],
       ...(avg[i] === null ? [] : [[fmtMoney(avg[i]), "7-day average", "key-line"]]),
+      ...((Number(daily[i].outageSeconds) || 0) > 2 * 60 * 60 ? [[`${(daily[i].outageSeconds / 3600).toFixed(1)} hours`, "recorded outage"]] : []),
       [`${daily[i].payments}`, `payments · ${daily[i].payers} customers`]
     ]
   });
@@ -1274,7 +1288,13 @@ function renderAnalytics() {
   document.getElementById("table-upgrade-paths").innerHTML = upgradePaths.length
     ? `<table><thead><tr><th>From</th><th>Picked</th><th>Sessions</th></tr></thead><tbody>${upgradePaths.map((row) => `<tr><td>${escapeHtml(row.fromName || "Package")}</td><td>${escapeHtml(row.toName || "Package")}</td><td>${row.sessions}</td></tr>`).join("")}</tbody></table>`
     : '<p class="empty-state">No upgrade choices in this date range yet.</p>';
-  document.getElementById("table-daily").innerHTML = `<table><thead><tr><th>Day</th><th>KSh</th><th>Payments</th><th>Customers</th></tr></thead><tbody>${[...daily].reverse().map((d) => `<tr><td>${escapeHtml(dayLabel(d.day, { weekday: "short", day: "numeric", month: "short" }))}</td><td>${fmtMoney(d.ksh)}</td><td>${d.payments}</td><td>${d.payers}</td></tr>`).join("")}</tbody></table>`;
+  document.getElementById("table-daily").innerHTML = `<table><thead><tr><th>Day</th><th>KSh</th><th>Payments</th><th>Customers</th></tr></thead><tbody>${[...daily].reverse().map((d) => {
+    const outageSeconds = Number(d.outageSeconds) || 0;
+    const outageMarker = outageSeconds > 2 * 60 * 60
+      ? `<span class="outage-day-marker" title="${escapeHtml(`${(outageSeconds / 3600).toFixed(1)} hours of recorded outage`)}" aria-label="${escapeHtml(`${(outageSeconds / 3600).toFixed(1)} hours outage`)}">OUTAGE</span>`
+      : "";
+    return `<tr><td><span class="daily-day-cell">${outageMarker}${escapeHtml(dayLabel(d.day, { weekday: "short", day: "numeric", month: "short" }))}</span></td><td>${fmtMoney(d.ksh)}</td><td>${d.payments}</td><td>${d.payers}</td></tr>`;
+  }).join("")}</tbody></table>`;
 }
 
 document.querySelector(".range-row")?.addEventListener("click", (event) => {

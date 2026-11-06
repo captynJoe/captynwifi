@@ -1483,7 +1483,7 @@ adminRouter.get("/analytics", async (req, res, next) => {
       days = first ? Math.min(400, Math.floor((startOfNairobiDay(now).getTime() - startOfNairobiDay(first.createdAt).getTime()) / dayMs) + 1) : 30;
     }
     const since = new Date(startOfNairobiDay(now).getTime() - (days - 1) * 24 * 60 * 60 * 1000);
-    const [dailyRaw, hours, plans, customers] = await Promise.all([
+    const [dailyRaw, hours, plans, customers, outageIntervals] = await Promise.all([
       prisma.$queryRaw<Array<{ day: Date; ksh: number; payments: number; payers: number }>>(Prisma.sql`
         SELECT ("createdAt" + interval '3 hours')::date AS day, SUM("amountKsh")::int AS ksh, COUNT(*)::int AS payments, COUNT(DISTINCT "customerPhone")::int AS payers
         FROM "WifiPaymentIntent"
@@ -1516,7 +1516,13 @@ adminRouter.get("/analytics", async (req, res, next) => {
                COUNT(*) FILTER (WHERE per.paid_days >= 2)::int AS returning,
                COUNT(*) FILTER (WHERE firsts.first_at >= ${since})::int AS "newPayers",
                COALESCE(SUM(per.ksh), 0)::int AS ksh
-        FROM per JOIN firsts ON firsts.phone = per.phone`)
+        FROM per JOIN firsts ON firsts.phone = per.phone`),
+      prisma.$queryRaw<Array<{ outageStartedAt: Date; outageEndedAt: Date }>>(Prisma.sql`
+        SELECT DISTINCT "outageStartedAt", "outageEndedAt"
+        FROM "WifiOutageCredit"
+        WHERE "outageStartedAt" < ${new Date(since.getTime() + days * DAY_MS)}
+          AND "outageEndedAt" > ${since}
+          AND "outageEndedAt" > "outageStartedAt"`)
     ]);
     const [funnelEvents, funnelPurchases, upgradePaths] = await Promise.all([
       prisma.$queryRaw<Array<{ planId: string | null; name: string | null; event: string; sessions: number }>>(Prisma.sql`
@@ -1560,10 +1566,50 @@ adminRouter.get("/analytics", async (req, res, next) => {
     }
     const funnel = Array.from(funnelByPlan.values()).sort((a, b) => b.views - a.views || b.purchases - a.purchases || a.name.localeCompare(b.name));
     const byDay = new Map(dailyRaw.map((row) => [row.day.toISOString().slice(0, 10), row]));
+    // Outage rows are stored once per entitlement. Deduplicate intervals above,
+    // then union overlaps per Nairobi day so customers aren't counted as
+    // separate outages and a long outage is split across calendar days.
+    const outageRangesByDay = new Map<string, Array<[number, number]>>();
+    const rangeStart = since.getTime();
+    const rangeEnd = rangeStart + days * DAY_MS;
+    for (const interval of outageIntervals) {
+      let cursor = Math.max(interval.outageStartedAt.getTime(), rangeStart);
+      const end = Math.min(interval.outageEndedAt.getTime(), rangeEnd);
+      while (cursor < end) {
+        const localDay = new Date(cursor + NAIROBI_OFFSET_MS).toISOString().slice(0, 10);
+        const localMidnightUtc = Date.parse(`${localDay}T00:00:00.000Z`) - NAIROBI_OFFSET_MS;
+        const segmentEnd = Math.min(end, localMidnightUtc + DAY_MS);
+        const ranges = outageRangesByDay.get(localDay) ?? [];
+        ranges.push([cursor, segmentEnd]);
+        outageRangesByDay.set(localDay, ranges);
+        cursor = segmentEnd;
+      }
+    }
+    const outageSecondsByDay = new Map<string, number>();
+    for (const [day, ranges] of outageRangesByDay) {
+      ranges.sort((a, b) => a[0] - b[0]);
+      let coveredStart = -1;
+      let coveredEnd = -1;
+      let totalMs = 0;
+      for (const [start, end] of ranges) {
+        if (coveredStart < 0) {
+          coveredStart = start;
+          coveredEnd = end;
+        } else if (start <= coveredEnd) {
+          coveredEnd = Math.max(coveredEnd, end);
+        } else {
+          totalMs += coveredEnd - coveredStart;
+          coveredStart = start;
+          coveredEnd = end;
+        }
+      }
+      if (coveredStart >= 0) totalMs += coveredEnd - coveredStart;
+      outageSecondsByDay.set(day, Math.floor(totalMs / 1000));
+    }
     const daily = Array.from({ length: days }, (_, index) => {
       const key = new Date(since.getTime() + 3 * 60 * 60 * 1000 + index * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
       const row = byDay.get(key);
-      return { day: key, ksh: row?.ksh ?? 0, payments: row?.payments ?? 0, payers: row?.payers ?? 0 };
+      return { day: key, ksh: row?.ksh ?? 0, payments: row?.payments ?? 0, payers: row?.payers ?? 0, outageSeconds: outageSecondsByDay.get(key) ?? 0 };
     });
     const byHour = new Map(hours.map((row) => [row.hour, row]));
     return sendData(res, {
