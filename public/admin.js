@@ -1154,12 +1154,14 @@ function renderColumnChart(container, { labels, values, line = null, xLabel, tip
       svg.appendChild(svgEl("path", { class: "chart-bar", d: `M${x0},${base} V${top + r} Q${x0},${top} ${x0 + r},${top} H${x1 - r} Q${x1},${top} ${x1},${top + r} V${base} Z` }));
     }
     if (marker?.(i)) {
-      const markerY = value > 0 ? Math.max(m.top + 24, top + 18) : m.top + 18;
+      // Rotate the word upward from the bar's top edge: its first letter
+      // stays on the blue bar and the remaining letters use the free space above.
+      const markerY = value > 0 ? Math.min(m.top + plotH - 2, top + 4) : m.top + plotH - 2;
       const outage = svgEl("text", {
         x: cx,
         y: markerY,
         class: "chart-outage-label",
-        "text-anchor": "middle",
+        "text-anchor": "start",
         transform: `rotate(-90 ${cx} ${markerY})`
       });
       outage.textContent = "OUTAGE";
