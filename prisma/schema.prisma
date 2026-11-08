@@ -432,6 +432,12 @@ model WifiNotification {
 // ranking is frozen into tiers (Gold/Silver/Bronze...); on a random day that
 // week each ranked customer gets a WifiLoyaltyReward and picks one card:
 // free time, or one of a few suggested packages with bonus time and speed.
+model WifiSpeedColorSetting {
+  id        String   @id @default("default")
+  tiers     Json
+  updatedAt DateTime @updatedAt
+}
+
 model WifiLoyaltySetting {
   id          String   @id @default("default")
   enabled     Boolean  @default(false)

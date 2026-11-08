@@ -5,7 +5,11 @@ function requireElement(id) {
         throw new Error(`Missing portal element #${id}`);
     return element;
 }
-const state = { plans: [], selectedPlanId: "", paymentId: "", pollTimer: null, hotspot: null, expiryTimer: null, activeNeed: "all", currentEntitlement: null, selectedDevices: 1, packageView: "all" };
+const DEFAULT_SPEED_COLOR_TIERS = [
+    { maxMbps: 5, color: "#e5484d" }, { maxMbps: 10, color: "#d69e2e" },
+    { maxMbps: 15, color: "#64748b" }, { maxMbps: null, color: "#0891b2" }
+];
+const state = { plans: [], selectedPlanId: "", paymentId: "", pollTimer: null, hotspot: null, expiryTimer: null, activeNeed: "all", currentEntitlement: null, selectedDevices: 1, packageView: "all", speedColors: DEFAULT_SPEED_COLOR_TIERS };
 const plansEl = requireElement("plans");
 const checkoutTitle = requireElement("checkout-title");
 const checkoutPrice = requireElement("checkout-price");
@@ -618,15 +622,12 @@ function friendlyRate(rateLimit) {
 function rateBoostMarkup() {
     return '<span class="rate-boost" title="Brief speed burst up to 2× when capacity allows" aria-label="Speed X2: brief burst up to twice the package speed">Speed X2</span>';
 }
-function speedTierClass(plan) {
+function speedTierClass(_plan) { return "speed-custom"; }
+function speedColorStyle(plan) {
     const { download } = rateParts(plan.rateLimit);
-    if (download <= 5)
-        return "speed-starter";
-    if (download <= 10)
-        return "speed-cruise";
-    if (download <= 15)
-        return "speed-glass";
-    return "speed-gulfstream";
+    const index = state.speedColors.findIndex((tier) => tier.maxMbps === null || download <= Number(tier.maxMbps));
+    const color = state.speedColors[index < 0 ? state.speedColors.length - 1 : index]?.color || "#0891b2";
+    return `--speed-color:${/^#[0-9a-fA-F]{6}$/.test(color) ? color : "#0891b2"}`;
 }
 function normalizeMpesaPhoneInput(raw) {
     const cleaned = String(raw || "").replace(/[^\d+]/g, "").replace(/^\++/, "+");
@@ -779,6 +780,7 @@ function showPaymentModal(kind, title, message) {
     paymentModalTitle.textContent = title;
     paymentModalMessage.textContent = message || "";
     paymentModalCancelBtn.classList.toggle("hidden", kind !== "connecting" && kind !== "add-device");
+    paymentModalCancelBtn.textContent = kind === "add-device" ? "Use another number" : "Cancel";
     paymentModalAddBtn.classList.toggle("hidden", kind !== "add-device");
     paymentModalRetryBtn.classList.toggle("hidden", kind !== "bad" && kind !== "welcome-used");
     paymentModalRetryBtn.textContent = kind === "welcome-used" ? "Browse packages →" : "Try Again";
@@ -1345,7 +1347,7 @@ function planCard(plan, devices = plan.deviceLimit) {
       <span class="plan-main">
         <h3>${esc(displayPlanName(plan))}</h3>
         <span class="plan-facts">${duration(plan.durationSeconds)} · ${esc(devices)} device${Number(devices) === 1 ? "" : "s"}</span>
-        <span class="speed-label"><span class="plan-speed ${speedTierClass(plan)}">${friendlyRate(plan.rateLimit)}</span>${rateBoostMarkup()}</span>
+        <span class="speed-label"><span class="plan-speed ${speedTierClass(plan)}" style="${speedColorStyle(plan)}">${friendlyRate(plan.rateLimit)}</span>${rateBoostMarkup()}</span>
       </span>
       <span class="plan-side">
         ${badgeHtml}
@@ -1480,7 +1482,7 @@ function renderSelectedPlan() {
     payButton.textContent = Number(plan.priceKsh || 0) === 0 ? paymentActionLabel(plan) : `Pay ${money(price)}`;
     phoneInput.required = !isFree;
     phoneField?.classList.toggle("hidden", isFree);
-    selectedSummary.innerHTML = `<div class="summary-meta compact"><span class="summary-pill summary-duration">${duration(plan.durationSeconds)}</span><span class="summary-speed-group"><span class="summary-pill summary-speed ${speedTierClass(plan)}">${friendlyRate(plan.rateLimit)}</span>${rateBoostMarkup()}</span></div>${devicePicker(plan)}${upgradeCard(plan)}`;
+    selectedSummary.innerHTML = `<div class="summary-meta compact"><span class="summary-pill summary-duration">${duration(plan.durationSeconds)}</span><span class="summary-speed-group"><span class="summary-pill summary-speed ${speedTierClass(plan)}" style="${speedColorStyle(plan)}">${friendlyRate(plan.rateLimit)}</span>${rateBoostMarkup()}</span></div>${devicePicker(plan)}${upgradeCard(plan)}`;
 }
 function comparePlansByPrice(a, b) {
     const priceDelta = Number(a?.priceKsh || 0) - Number(b?.priceKsh || 0);
@@ -1618,10 +1620,15 @@ function renderPlans(sites) {
     renderPackageBrowser();
 }
 async function loadPlans() {
-    const response = await fetch(api("/sites"));
+    const [response, colorResponse] = await Promise.all([fetch(api("/sites")), fetch(api("/speed-colors")).catch(() => null)]);
     const payload = await response.json();
     if (!response.ok)
         throw new Error(payload.error || "Unable to load WiFi packages.");
+    if (colorResponse?.ok) {
+        const colorPayload = await colorResponse.json();
+        if (Array.isArray(colorPayload.data) && colorPayload.data.length === 4)
+            state.speedColors = colorPayload.data;
+    }
     renderPlans(payload.data || []);
 }
 function selectPlan(planId, isUpgrade = false) {
@@ -2029,12 +2036,15 @@ function offerAddToPackage(plan, phone, payload) {
     setStep("package");
     const add = payload.package?.addDevice;
     if (!add) {
-        showPaymentModal("bad", "Package already in use", payload.error);
+        pendingAddToPackage = { plan, phone };
+        showPaymentModal("add-device", "Package device limit reached", `${payload.error} Change the M-PESA number to buy a separate package.`);
+        paymentModalAddBtn.classList.add("hidden");
+        paymentModalCancelBtn.textContent = "Use another number";
         return;
     }
     pendingAddToPackage = { plan, phone };
     const left = formatTimeLeft(new Date(payload.package.expiresAt).getTime() - Date.now());
-    showPaymentModal("add-device", "Running on another device", `This number's package has ${left}. Add this device to it, or use another number for a separate package.`);
+    showPaymentModal("add-device", "Get this device online", `Your current package has ${left} left. Add this device for ${money(add.priceKsh)}; this adds a device slot and keeps the package time. To buy a separate package, use another M-PESA number.`);
     paymentModalAddBtn.textContent = `Add this device · ${money(add.priceKsh)}`;
 }
 paymentModalAddBtn.addEventListener("click", () => {
@@ -2046,9 +2056,15 @@ paymentModalAddBtn.addEventListener("click", () => {
     requestStkPayment(plan, phone, true);
 });
 paymentModalCancelBtn.addEventListener("click", () => {
+    const chooseAnotherNumber = Boolean(pendingAddToPackage);
+    pendingAddToPackage = null;
     trackFunnel("checkout_cancelled", currentPlan()?.id);
     resetPaymentAttempt();
     setStep("package");
+    if (chooseAnotherNumber) {
+        showError("Change the M-PESA number to buy a separate package, or add this device to the current package.");
+        phoneInput.focus();
+    }
 });
 paymentModalRetryBtn.addEventListener("click", () => {
     resetPaymentAttempt();
@@ -2130,7 +2146,7 @@ state.hotspot = readHotspotParams();
 // "You are already logged in - access denied" -- reword it for customers.
 function friendlyHotspotError(raw) {
     if (/already logged in|simultaneous/i.test(raw)) {
-        return "Your package is already in use on its other device. Sign that device out, or buy a package for this one with a different M-PESA number.";
+        return "Your package is active on another device. To get online here, choose a package and use the same M-PESA number; we’ll show the cost to add this device before sending a payment prompt. To buy a separate package, use a different M-PESA number.";
     }
     return raw;
 }

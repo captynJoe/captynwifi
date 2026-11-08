@@ -812,6 +812,18 @@ async function activateWifiCredit(creditId: string, input: z.infer<typeof credit
   });
 }
 
+publicRouter.get("/speed-colors", async (_req, res, next) => {
+  try {
+    const setting = await prisma.wifiSpeedColorSetting.findUnique({ where: { id: "default" } });
+    return res.json({ data: toJsonSafe(setting?.tiers ?? [
+      { maxMbps: 5, color: "#e5484d" },
+      { maxMbps: 10, color: "#d69e2e" },
+      { maxMbps: 15, color: "#64748b" },
+      { maxMbps: null, color: "#0891b2" }
+    ]) });
+  } catch (error) { return next(error); }
+});
+
 publicRouter.get("/sites", async (_req, res, next) => {
   try {
     const sites = await prisma.wifiSite.findMany({

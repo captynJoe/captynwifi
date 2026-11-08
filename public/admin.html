@@ -201,6 +201,11 @@
             <div class="panel-head"><h2>Customer Packages</h2><span id="package-card-count"></span><label class="pricing-mode" for="pricing-mode-select"><span>Pricing</span><select id="pricing-mode-select"><option value="dynamic">Dynamic</option><option value="manual">Manual</option><option value="mixed" disabled>Mixed</option></select></label><button id="new-package-btn" class="secondary" type="button">New package</button></div>
             <div id="package-cards" class="package-cards"></div>
           </article>
+          <article class="surface span-12 speed-color-settings">
+            <div class="panel-head"><h2>Speed colors</h2><span>Set Mbps cutoffs and badge colors shown to customers</span></div>
+            <div id="speed-color-editor" class="speed-color-editor"></div>
+            <div class="speed-color-actions"><button id="speed-color-save" type="button">Save speed colors</button><span id="speed-color-status" role="status"></span></div>
+          </article>
           <article class="surface span-12 table-panel">
             <div class="panel-head"><h2>All Packages</h2><span id="plans-count"></span></div>
             <div class="table-wrap"><table><thead><tr><th>Name</th><th>Site</th><th>Duration</th><th>Price</th><th>Category</th><th>Speed</th><th>PPPoE</th><th>Devices</th><th>Client Portal</th><th>Actions</th></tr></thead><tbody id="plans-body"></tbody></table></div>

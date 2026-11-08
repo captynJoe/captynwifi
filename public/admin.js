@@ -98,6 +98,7 @@ const servicePath = (path) => `${basePath}${path}`;
 const endpoints = {
   sites: adminApi("/sites"),
   plans: adminApi("/plans"),
+  speedColors: adminApi("/speed-colors"),
   payments: adminApi("/payment-intents"),
   entitlements: adminApi("/entitlements"),
   pppoeAccounts: adminApi("/pppoe-accounts"),
@@ -233,12 +234,52 @@ function adminRateParts(plan) {
   const parsed = parseRateLimit(plan?.rateLimit);
   return { download: Number(parsed.download || 0), upload: Number(parsed.upload || 0) };
 }
-function speedTierClass(plan) {
+const DEFAULT_SPEED_COLOR_TIERS = [
+  { maxMbps: 5, color: "#e5484d" }, { maxMbps: 10, color: "#d69e2e" },
+  { maxMbps: 15, color: "#64748b" }, { maxMbps: null, color: "#0891b2" }
+];
+function currentSpeedColorTiers() {
+  const tiers = state.cache.speedColors;
+  return Array.isArray(tiers) && tiers.length === 4 ? tiers : DEFAULT_SPEED_COLOR_TIERS;
+}
+function speedTierIndex(downloadMbps) {
+  const tiers = currentSpeedColorTiers();
+  const found = tiers.findIndex((tier) => tier.maxMbps === null || downloadMbps <= Number(tier.maxMbps));
+  return found < 0 ? tiers.length - 1 : found;
+}
+function speedTierClass(plan) { return "speed-custom"; }
+function speedColorStyle(plan) {
   const { download } = adminRateParts(plan);
-  if (download <= 5) return "speed-starter";
-  if (download <= 10) return "speed-cruise"; // anything above 10 Mbps reads as a faster tier
-  if (download <= 20) return "speed-highspeed";
-  return "speed-gulfstream";
+  const color = currentSpeedColorTiers()[speedTierIndex(download)]?.color || "#0891b2";
+  return `--speed-color:${/^#[0-9a-fA-F]{6}$/.test(color) ? color : "#0891b2"}`;
+}
+function renderSpeedColorEditor() {
+  const editor = document.getElementById("speed-color-editor");
+  if (!editor) return;
+  const tiers = currentSpeedColorTiers();
+  editor.innerHTML = tiers.map((tier, index) => `<label class="speed-color-row"><span>${index === tiers.length - 1 ? `Above ${Number(tiers[index - 1]?.maxMbps || 0)} Mbps` : `Up to`}</span>${index === tiers.length - 1 ? "" : `<input data-speed-cutoff="${index}" type="number" min="0.1" max="10000" step="0.5" value="${escapeHtml(tier.maxMbps)}" aria-label="Speed cutoff ${index + 1} in Mbps">`}<span class="speed-color-swatch" style="--speed-color:${escapeHtml(tier.color)}">${index === tiers.length - 1 ? "Fastest" : "Mbps"}</span><input data-speed-color="${index}" type="color" value="${escapeHtml(tier.color)}" aria-label="Color for speed band ${index + 1}"></label>`).join("");
+}
+async function saveSpeedColorSettings() {
+  const statusEl = document.getElementById("speed-color-status");
+  const save = document.getElementById("speed-color-save");
+  const tiers = currentSpeedColorTiers().map((tier, index) => ({
+    maxMbps: index === 3 ? null : Number(document.querySelector(`[data-speed-cutoff="${index}"]`)?.value),
+    color: document.querySelector(`[data-speed-color="${index}"]`)?.value || tier.color
+  }));
+  if (tiers.slice(0, 3).some((tier, index) => !Number.isFinite(tier.maxMbps) || tier.maxMbps <= 0 || (index > 0 && tier.maxMbps <= tiers[index - 1].maxMbps))) {
+    if (statusEl) statusEl.textContent = "Enter increasing positive Mbps cutoffs.";
+    return;
+  }
+  if (save) save.disabled = true;
+  if (statusEl) statusEl.textContent = "Saving…";
+  try {
+    state.cache.speedColors = await writeApi(endpoints.speedColors, "PUT", { tiers });
+    renderSpeedColorEditor();
+    renderPlanCards();
+    if (statusEl) statusEl.textContent = "Saved. Customer package colors are updated.";
+  } catch (error) {
+    if (statusEl) statusEl.textContent = error instanceof Error ? error.message : "Could not save speed colors.";
+  } finally { if (save) save.disabled = false; }
 }
 function escapeHtml(value) {
   return text(value, "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
@@ -644,7 +685,7 @@ function rateCard(plan, withAction = false) {
     <strong>${fmtMoney(plan.priceKsh)}</strong>
     <div class="rate-meta">
       <span>${durationLabel(plan.durationSeconds)}</span>
-      <span class="rate-speed ${speedTierClass(plan)}">Speed ${friendlyRate(plan.rateLimit)}</span>
+      <span class="rate-speed ${speedTierClass(plan)}" style="${speedColorStyle(plan)}">Speed ${friendlyRate(plan.rateLimit)}</span>
       <span>${escapeHtml(plan.deviceLimit)} device${Number(plan.deviceLimit) === 1 ? "" : "s"}</span>
     </div>
     ${withAction ? `<span class="action-row"><button class="secondary" type="button" data-edit-plan="${escapeHtml(plan.id)}">Edit package</button><a class="button-link secondary" href="/wifi/" target="_blank" rel="noreferrer">Preview</a><button class="danger" type="button" data-delete-plan="${escapeHtml(plan.id)}">Delete</button></span>` : ""}
@@ -1507,14 +1548,17 @@ pppoeCashForm?.addEventListener("submit", async (event) => {
   }
 });
 
+document.getElementById("speed-color-save")?.addEventListener("click", () => void saveSpeedColorSettings());
+
 async function loadDashboard() {
   setAuthError("");
   refreshBtn.disabled = true;
   try {
-    const [summary, sites, plans, payments, entitlements, pppoeAccounts, projections, accounting, networkStatus, governorStatus, dynamicPlanStatus, outageCredits, promo, loyalty, promoHistory] = await Promise.all([
+    const [summary, sites, plans, speedColors, payments, entitlements, pppoeAccounts, projections, accounting, networkStatus, governorStatus, dynamicPlanStatus, outageCredits, promo, loyalty, promoHistory] = await Promise.all([
       api(adminApi("/summary")),
       api(endpoints.sites),
       api(endpoints.plans),
+      api(endpoints.speedColors).catch(() => DEFAULT_SPEED_COLOR_TIERS),
       api(endpoints.payments),
       api(endpoints.entitlements),
       api(endpoints.pppoeAccounts),
@@ -1529,9 +1573,10 @@ async function loadDashboard() {
       api(endpoints.loyalty).catch(() => null),
       api(endpoints.promoHistory).catch(() => [])
     ]);
-    state.cache = { sites, plans, payments, entitlements, pppoeAccounts, projections, accounting, networkStatus, governorStatus, dynamicPlanStatus, outageCredits, promo, loyalty, promoHistory };
+    state.cache = { sites, plans, speedColors, payments, entitlements, pppoeAccounts, projections, accounting, networkStatus, governorStatus, dynamicPlanStatus, outageCredits, promo, loyalty, promoHistory };
     renderSummary(summary);
     renderAll();
+    renderSpeedColorEditor();
     authPanel.classList.add("hidden");
     dashboard.classList.remove("hidden");
     finishBoot();

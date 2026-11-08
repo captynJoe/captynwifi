@@ -393,6 +393,43 @@ adminRouter.get("/summary", async (_req, res, next) => {
 });
 
 
+const DEFAULT_SPEED_COLOR_TIERS = [
+  { maxMbps: 5, color: "#e5484d" },
+  { maxMbps: 10, color: "#d69e2e" },
+  { maxMbps: 15, color: "#64748b" },
+  { maxMbps: null, color: "#0891b2" }
+];
+const speedColorTiersSchema = z.array(z.object({
+  maxMbps: z.number().positive().max(10000).nullable(),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/)
+})).length(4).superRefine((tiers, ctx) => {
+  if (tiers[3]?.maxMbps !== null) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "The last speed band must be open-ended." });
+  for (let index = 0; index < 3; index += 1) {
+    if (tiers[index]?.maxMbps === null || (index > 0 && Number(tiers[index]?.maxMbps) <= Number(tiers[index - 1]?.maxMbps))) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Speed cutoffs must increase from one band to the next." });
+      break;
+    }
+  }
+});
+
+adminRouter.get("/speed-colors", async (_req, res, next) => {
+  try {
+    const setting = await prisma.wifiSpeedColorSetting.findUnique({ where: { id: "default" } });
+    return sendData(res, setting?.tiers ?? DEFAULT_SPEED_COLOR_TIERS);
+  } catch (error) { return next(error); }
+});
+adminRouter.put("/speed-colors", async (req, res, next) => {
+  try {
+    const tiers = speedColorTiersSchema.parse(req.body?.tiers);
+    const setting = await prisma.wifiSpeedColorSetting.upsert({
+      where: { id: "default" },
+      create: { id: "default", tiers },
+      update: { tiers }
+    });
+    return sendData(res, setting.tiers);
+  } catch (error) { return next(error); }
+});
+
 adminRouter.get("/capacity-status", async (_req, res, next) => {
   try {
     return sendData(res, await getRouterCapacityStatus());
