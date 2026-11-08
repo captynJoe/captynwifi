@@ -6,8 +6,8 @@ function requireElement(id) {
     return element;
 }
 const DEFAULT_SPEED_COLOR_TIERS = [
-    { maxMbps: 5, color: "#e5484d" }, { maxMbps: 10, color: "#d69e2e" },
-    { maxMbps: 15, color: "#64748b" }, { maxMbps: null, color: "#0891b2" }
+    { maxMbps: 10, color: "#e5484d" }, { maxMbps: 20, color: "#d69e2e" },
+    { maxMbps: 30, color: "#64748b" }, { maxMbps: null, color: "#0891b2" }
 ];
 const state = { plans: [], selectedPlanId: "", paymentId: "", pollTimer: null, hotspot: null, expiryTimer: null, activeNeed: "all", currentEntitlement: null, selectedDevices: 1, packageView: "all", speedColors: DEFAULT_SPEED_COLOR_TIERS };
 const plansEl = requireElement("plans");
@@ -610,22 +610,23 @@ function rateParts(rateLimit) {
         return { upload: 0, download: 0 };
     return { upload: Number(match[1]) || 0, download: Number(match[2]) || 0 };
 }
-// Package speed labels show the base upload and download caps. The x2 marker
-// sits outside the tier badge so it reads as a separate brief-burst benefit.
+// Customer labels show the configured 2x burst ceiling; sustained base rates
+// remain in the RADIUS package configuration.
 const BURST_MULTIPLIER = 2;
 function friendlyRate(rateLimit) {
     const { upload, download } = rateParts(rateLimit);
     if (!download && !upload)
         return rateLimit ? esc(rateLimit) : "Standard speed";
-    return `<span class="rate-pair" title="Base caps; brief burst up to ${download * BURST_MULTIPLIER} Mbps download and ${upload * BURST_MULTIPLIER} Mbps upload when capacity allows"><span class="rate-value">↓ ${download} Mbps</span><span class="rate-value">↑ ${upload} Mbps</span></span>`;
+    return `<span class="rate-pair" title="Brief burst maximum; reached when network capacity allows"><span class="rate-value">Up to ${download * BURST_MULTIPLIER} Mbps ↓</span><span class="rate-value">Up to ${upload * BURST_MULTIPLIER} Mbps ↑</span></span>`;
 }
 function rateBoostMarkup() {
-    return '<span class="rate-boost" title="Brief speed burst up to 2× when capacity allows" aria-label="Speed X2: brief burst up to twice the package speed">Speed X2</span>';
+    return '<span class="rate-boost" title="Brief speed burst up to twice the package speed when network capacity allows" aria-label="Brief 2× burst when network capacity allows">2× burst when capacity allows</span>';
 }
 function speedTierClass(_plan) { return "speed-custom"; }
 function speedColorStyle(plan) {
     const { download } = rateParts(plan.rateLimit);
-    const index = state.speedColors.findIndex((tier) => tier.maxMbps === null || download <= Number(tier.maxMbps));
+    const displayedMaxDownload = download * BURST_MULTIPLIER;
+    const index = state.speedColors.findIndex((tier) => tier.maxMbps === null || displayedMaxDownload <= Number(tier.maxMbps));
     const color = state.speedColors[index < 0 ? state.speedColors.length - 1 : index]?.color || "#0891b2";
     return `--speed-color:${/^#[0-9a-fA-F]{6}$/.test(color) ? color : "#0891b2"}`;
 }

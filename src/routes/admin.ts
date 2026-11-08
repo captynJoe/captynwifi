@@ -394,9 +394,9 @@ adminRouter.get("/summary", async (_req, res, next) => {
 
 
 const DEFAULT_SPEED_COLOR_TIERS = [
-  { maxMbps: 5, color: "#e5484d" },
-  { maxMbps: 10, color: "#d69e2e" },
-  { maxMbps: 15, color: "#64748b" },
+  { maxMbps: 10, color: "#e5484d" },
+  { maxMbps: 20, color: "#d69e2e" },
+  { maxMbps: 30, color: "#64748b" },
   { maxMbps: null, color: "#0891b2" }
 ];
 const speedColorTiersSchema = z.array(z.object({

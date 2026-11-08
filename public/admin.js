@@ -235,8 +235,8 @@ function adminRateParts(plan) {
   return { download: Number(parsed.download || 0), upload: Number(parsed.upload || 0) };
 }
 const DEFAULT_SPEED_COLOR_TIERS = [
-  { maxMbps: 5, color: "#e5484d" }, { maxMbps: 10, color: "#d69e2e" },
-  { maxMbps: 15, color: "#64748b" }, { maxMbps: null, color: "#0891b2" }
+  { maxMbps: 10, color: "#e5484d" }, { maxMbps: 20, color: "#d69e2e" },
+  { maxMbps: 30, color: "#64748b" }, { maxMbps: null, color: "#0891b2" }
 ];
 function currentSpeedColorTiers() {
   const tiers = state.cache.speedColors;
@@ -250,7 +250,7 @@ function speedTierIndex(downloadMbps) {
 function speedTierClass(plan) { return "speed-custom"; }
 function speedColorStyle(plan) {
   const { download } = adminRateParts(plan);
-  const color = currentSpeedColorTiers()[speedTierIndex(download)]?.color || "#0891b2";
+  const color = currentSpeedColorTiers()[speedTierIndex(download * 2)]?.color || "#0891b2";
   return `--speed-color:${/^#[0-9a-fA-F]{6}$/.test(color) ? color : "#0891b2"}`;
 }
 function renderSpeedColorEditor() {
@@ -665,6 +665,12 @@ function packageTone(plan) {
   if (name.includes("monthly")) return { badge, pitch: "Resident-friendly access for steady everyday use." };
   return { badge, pitch: "Clear speed and time trade-off for everyday browsing." };
 }
+function customerSpeedLabel(rateLimit) {
+  const { download, upload } = parseRateLimit(rateLimit);
+  if (!download && !upload) return rateLimit ? escapeHtml(rateLimit) : "Standard speed";
+  return `Up to ${download * 2} Mbps ↓ / Up to ${upload * 2} Mbps ↑ · 2× burst*`;
+}
+
 function rateCard(plan, withAction = false) {
   const tone = packageTone(plan);
   const badgeHtml = tone.badge ? '<span class="rate-badge">' + escapeHtml(tone.badge) + '</span>' : "";
@@ -685,7 +691,7 @@ function rateCard(plan, withAction = false) {
     <strong>${fmtMoney(plan.priceKsh)}</strong>
     <div class="rate-meta">
       <span>${durationLabel(plan.durationSeconds)}</span>
-      <span class="rate-speed ${speedTierClass(plan)}" style="${speedColorStyle(plan)}">Speed ${friendlyRate(plan.rateLimit)}</span>
+      <span class="rate-speed ${speedTierClass(plan)}" title="*Brief burst maximum; depends on network capacity" style="${speedColorStyle(plan)}">Speed ${customerSpeedLabel(plan.rateLimit)}</span>
       <span>${escapeHtml(plan.deviceLimit)} device${Number(plan.deviceLimit) === 1 ? "" : "s"}</span>
     </div>
     ${withAction ? `<span class="action-row"><button class="secondary" type="button" data-edit-plan="${escapeHtml(plan.id)}">Edit package</button><a class="button-link secondary" href="/wifi/" target="_blank" rel="noreferrer">Preview</a><button class="danger" type="button" data-delete-plan="${escapeHtml(plan.id)}">Delete</button></span>` : ""}

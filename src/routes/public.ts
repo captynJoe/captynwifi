@@ -816,9 +816,9 @@ publicRouter.get("/speed-colors", async (_req, res, next) => {
   try {
     const setting = await prisma.wifiSpeedColorSetting.findUnique({ where: { id: "default" } });
     return res.json({ data: toJsonSafe(setting?.tiers ?? [
-      { maxMbps: 5, color: "#e5484d" },
-      { maxMbps: 10, color: "#d69e2e" },
-      { maxMbps: 15, color: "#64748b" },
+      { maxMbps: 10, color: "#e5484d" },
+      { maxMbps: 20, color: "#d69e2e" },
+      { maxMbps: 30, color: "#64748b" },
       { maxMbps: null, color: "#0891b2" }
     ]) });
   } catch (error) { return next(error); }

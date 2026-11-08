@@ -487,10 +487,10 @@ button.extend-period-btn:hover, button#pay-button:hover { filter: brightness(1.0
 .package-view[data-view="fast"].active { background: linear-gradient(135deg, #3f6bf0, var(--brand-cyan)); }
 
 /* Keep the x2 burst marker outside the speed-tier badge. */
-.speed-label, .summary-speed-group { display: inline-flex; align-items: center; gap: 5px; }
+.speed-label, .summary-speed-group { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 5px; }
 .rate-pair { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .rate-value { white-space: nowrap; }
-.rate-boost { display: inline-flex; align-items: center; color: #7dd3fc; font-size: 10px; font-weight: 900; line-height: 1; white-space: nowrap; }
+.rate-boost { display: inline-flex; align-items: center; color: #7dd3fc; font-size: 10px; font-weight: 800; line-height: 1.2; }
 
 /* ---------- Weekly rewards ---------- */
 .rewards-card { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); }
