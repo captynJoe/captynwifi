@@ -1413,7 +1413,7 @@ function suggestedUpgrade(plan: PortalPlan) {
 function upgradeReason(plan: PortalPlan, upgrade: PortalPlan) {
   const currentRate = rateParts(plan.rateLimit);
   const nextRate = rateParts(upgrade.rateLimit);
-  if (nextRate.download > currentRate.download) return `faster ↓ ${nextRate.download} Mbps`;
+  if (nextRate.download > currentRate.download) return `faster ↓ up to ${nextRate.download * BURST_MULTIPLIER} Mbps`;
   if (Number(upgrade.deviceLimit || 0) > Number(plan.deviceLimit || 0)) return `${upgrade.deviceLimit} devices`;
   if (Number(upgrade.durationSeconds || 0) > Number(plan.durationSeconds || 0)) return `${duration(upgrade.durationSeconds)} instead of ${duration(plan.durationSeconds)}`;
   return "a stronger option";
