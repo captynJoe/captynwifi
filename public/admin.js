@@ -1074,13 +1074,11 @@ function renderNetworkStatus() {
 
 // Weekly rewards: settings and tiers, this week's rewards, and this month's
 // live ranking.
-function tierRowHtml(tier = { name: "", maxRank: "", freeHours: 0, bonusHours: 0, speedBoostPct: 0 }) {
+function tierRowHtml(tier = { name: "", maxRank: "", freeHours: 0 }) {
   return `<tr class="tier-row">
     <td><input data-tier="name" type="text" maxlength="24" value="${escapeHtml(tier.name)}" required /></td>
     <td><input data-tier="maxRank" type="number" min="1" max="500" value="${escapeHtml(tier.maxRank)}" required /></td>
     <td><input data-tier="freeHours" type="number" min="0" max="720" value="${escapeHtml(tier.freeHours)}" /></td>
-    <td><input data-tier="bonusHours" type="number" min="0" max="720" value="${escapeHtml(tier.bonusHours)}" /></td>
-    <td><input data-tier="speedBoostPct" type="number" min="0" max="200" value="${escapeHtml(tier.speedBoostPct)}" /></td>
     <td><button class="device-remove-btn" type="button" data-remove-tier>Remove</button></td>
   </tr>`;
 }
@@ -1995,7 +1993,7 @@ document.getElementById("loyalty-form")?.addEventListener("submit", async (event
   const status = document.getElementById("loyalty-status");
   const tiers = [...document.querySelectorAll("#loyalty-tiers .tier-row")].map((row) => {
     const value = (key) => row.querySelector(`[data-tier="${key}"]`).value;
-    return { name: value("name").trim(), maxRank: Number(value("maxRank")), freeHours: Number(value("freeHours") || 0), bonusHours: Number(value("bonusHours") || 0), speedBoostPct: Number(value("speedBoostPct") || 0) };
+    return { name: value("name").trim(), maxRank: Number(value("maxRank")), freeHours: Number(value("freeHours") || 0) };
   });
   if (!tiers.length) { status.textContent = "Add at least one tier"; return; }
   const save = document.getElementById("loyalty-save");

@@ -434,8 +434,7 @@ async function activateCredit(creditId: string) {
 }
 
 // ---------- Weekly rewards ----------
-// This month's rank, points and tier, what it takes to climb, and this
-// week's reward cards (free time, or a package with bonus time and speed).
+// This month's live rank and this week's snapshotted free-time reward.
 const rewardsEl = document.getElementById("rewards");
 let rewardsData: any = null;
 let rewardBusy = false;
@@ -475,14 +474,14 @@ function renderRewards() {
     const gap = (g) => (g.ksh ? `${money(g.ksh)} more` : `${g.points} more points`);
     const lines = [];
     if (standing.nextRank) lines.push(`${gap(standing.nextRank)} this month passes #${standing.nextRank.rank}`);
-    else lines.push(`You're #1 this month`);
+    else lines.push(`Top of this month's qualifying list`);
     if (standing.nextTier && (!standing.nextRank || standing.nextTier.points > standing.nextRank.points)) lines.push(`${gap(standing.nextTier)} reaches ${esc(standing.nextTier.name)}`);
     standingHtml = `<div class="rewards-standing">
         ${standing.tier ? `<span class="tier-badge tier-${tierIndex(standing.tier) + 1}">${esc(standing.tier)}</span>` : ""}
-        <strong class="rewards-rank">#${standing.rank}</strong>
+        <strong class="rewards-rank">#${standing.rank} of ${data.rankedCount}</strong>
         <span>${standing.points} points · ${monthName}</span>
       </div>
-      <p class="rewards-next">${lines.map(esc).join(" · ")}</p>`;
+      <p class="rewards-next">Paid on ${data.minPaidDays}+ separate days to qualify. ${lines.map(esc).join(" · ")}</p>`;
   }
 
   const reward = data.reward;
@@ -490,16 +489,11 @@ function renderRewards() {
   if (reward) {
     const pickBy = new Date(reward.expiresAt).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
     const disabled = rewardBusy ? " disabled" : "";
-    const cards = [
-      `<button class="reward-card reward-free" type="button" data-reward-free${disabled}>
-        <span class="reward-kicker">Free</span><strong>${esc(duration(reward.freeSeconds))}</strong><span>Starts now on this device</span></button>`,
-      ...(reward.cards || []).map((card) => `<button class="reward-card" type="button" data-reward-plan="${esc(card.planId)}"${disabled}>
-        <span class="reward-kicker">Pay ${money(card.priceKsh)}</span><strong>${esc(card.name)}</strong>
-        <span>${esc(duration(card.durationSeconds))}${card.bonusSeconds ? ` <b>+${esc(duration(card.bonusSeconds))}</b>` : ""}</span>
-        <span>${friendlyRate(card.boostedRateLimit)}</span></button>`)
-    ];
-    cardsHtml = `<div class="reward-head"><strong>${esc(reward.tier)} reward · pick one</strong><span>by ${esc(pickBy)}</span></div>
-      <div class="reward-cards">${cards.join("")}</div>`;
+    const rewardMonth = reward.month ? new Date(`${reward.month}-01T00:00:00Z`).toLocaleString("en", { month: "long", year: "numeric", timeZone: "UTC" }) : "";
+    const active = state.currentEntitlement && new Date(state.currentEntitlement.expiresAt).getTime() > Date.now();
+    cardsHtml = `<div class="reward-head"><strong>${esc(reward.tier)} free-time reward${rewardMonth ? ` · based on ${esc(rewardMonth)} rank #${reward.rank}` : ""}</strong><span>claim by ${esc(pickBy)}</span></div>
+      <div class="reward-cards"><button class="reward-card reward-free" type="button" data-reward-free${disabled}>
+        <span class="reward-kicker">Free</span><strong>${esc(duration(reward.freeSeconds))}</strong><span>${active ? "Adds to your current access" : "Starts when claimed on this device"}</span></button></div>`;
   }
   rewardsEl.innerHTML = `<article class="rewards-card">${standingHtml}${cardsHtml}</article>`;
   rewardsEl.classList.remove("hidden");
@@ -1802,6 +1796,7 @@ function showConnectedPanel(entitlement: Entitlement, { heading, skipAutoConnect
   if (introRowEl) introRowEl.classList.add("hidden");
   renderOutageNote(entitlement);
   state.currentEntitlement = entitlement;
+  renderRewards();
   hideDeviceLimitNotice();
   renderDeviceList(entitlement);
   // Remembered access (a later visit on this device) doesn't carry the

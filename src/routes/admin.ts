@@ -1769,8 +1769,8 @@ const loyaltyTierSchema = z.object({
   name: z.string().trim().min(1).max(24),
   maxRank: z.coerce.number().int().min(1).max(500),
   freeHours: z.coerce.number().int().min(0).max(720),
-  bonusHours: z.coerce.number().int().min(0).max(720),
-  speedBoostPct: z.coerce.number().int().min(0).max(200)
+  bonusHours: z.coerce.number().int().min(0).max(720).optional().default(0),
+  speedBoostPct: z.coerce.number().int().min(0).max(200).optional().default(0)
 });
 const loyaltySettingSchema = z.object({
   enabled: z.boolean(),

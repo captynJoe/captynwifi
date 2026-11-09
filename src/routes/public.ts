@@ -1759,18 +1759,6 @@ async function loyaltyPhone(usernameRaw: unknown, deviceMacRaw: unknown): Promis
   return last?.customerPhone ?? null;
 }
 
-// What a reward package costs this customer: a running package is topped up
-// at its own device count, like any checkout.
-async function rewardPlanPrice(plan: WifiPlan, phone: string) {
-  const existingActive = await prisma.wifiEntitlement.findFirst({
-    where: { username: phone, ...activeAccessWhere(new Date()) },
-    orderBy: { expiresAt: "desc" },
-    select: { deviceLimit: true }
-  });
-  const deviceCount = existingActive ? existingActive.deviceLimit : plan.deviceLimit;
-  return { deviceCount, priceKsh: devicePrice(plan, deviceCount) };
-}
-
 publicRouter.get("/loyalty/me", publicDeviceLookupLimit, async (req, res, next) => {
   try {
     const now = new Date();
@@ -1809,27 +1797,12 @@ publicRouter.get("/loyalty/me", publicDeviceLookupLimit, async (req, res, next) 
 
     const reward = await prisma.wifiLoyaltyReward.findFirst({
       where: { customerPhone: phone, status: "available", expiresAt: { gt: now } },
-      orderBy: { createdAt: "desc" }
+      orderBy: { createdAt: "desc" },
+      include: { round: { select: { month: true } } }
     });
     let rewardView: Record<string, unknown> | null = null;
     if (reward) {
-      const plans = await prisma.wifiPlan.findMany({ where: { id: { in: reward.offerPlanIds }, ...PURCHASABLE_PLAN_WHERE } });
-      const cards = [];
-      for (const planId of reward.offerPlanIds) {
-        const plan = plans.find((entry) => entry.id === planId);
-        if (!plan) continue;
-        const { priceKsh } = await rewardPlanPrice(plan, phone);
-        cards.push({
-          planId: plan.id,
-          name: plan.name,
-          priceKsh,
-          durationSeconds: plan.durationSeconds,
-          bonusSeconds: reward.bonusSeconds,
-          rateLimit: plan.rateLimit,
-          boostedRateLimit: reward.speedBoostPct ? boostRateLimit(plan.rateLimit, reward.speedBoostPct) : plan.rateLimit
-        });
-      }
-      rewardView = { id: reward.id, tier: reward.tier, rank: reward.rank, expiresAt: reward.expiresAt, freeSeconds: reward.freeSeconds, speedBoostPct: reward.speedBoostPct, cards };
+      rewardView = { id: reward.id, tier: reward.tier, rank: reward.rank, month: reward.round.month, expiresAt: reward.expiresAt, freeSeconds: reward.freeSeconds };
     }
 
     return res.json({
@@ -1904,77 +1877,10 @@ publicRouter.post("/loyalty/rewards/:id/free", publicCreditActivationLimit, asyn
   }
 });
 
-const rewardPaySchema = rewardIdentitySchema.extend({ planId: z.string().min(1) });
-
-// A package card: an M-PESA prompt to the reward's number for that package;
-// activation adds the bonus time and speed (claimRewardBoost).
-publicRouter.post("/loyalty/rewards/:id/pay", publicPaymentIpLimit, async (req, res, next) => {
-  try {
-    const body = rewardPaySchema.parse(req.body ?? {});
-    const reward = await ownedAvailableReward(req.params.id, body);
-    if (!reward.offerPlanIds.includes(body.planId)) return res.status(400).json({ error: "Pick one of this reward's packages." });
-    const plan = await prisma.wifiPlan.findFirst({ where: { id: body.planId, ...PURCHASABLE_PLAN_WHERE }, include: { site: true } });
-    if (!plan) return res.status(404).json({ error: "That package isn't on sale right now." });
-    const mpesa = getMpesaStatus();
-    if (!mpesa.configured) return res.status(503).json({ error: "M-PESA is not configured for WiFi payments." });
-
-    const payingMac = normalizeDeviceMac(body.deviceMac);
-    const existingActive = await prisma.wifiEntitlement.findFirst({
-      where: { username: reward.customerPhone, ...activeAccessWhere(new Date()) },
-      orderBy: { expiresAt: "desc" },
-      include: { devices: { select: { deviceMac: true, signedOutAt: true } } }
-    });
-    if (existingActive && payingMac && payingDeviceNeedsSlot(existingActive, existingActive.devices, payingMac)) {
-      return res.status(409).json({ error: "Your package is running on another device. Use this reward from that device." });
-    }
-    const { deviceCount, priceKsh } = await rewardPlanPrice(plan, reward.customerPhone);
-
-    const reference = sourceReference();
-    const intent = await prisma.wifiPaymentIntent.create({
-      data: {
-        siteId: plan.siteId,
-        planId: plan.id,
-        source: "captyn_wifi_portal",
-        sourceReference: reference,
-        customerPhone: reward.customerPhone,
-        deviceMac: payingMac,
-        amountKsh: priceKsh,
-        deviceCount,
-        loyaltyRewardId: reward.id,
-        provider: "mpesa",
-        status: "pending_confirmation"
-      }
-    });
-    const stk = await initiateWifiStkPush({
-      amount: priceKsh,
-      phoneNumber: reward.customerPhone,
-      accountReference: reference.slice(0, 12),
-      transactionDesc: `CAPTYN WiFi ${plan.name} reward`.slice(0, 64),
-      callbackUrl: config.mpesa.callbackUrl
-    });
-    const checkoutRequestId = typeof stk.CheckoutRequestID === "string" ? stk.CheckoutRequestID : null;
-    const responseCode = typeof stk.ResponseCode === "string" ? stk.ResponseCode : null;
-    const updated = await prisma.wifiPaymentIntent.update({
-      where: { id: intent.id },
-      data: { providerReference: checkoutRequestId, status: responseCode === "0" ? "pending_confirmation" : "failed", rawPayload: stk as Prisma.InputJsonValue }
-    });
-    return res.status(201).json({
-      data: toJsonSafe({
-        id: updated.id,
-        status: updated.status,
-        sourceReference: updated.sourceReference,
-        checkoutRequestId,
-        customerMessage: stk.CustomerMessage || stk.ResponseDescription || "Check your phone to complete payment.",
-        amountKsh: priceKsh,
-        deviceCount,
-        site: plan.site,
-        plan
-      })
-    });
-  } catch (error) {
-    if (error instanceof PublicRouteError) return res.status(error.statusCode).json({ error: error.message });
-    return next(error);
-  }
+// Paid reward package cards are retired; this route stays as a clear response
+// for open tabs or bookmarked clients running an older portal script.
+publicRouter.post("/loyalty/rewards/:id/pay", publicPaymentIpLimit, (_req, res) => {
+  return res.status(410).json({ error: "Paid reward packages are no longer offered. Claim your free-time reward instead." });
 });
 
 publicRouter.get("/credits/redeemable", async (req, res, next) => {

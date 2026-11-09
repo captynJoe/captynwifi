@@ -5,8 +5,7 @@ import type { Prisma, PrismaClient, WifiLoyaltyRound, WifiLoyaltySetting } from 
 // spent against the month's top spender, 30 for how regularly they paid
 // against the most regular. Every Sunday the ranking is frozen into tiers;
 // on a random daytime moment that week each ranked customer gets a reward
-// and picks one card: free time, or a suggested package with bonus time
-// and a speed boost.
+// and receives a free-time credit.
 
 export const LOYALTY_REASON = "LOYALTY_REWARD";
 
@@ -22,13 +21,11 @@ const RELEASE_TO_HOUR = 20;
 // Sundays this early in a month reward last month's final ranking, since
 // this month's points have barely started.
 const NEW_MONTH_GRACE_DAYS = 7;
-const OFFER_COUNT = 3;
 const PURCHASABLE_PLAN_WHERE: Prisma.WifiPlanWhereInput = {
   enabled: true,
   priceKsh: { gt: 0 },
   OR: [{ source: "captyn_dynamic" }, { source: "captyn_admin", manualPricing: true }]
 };
-
 export type LoyaltyTier = { name: string; maxRank: number; freeHours: number; bonusHours: number; speedBoostPct: number };
 export const DEFAULT_TIERS: LoyaltyTier[] = [
   { name: "Gold", maxRank: 5, freeHours: 12, bonusHours: 3, speedBoostPct: 50 },
@@ -189,25 +186,6 @@ export async function monthStandings(prisma: PrismaClient, now = new Date()) {
   return { setting, month: monthKey(from), ranked };
 }
 
-// Up to three packages a customer is offered as reward cards: what they buy
-// most, topped up with what sells most, all currently on sale.
-async function suggestedPlanIds(prisma: PrismaClient, phone: string, now: Date): Promise<string[]> {
-  const purchasable = await prisma.wifiPlan.findMany({ where: PURCHASABLE_PLAN_WHERE, select: { id: true } });
-  const allowed = new Set(purchasable.map((plan) => plan.id));
-  const since = new Date(now.getTime() - 60 * DAY_MS);
-  const [mine, popular] = await Promise.all([
-    prisma.wifiPaymentIntent.groupBy({ by: ["planId"], where: { customerPhone: phone, status: "activated", amountKsh: { gt: 0 }, createdAt: { gte: since } }, _count: { _all: true } }),
-    prisma.wifiPaymentIntent.groupBy({ by: ["planId"], where: { status: "activated", amountKsh: { gt: 0 }, createdAt: { gte: new Date(now.getTime() - 30 * DAY_MS) } }, _count: { _all: true } })
-  ]);
-  const order = (rows: Array<{ planId: string; _count: { _all: number } }>) => rows.sort((a, b) => b._count._all - a._count._all).map((row) => row.planId);
-  const picked: string[] = [];
-  for (const planId of [...order(mine), ...order(popular)]) {
-    if (allowed.has(planId) && !picked.includes(planId)) picked.push(planId);
-    if (picked.length === OFFER_COUNT) break;
-  }
-  return picked;
-}
-
 // Picks this week's round once; later calls return the existing one.
 export async function pickLoyaltyRound(prisma: PrismaClient, now = new Date()): Promise<WifiLoyaltyRound> {
   const weekOf = nairobiWeekStart(now);
@@ -230,9 +208,9 @@ export async function pickLoyaltyRound(prisma: PrismaClient, now = new Date()): 
       paidDays: customer.paidDays,
       tier: tier.name,
       freeSeconds: tier.freeHours * 3600,
-      bonusSeconds: tier.bonusHours * 3600,
-      speedBoostPct: tier.speedBoostPct,
-      offerPlanIds: await suggestedPlanIds(prisma, customer.phone, now)
+      bonusSeconds: 0,
+      speedBoostPct: 0,
+      offerPlanIds: []
     });
   }
   return prisma.wifiLoyaltyRound.create({
@@ -253,7 +231,7 @@ export async function releaseLoyaltyRound(prisma: PrismaClient, round: WifiLoyal
           customerPhone: reward.customerPhone,
           type: "loyalty_reward",
           title: `${reward.tier} reward · #${reward.rank}`,
-          body: "Your weekly reward is here. Open CAPTYN WiFi and pick a card.",
+          body: "Your weekly free-time reward is here. Open CAPTYN WiFi to claim it.",
           data: { rewardId: reward.id, tier: reward.tier, rank: reward.rank, expiresAt: expiresAt.toISOString() }
         }
       })
