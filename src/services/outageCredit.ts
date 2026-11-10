@@ -49,6 +49,10 @@ function secondsBetween(start: Date, end: Date) {
   return Math.max(0, Math.floor((end.getTime() - start.getTime()) / 1000));
 }
 
+export function expiryFromFrozenBalance(resumedAt: Date, remainingSeconds: number) {
+  return new Date(resumedAt.getTime() + Math.max(0, remainingSeconds) * 1000);
+}
+
 // Pure decision function for the accounting-activity outage lane. Unlike the
 // self-heartbeat lane (touched every tick just for being called), this
 // checkpoint only moves forward on real evidence: fresh radacct activity
@@ -122,13 +126,13 @@ async function creditEntitlement(
   tx: Prisma.TransactionClient,
   entitlement: EntitlementForCredit,
   remainingSeconds: number,
+  recoveredAt: Date,
   now: Date
 ) {
   const pausedAt = entitlement.outagePausedAt ?? now;
-  // Keep the paid entitlement and credentials in place. Resume its clock with
-  // exactly the time left when the outage began; outage duration is never
-  // added. Turning this into a separate wallet credit had logged users out and
-  // required manual activation even when their sessions had been working.
+  // Keep the paid entitlement and credentials in place. Restore the frozen
+  // balance at the observed recovery timestamp so only the actual outage
+  // interval extends access; worker polling delay must not add extra time.
   const currentPaidSibling = await tx.wifiEntitlement.findFirst({
     where: {
       username: entitlement.username,
@@ -142,22 +146,23 @@ async function creditEntitlement(
   });
   const target = currentPaidSibling ?? entitlement;
   // For the paused entitlement itself, expiresAt already stores its original
-  // paid endpoint. Reuse the remaining balance from that endpoint exactly
-  // once, starting its clock at recovery; adding it to the old future expiry
-  // doubles the package on every outage cycle. If a separate active sibling
-  // receives the balance, append it to that sibling as before.
+  // paid endpoint. Reuse the frozen balance exactly once, starting at the
+  // observed recovery time. Adding it to the old endpoint would double the
+  // package on every outage cycle; starting at worker poll time would grant
+  // extra time for polling delay. If an active sibling receives the balance,
+  // append it there as before.
   const timeBase = target.id === entitlement.id
-    ? now
-    : target.expiresAt > now ? target.expiresAt : now;
-  const expiresAt = new Date(timeBase.getTime() + remainingSeconds * 1000);
+    ? recoveredAt
+    : target.expiresAt > recoveredAt ? target.expiresAt : recoveredAt;
+  const expiresAt = expiryFromFrozenBalance(timeBase, remainingSeconds);
   const resumed = await tx.wifiEntitlement.update({
     where: { id: target.id },
-    data: { status: "active", expiresAt, outagePausedAt: null, outagePauseCause: null }
+    data: { status: "active", expiresAt, outagePausedAt: null, outagePauseCause: null, outageRemainingSeconds: null }
   });
   if (target.id !== entitlement.id) {
     await tx.wifiEntitlement.update({
       where: { id: entitlement.id },
-      data: { status: "expired", expiresAt: pausedAt, outagePausedAt: null, outagePauseCause: null }
+      data: { status: "expired", expiresAt: pausedAt, outagePausedAt: null, outagePauseCause: null, outageRemainingSeconds: null }
     });
   }
   const projection = buildRadiusProjection({
@@ -222,11 +227,21 @@ async function creditEntitlement(
 // the same outage is still ongoing. Doesn't touch RADIUS state -- that only
 // changes once the entitlement actually resumes (see resumePausedEntitlements).
 async function pauseActiveEntitlements(tx: Prisma.TransactionClient, outageStartedAt: Date, cause: string): Promise<number> {
-  const result = await tx.wifiEntitlement.updateMany({
-    where: { status: "active", outagePausedAt: null, expiresAt: { gt: outageStartedAt } },
-    data: { outagePausedAt: outageStartedAt, outagePauseCause: cause }
-  });
-  return result.count;
+  const paused = await tx.$queryRaw<Array<{ id: string }>>`
+    UPDATE "WifiEntitlement"
+    SET "outagePausedAt" = ${outageStartedAt},
+        "outagePauseCause" = ${cause},
+        "outageRemainingSeconds" = GREATEST(
+          0,
+          EXTRACT(EPOCH FROM ("expiresAt" - ${outageStartedAt}))::DOUBLE PRECISION
+        ),
+        "updatedAt" = now()
+    WHERE status = 'active'
+      AND "outagePausedAt" IS NULL
+      AND "expiresAt" > ${outageStartedAt}
+    RETURNING id
+  `;
+  return paused.length;
 }
 
 // Lane A: self-heartbeat, checked once at worker startup. A running loop's
@@ -386,7 +401,8 @@ export async function resumePausedEntitlements(prisma: PrismaClient): Promise<Re
         rateLimit: true,
         deviceLimit: true,
         outagePausedAt: true,
-        outagePauseCause: true
+        outagePauseCause: true,
+        outageRemainingSeconds: true
       }
     });
 
@@ -423,7 +439,8 @@ export async function resumePausedEntitlements(prisma: PrismaClient): Promise<Re
         where: { entitlementId },
         orderBy: { createdAt: "desc" }
       });
-      if (!audit || audit.creditedSeconds <= 0) continue;
+      const remainingSeconds = audit?.remainingSeconds ?? audit?.creditedSeconds ?? 0;
+      if (!audit || remainingSeconds <= 0) continue;
 
       await creditEntitlement(tx, {
         id: entitlement.id,
@@ -438,10 +455,10 @@ export async function resumePausedEntitlements(prisma: PrismaClient): Promise<Re
         deviceLimit: entitlement.deviceLimit,
         outagePausedAt: audit.outageStartedAt,
         outagePauseCause: audit.service
-      }, audit.creditedSeconds, now);
+      }, remainingSeconds, audit.outageEndedAt, now);
       await tx.wifiCredit.update({ where: { id: credit.id }, data: { expiresAt: now } });
       resumed += 1;
-      totalCreditedSeconds += audit.creditedSeconds;
+      totalCreditedSeconds += secondsBetween(audit.outageStartedAt, audit.outageEndedAt);
     }
 
     for (const entitlement of paused) {
@@ -463,17 +480,18 @@ export async function resumePausedEntitlements(prisma: PrismaClient): Promise<Re
       const reconnectedAt = deviceReconnectedAt ?? (fleetRecoveredAt && fleetRecoveredAt > pausedAt ? fleetRecoveredAt : null);
       if (!reconnectedAt) continue;
 
-      const remainingSeconds = secondsBetween(pausedAt, entitlement.expiresAt);
+      const remainingSeconds = entitlement.outageRemainingSeconds ?? secondsBetween(pausedAt, entitlement.expiresAt);
+      const outageSeconds = secondsBetween(pausedAt, reconnectedAt);
       const service = entitlement.outagePauseCause ?? "unknown";
       const inserted = await tx.$queryRaw<CreditInsertRow[]>`
-        INSERT INTO "WifiOutageCredit" ("service", "outageStartedAt", "outageEndedAt", "creditedSeconds", "affectedEntitlements", "entitlementId")
-        VALUES (${service}, ${pausedAt}, ${reconnectedAt}, ${remainingSeconds}, 1, ${entitlement.id})
+        INSERT INTO "WifiOutageCredit" ("service", "outageStartedAt", "outageEndedAt", "creditedSeconds", "remainingSeconds", "affectedEntitlements", "entitlementId")
+        VALUES (${service}, ${pausedAt}, ${reconnectedAt}, ${outageSeconds}, ${remainingSeconds}, 1, ${entitlement.id})
         ON CONFLICT ("service", "outageStartedAt", "outageEndedAt", "entitlementId") DO NOTHING
         RETURNING "id"
       `;
       if (inserted[0]?.id) {
-        await creditEntitlement(tx, entitlement, remainingSeconds, now);
-        totalCreditedSeconds += remainingSeconds;
+        await creditEntitlement(tx, entitlement, remainingSeconds, reconnectedAt, now);
+        totalCreditedSeconds += outageSeconds;
       }
       resumed += 1;
     }

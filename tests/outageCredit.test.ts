@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { decideAccountingOutageAction, decideResumeAction } from "../src/services/outageCredit.js";
+import { decideAccountingOutageAction, decideResumeAction, expiryFromFrozenBalance } from "../src/services/outageCredit.js";
 
 const GRACE_SECONDS = 600;
 const RECONNECT_WINDOW_SECONDS = 60 * 60 * 48;
@@ -32,24 +32,53 @@ test("a checkpoint stale beyond the grace window triggers a credit for the elaps
   assert.deepEqual(decision, {
     type: "credit",
     creditedSeconds: GRACE_SECONDS + 120,
-    outageStartedAt: checkpoint,
-    nextCheckpoint: now
+    outageStartedAt: checkpoint
   });
 });
 
-test("a long-running outage credits again in fresh increments rather than re-crediting the same span", () => {
+test("repeated stale polls continue to point at the same persisted outage start", () => {
   const checkpoint = new Date("2026-08-16T10:00:00Z");
   const lastActivity = checkpoint;
   const firstNow = new Date(checkpoint.getTime() + (GRACE_SECONDS + 60) * 1000);
+  const secondNow = new Date(firstNow.getTime() + 30 * 1000);
 
   const first = decideAccountingOutageAction(checkpoint, lastActivity, firstNow, GRACE_SECONDS);
-  assert.equal(first.type, "credit");
-  if (first.type !== "credit") throw new Error("unreachable");
+  const second = decideAccountingOutageAction(checkpoint, lastActivity, secondNow, GRACE_SECONDS);
 
-  // The orchestrator advances the checkpoint to `nextCheckpoint` after crediting.
-  const secondNow = new Date(first.nextCheckpoint.getTime() + 30 * 1000);
-  const second = decideAccountingOutageAction(first.nextCheckpoint, lastActivity, secondNow, GRACE_SECONDS);
-  assert.deepEqual(second, { type: "healthy" });
+  assert.equal(first.type, "credit");
+  assert.equal(second.type, "credit");
+  if (first.type !== "credit" || second.type !== "credit") throw new Error("unreachable");
+  assert.equal(first.outageStartedAt.toISOString(), checkpoint.toISOString());
+  assert.equal(second.outageStartedAt.toISOString(), checkpoint.toISOString());
+});
+
+test("a monthly package keeps only its original balance plus the real outage interval", () => {
+  const startsAt = new Date("2026-10-31T18:37:15.986Z");
+  const originalExpiry = new Date(startsAt.getTime() + 30 * 24 * 60 * 60 * 1000);
+  const outageStart = new Date("2026-11-03T14:09:41.981Z");
+  const recovery = new Date("2026-11-04T11:36:54.663Z");
+  const frozenBalanceSeconds = (originalExpiry.getTime() - outageStart.getTime()) / 1000;
+
+  const restoredExpiry = expiryFromFrozenBalance(recovery, frozenBalanceSeconds);
+  const outageMilliseconds = recovery.getTime() - outageStart.getTime();
+  assert.equal(restoredExpiry.getTime(), originalExpiry.getTime() + outageMilliseconds);
+});
+
+test("five-minute outage episodes add only their elapsed time, not the frozen monthly balance", () => {
+  const startsAt = new Date("2026-10-29T15:38:00.700Z");
+  const originalExpiry = new Date(startsAt.getTime() + 30 * 24 * 60 * 60 * 1000);
+  let expiry = originalExpiry;
+  const intervals = [302, 306, 301, 301, 302];
+  let cursor = new Date("2026-11-08T10:59:17.000Z");
+
+  for (const outageSeconds of intervals) {
+    const remainingAtPause = (expiry.getTime() - cursor.getTime()) / 1000;
+    const recoveredAt = new Date(cursor.getTime() + outageSeconds * 1000);
+    expiry = expiryFromFrozenBalance(recoveredAt, remainingAtPause);
+    cursor = recoveredAt;
+  }
+
+  assert.equal(expiry.getTime(), originalExpiry.getTime() + intervals.reduce((sum, value) => sum + value, 0) * 1000);
 });
 
 test("a still-disconnected entitlement stays paused with no reconnect observed", () => {
