@@ -2556,7 +2556,7 @@ packageUpgradeBtn.addEventListener("click", async () => {
     };
     render();
   } catch (_error) {
-    packageUpgradeOptions.innerHTML = '<p class="device-locked">Couldn't load upgrade options. Try again.</p>';
+    packageUpgradeOptions.innerHTML = "<p class=\"device-locked\">Couldn't load upgrade options. Try again.</p>";
   }
 });
 packageUpgradePay.addEventListener("click", async () => {
