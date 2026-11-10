@@ -39,7 +39,7 @@ const LEGACY_OUTAGE_CREDIT_PREFIX = "outage-recovery-2026-11-03:";
 export type AccountingOutageDecision =
   | { type: "advance"; checkpoint: Date }
   | { type: "healthy" }
-  | { type: "credit"; creditedSeconds: number; outageStartedAt: Date; nextCheckpoint: Date };
+  | { type: "credit"; creditedSeconds: number; outageStartedAt: Date };
 
 export type ResumeDecision =
   | { type: "still-paused" }
@@ -69,7 +69,7 @@ export function decideAccountingOutageAction(
     return { type: "healthy" };
   }
 
-  return { type: "credit", creditedSeconds: staleSeconds, outageStartedAt: checkpoint, nextCheckpoint: now };
+  return { type: "credit", creditedSeconds: staleSeconds, outageStartedAt: checkpoint };
 }
 
 // Pure decision function for the per-entitlement resume sweep. `reconnectedAt`
@@ -141,7 +141,14 @@ async function creditEntitlement(
     orderBy: { expiresAt: "desc" }
   });
   const target = currentPaidSibling ?? entitlement;
-  const timeBase = target.expiresAt > now ? target.expiresAt : now;
+  // For the paused entitlement itself, expiresAt already stores its original
+  // paid endpoint. Reuse the remaining balance from that endpoint exactly
+  // once, starting its clock at recovery; adding it to the old future expiry
+  // doubles the package on every outage cycle. If a separate active sibling
+  // receives the balance, append it to that sibling as before.
+  const timeBase = target.id === entitlement.id
+    ? now
+    : target.expiresAt > now ? target.expiresAt : now;
   const expiresAt = new Date(timeBase.getTime() + remainingSeconds * 1000);
   const resumed = await tx.wifiEntitlement.update({
     where: { id: target.id },
@@ -346,7 +353,11 @@ export async function evaluateAccountingOutage(prisma: PrismaClient): Promise<Pa
     }
 
     const pausedCount = await pauseActiveEntitlements(tx, decision.outageStartedAt, ACCOUNTING_OUTAGE_SERVICE);
-    await upsertHeartbeat(tx, ACCOUNTING_OUTAGE_SERVICE, decision.nextCheckpoint);
+    // Do not move the activity checkpoint on silence. resumePausedEntitlements
+    // reads this same heartbeat as recovery evidence, so advancing it here
+    // would let the detector certify its own false recovery one second later.
+    // The checkpoint advances only in the `advance` branch above, on new
+    // radacct activity.
 
     return { paused: pausedCount > 0, pausedCount, outageSeconds: decision.creditedSeconds };
   }, { maxWait: 10_000, timeout: 30_000 });
