@@ -22,7 +22,10 @@ export type BuildEntitlementInput = {
 
 export function normalizeDeviceMac(mac?: string | null): string | null {
   const trimmed = String(mac ?? "").trim();
-  return trimmed ? trimmed.toUpperCase() : null;
+  if (!trimmed) return null;
+  const compact = trimmed.replace(/[:-]/g, "");
+  if (!/^[A-Fa-f0-9]{12}$/.test(compact)) return null;
+  return compact.toUpperCase().match(/.{2}/g)?.join(":") ?? null;
 }
 
 export function normalizeWifiUsername(phone: string): string {

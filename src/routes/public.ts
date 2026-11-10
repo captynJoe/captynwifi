@@ -12,12 +12,13 @@ import { claimPromoGrant, getLivePromo } from "../services/promo.js";
 import { formatCreditDuration } from "../services/credits.js";
 import { bodyFieldKey, clientRateLimit, ipKey } from "../middleware/rateLimitGuard.js";
 import { ensureConnectCode, normalizeConnectCode } from "../services/connectCode.js";
-import { kickHotspotDevice } from "../services/routeros.js";
+import { isCurrentHotspotHost, kickHotspotDevice } from "../services/routeros.js";
 import { deviceCap, payingDeviceNeedsSlot, publicDevice } from "../services/deviceLedger.js";
 import { MAX_DEVICES, addDeviceQuote, deviceOptions, devicePrice, maxDevicesFor } from "../services/devicePricing.js";
 import { LOYALTY_REASON, PURCHASABLE_PLAN_WHERE, climbGap, monthStandings, nairobiMonthStart, tierForRank } from "../services/loyalty.js";
 import { boostRateLimit, fasterRateLimit } from "../services/rateLimit.js";
 import { activatePppoePayment, publicPppoeAccount } from "../services/pppoe.js";
+import { createUniqueCaptynWifiUsername } from "../services/captynUsername.js";
 
 export const publicRouter = Router();
 
@@ -37,14 +38,8 @@ const publicCredentialLinkLimit = clientRateLimit({
   message: "Too many reconnect attempts. Try again shortly."
 });
 
-// by-device returns cleartext credentials (the hidden-iframe auto-login
-// needs them client-side), so unlike most reads here this one is a genuine
-// credential-disclosure surface if left unlimited -- a MAC is visible to
-// anyone sharing the WiFi (broadcast in every 802.11 frame), so an
-// unthrottled lookup would let another device on the same network query a
-// victim's known MAC and get their password back. Rate limiting doesn't
-// fully close that -- a single targeted guess still gets through -- but it
-// kills mass enumeration, which is the realistic version of this attack.
+// Credential lookup is additionally gated by a live MikroTik MAC/IP host
+// match below; this throttle limits API work and repeated targeted attempts.
 const publicDeviceLookupLimit = clientRateLimit({
   name: "wifi-public-device-lookup",
   windowMs: 15 * 60 * 1000,
@@ -148,11 +143,13 @@ const addDeviceStkSchema = z.object({
 const freeAccessSchema = z.object({
   planId: z.string().min(1),
   funnelSessionId: z.string().uuid().optional(),
-  deviceMac: z.string().trim().optional().nullable()
+  deviceMac: z.string().trim().optional().nullable(),
+  deviceIp: z.string().trim().optional().nullable()
 });
 
 const creditActivationSchema = z.object({
   username: z.string().trim().optional().nullable(),
+  password: z.string().min(1).optional().nullable(),
   deviceMac: z.string().trim().optional().nullable()
 });
 
@@ -232,6 +229,7 @@ async function publicEntitlement(entitlement: {
   deviceLimit: number;
   rateLimit: string | null;
   outagePausedAt: Date | null;
+  packageUpgradedAt?: Date | null;
 }) {
   const [totalCreditedSeconds, devices] = await Promise.all([
     sumOutageCreditSeconds(entitlement.id),
@@ -239,6 +237,7 @@ async function publicEntitlement(entitlement: {
   ]);
   return {
     planId: entitlement.planId,
+    packageUpgradedAt: "packageUpgradedAt" in entitlement ? entitlement.packageUpgradedAt : null,
     username: entitlement.username,
     password: entitlement.cleartextSecret,
     // startsAt lets the portal draw time left as a share of the package.
@@ -316,6 +315,15 @@ async function findCurrentEntitlementForUsername(username: string, at = new Date
   });
 }
 
+async function findCurrentEntitlementForPhone(customerPhone: string, at = new Date()) {
+  const active = await prisma.wifiEntitlement.findFirst({
+    where: { customerPhone, ...activeAccessWhere(at) },
+    orderBy: { expiresAt: "desc" }
+  });
+  if (active) return active;
+  return prisma.wifiEntitlement.findFirst({ where: { customerPhone }, orderBy: { expiresAt: "desc" } });
+}
+
 function metadataValue(metadata: CallbackMetadata | undefined, name: string) {
   const item = metadata?.Item?.find((entry) => entry.Name === name);
   return item?.Value;
@@ -346,10 +354,12 @@ async function applyAddDevicePayment(tx: Prisma.TransactionClient, paymentIntent
     where: { id: paymentIntent.targetEntitlementId as string },
     include: { projection: true }
   });
-  if (!target) throw new Error("Package for this device upgrade not found");
+  if (!target || target.packageUpgradedAt) throw new PublicRouteError(409, "This package has already been upgraded for the current term.");
 
   const deviceLimit = Math.max(target.deviceLimit, paymentIntent.deviceCount ?? target.deviceLimit);
-  const entitlement = await tx.wifiEntitlement.update({ where: { id: target.id }, data: { deviceLimit } });
+  const claimed = await tx.wifiEntitlement.updateMany({ where: { id: target.id, packageUpgradedAt: null, status: "active", expiresAt: { gt: now } }, data: { deviceLimit, packageUpgradedAt: now } });
+  if (claimed.count !== 1) throw new PublicRouteError(409, "This package has already been upgraded for the current term.");
+  const entitlement = await tx.wifiEntitlement.findUniqueOrThrow({ where: { id: target.id } });
   const projection = buildRadiusProjection({
     entitlementId: entitlement.id,
     phone: entitlement.customerPhone,
@@ -375,6 +385,28 @@ async function applyAddDevicePayment(tx: Prisma.TransactionClient, paymentIntent
     data: { status: "activated", confirmedAt: now },
     include: { site: true, plan: true }
   });
+  return { intent: updatedIntent, entitlement, projection: radiusProjection, alreadyProcessed: false, extended: true };
+}
+
+// Apply one paid package-tier upgrade for this entitlement's current paid term.
+async function applyPackageUpgrade(tx: Prisma.TransactionClient, paymentIntent: WifiPaymentIntent & { site: unknown; plan: WifiPlan }, now: Date) {
+  const target = await tx.wifiEntitlement.findUnique({ where: { id: paymentIntent.targetEntitlementId as string }, include: { projection: true, plan: true } });
+  if (!target || target.status !== "active" || target.expiresAt <= now || target.packageUpgradedAt) throw new PublicRouteError(409, "This package can no longer be upgraded.");
+  const upgradedDeviceCount = paymentIntent.deviceCount ?? paymentIntent.plan.deviceLimit;
+  const currentFullPrice = devicePrice(target.plan, target.deviceLimit);
+  const upgradedFullPrice = devicePrice(paymentIntent.plan, upgradedDeviceCount);
+  if (target.plan.durationSeconds !== paymentIntent.plan.durationSeconds || upgradedDeviceCount <= target.deviceLimit || upgradedDeviceCount > maxDevicesFor(paymentIntent.plan) || upgradedFullPrice <= currentFullPrice) {
+    throw new PublicRouteError(409, "Choose a higher-priced package or device count with the same duration.");
+  }
+  const claimed = await tx.wifiEntitlement.updateMany({ where: { id: target.id, packageUpgradedAt: null, status: "active", expiresAt: { gt: now } }, data: { packageUpgradedAt: now, planId: paymentIntent.planId, deviceLimit: upgradedDeviceCount, rateLimit: paymentIntent.plan.rateLimit } });
+  if (claimed.count !== 1) throw new PublicRouteError(409, "This package has already been upgraded.");
+  const entitlement = await tx.wifiEntitlement.findUniqueOrThrow({ where: { id: target.id } });
+  const projection = buildRadiusProjection({ entitlementId: target.id, phone: target.customerPhone, username: target.username, password: target.cleartextSecret, deviceMac: target.deviceMac, expiresAt: target.expiresAt, durationSeconds: Math.max(60, Math.round((target.expiresAt.getTime() - now.getTime()) / 1000)), rateLimit: entitlement.rateLimit, deviceLimit: entitlement.deviceLimit });
+  await applyRadiusProjectionRows(tx, projection.username, projection.checkItems, projection.replyItems);
+  const radiusProjection = target.projection
+    ? await tx.wifiRadiusProjection.update({ where: { id: target.projection.id }, data: { checkItems: projection.checkItems, replyItems: projection.replyItems, status: "applied", appliedAt: now, lastError: null } })
+    : await tx.wifiRadiusProjection.create({ data: { entitlementId: target.id, username: projection.username, checkItems: projection.checkItems, replyItems: projection.replyItems, status: "applied", appliedAt: now } });
+  const updatedIntent = await tx.wifiPaymentIntent.update({ where: { id: paymentIntent.id }, data: { status: "activated", confirmedAt: now }, include: { site: true, plan: true } });
   return { intent: updatedIntent, entitlement, projection: radiusProjection, alreadyProcessed: false, extended: true };
 }
 
@@ -420,19 +452,17 @@ async function activatePaymentIntent(intent: WifiPaymentIntent, confirmedAt = ne
 
     const startsAt = confirmedAt;
 
+    if (paymentIntent.purpose === "package_upgrade" && paymentIntent.targetEntitlementId) {
+      return applyPackageUpgrade(tx, paymentIntent, startsAt);
+    }
     if (paymentIntent.purpose === "add_device" && paymentIntent.targetEntitlementId) {
       return applyAddDevicePayment(tx, paymentIntent, startsAt);
     }
 
-    const username = normalizeWifiUsername(paymentIntent.customerPhone);
-
-    // If this phone already has valid, unexpired access, extend it in place
-    // instead of creating a second entitlement. RADIUS identity is derived
-    // from the phone number, so a second entitlement would silently overwrite
-    // (and, on its own earlier expiry, delete) this one's radcheck/radreply
-    // rows even though this one is still supposed to be valid.
+    // Phone remains the billing key; RADIUS usernames are separate customer
+    // credentials. Extend an existing entitlement for this phone in place.
     const existingActive = await tx.wifiEntitlement.findFirst({
-      where: { username, ...activeAccessWhere(startsAt) },
+      where: { customerPhone: paymentIntent.customerPhone, ...activeAccessWhere(startsAt) },
       include: { projection: true },
       orderBy: { expiresAt: "desc" }
     });
@@ -460,7 +490,7 @@ async function activatePaymentIntent(intent: WifiPaymentIntent, confirmedAt = ne
         // outage pause on this entitlement is moot -- clear it here rather
         // than leaving it for the outage sweep to later re-credit and
         // re-apply a projection this payment has already superseded.
-        data: { expiresAt: extendedExpiresAt, rateLimit: boostedRate, outagePausedAt: null, outagePauseCause: null }
+        data: { expiresAt: extendedExpiresAt, rateLimit: boostedRate, outagePausedAt: null, outagePauseCause: null, packageUpgradedAt: null }
       });
       const extendedProjection = buildRadiusProjection({
         entitlementId: extendedEntitlement.id,
@@ -514,6 +544,7 @@ async function activatePaymentIntent(intent: WifiPaymentIntent, confirmedAt = ne
     const expiresAt = new Date(startsAt.getTime() + durationSeconds * 1000);
     const password = createRadiusSecret();
 
+    const username = await createUniqueCaptynWifiUsername(tx);
     const entitlement = await tx.wifiEntitlement.create({
       data: {
         siteId: paymentIntent.siteId,
@@ -680,7 +711,8 @@ async function resolveCreditPlan(tx: Prisma.TransactionClient, credit: WifiCredi
 }
 
 async function activateWifiCredit(creditId: string, input: z.infer<typeof creditActivationSchema>) {
-  const requestedUsername = input.username ? normalizeWifiUsername(input.username) : null;
+  const requestedUsername = input.username?.trim() || null;
+  const requestedPassword = input.password || null;
   const requestedDeviceMac = normalizeDeviceMac(input.deviceMac);
   const startsAt = new Date();
 
@@ -690,12 +722,21 @@ async function activateWifiCredit(creditId: string, input: z.infer<typeof credit
     if (credit.consumedAt) throw new PublicRouteError(409, "This credit has already been used.");
     if (credit.expiresAt && credit.expiresAt <= startsAt) throw new PublicRouteError(410, "This credit has expired.");
 
-    const accountMatches = requestedUsername !== null && requestedUsername === credit.customerPhone;
+    // Phone numbers and credit UUIDs are identifiers, not proof of ownership.
+    // Verify the WiFi secret for every credit, including MAC-bound grants.
+    const owner = requestedUsername && requestedPassword
+      ? await tx.wifiEntitlement.findFirst({
+          where: { username: requestedUsername, customerPhone: credit.customerPhone },
+          orderBy: { createdAt: "desc" }
+        })
+      : null;
+    const accountMatches = Boolean(owner && owner.cleartextSecret === requestedPassword);
     const deviceMatches = requestedDeviceMac !== null && credit.deviceMac !== null && requestedDeviceMac === credit.deviceMac;
     if (credit.deviceMac) {
       if (!deviceMatches) throw new PublicRouteError(403, "This credit was issued for another device. Reopen CAPTYN WiFi from the credited device.");
-    } else if (!accountMatches) {
-      throw new PublicRouteError(403, "This credit belongs to another account.");
+    }
+    if (!accountMatches) {
+      throw new PublicRouteError(403, "Sign in with the WiFi username and password for the account that received this credit.");
     }
 
     const claimed = await tx.wifiCredit.updateMany({
@@ -707,7 +748,6 @@ async function activateWifiCredit(creditId: string, input: z.infer<typeof credit
     const plan = await resolveCreditPlan(tx, credit);
     const planId = credit.planId ?? plan.id;
     const siteId = credit.siteId ?? plan.siteId;
-    const username = normalizeWifiUsername(credit.customerPhone);
     const activationDeviceMac = credit.deviceMac ?? requestedDeviceMac;
     const rateLimit = credit.rateLimit ?? plan.rateLimit;
     const deviceLimit = credit.deviceLimit ?? plan.deviceLimit;
@@ -737,7 +777,7 @@ async function activateWifiCredit(creditId: string, input: z.infer<typeof credit
     });
 
     const existingActive = await tx.wifiEntitlement.findFirst({
-      where: { username, ...activeAccessWhere(startsAt) },
+      where: { customerPhone: credit.customerPhone, ...activeAccessWhere(startsAt) },
       include: { projection: true },
       orderBy: { expiresAt: "desc" }
     });
@@ -784,13 +824,14 @@ async function activateWifiCredit(creditId: string, input: z.infer<typeof credit
 
     const expiresAt = new Date(startsAt.getTime() + credit.durationSeconds * 1000);
     const password = createRadiusSecret();
+    const accountUsername = await createUniqueCaptynWifiUsername(tx);
     const entitlement = await tx.wifiEntitlement.create({
       data: {
         siteId,
         planId,
         paymentIntentId: intent.id,
         customerPhone: credit.customerPhone,
-        username,
+        username: accountUsername,
         cleartextSecret: password,
         deviceMac: activationDeviceMac,
         status: "active",
@@ -802,7 +843,7 @@ async function activateWifiCredit(creditId: string, input: z.infer<typeof credit
       }
     });
 
-    const projection = buildRadiusProjection({ entitlementId: entitlement.id, phone: credit.customerPhone, username, password, deviceMac: activationDeviceMac, expiresAt, durationSeconds: credit.durationSeconds, rateLimit, deviceLimit });
+    const projection = buildRadiusProjection({ entitlementId: entitlement.id, phone: credit.customerPhone, username: accountUsername, password, deviceMac: activationDeviceMac, expiresAt, durationSeconds: credit.durationSeconds, rateLimit, deviceLimit });
     await applyRadiusProjectionRows(tx, projection.username, projection.checkItems, projection.replyItems);
     const radiusProjection = await tx.wifiRadiusProjection.create({ data: { entitlementId: entitlement.id, username: projection.username, checkItems: projection.checkItems, replyItems: projection.replyItems, status: "applied", appliedAt: startsAt } });
     await tx.wifiCredit.update({ where: { id: credit.id }, data: { consumedEntitlementId: entitlement.id } });
@@ -917,6 +958,9 @@ publicRouter.post("/access/free", publicFreeAccessLimit, async (req, res, next) 
     if (!deviceMac) {
       return res.status(400).json({ error: "Free access needs to come from the CAPTYN WiFi sign-in page so it can be tied to your device. Reconnect to the WiFi network and try again from there." });
     }
+    if (!parsed.deviceIp || !(await isCurrentHotspotHost(deviceMac, parsed.deviceIp))) {
+      return res.status(403).json({ error: "Connect to the CAPTYN WiFi network and reopen its sign-in page to claim free access." });
+    }
 
     const activated = await activateFreePlan(plan, deviceMac, parsed.funnelSessionId);
     if (activated.blocked) {
@@ -958,12 +1002,14 @@ publicRouter.get("/payments/:id", async (req, res, next) => {
     const entitlement = intent.accessType === "pppoe"
       ? null
       : intent.entitlement ??
-      (intent.status === "activated"
-        ? await prisma.wifiEntitlement.findFirst({
-            where: { username: normalizeWifiUsername(intent.customerPhone), status: "active", expiresAt: { gt: new Date() } },
-            orderBy: { expiresAt: "desc" }
-          })
-        : null);
+      (intent.status === "activated" && intent.targetEntitlementId
+        ? await prisma.wifiEntitlement.findUnique({ where: { id: intent.targetEntitlementId } })
+        : intent.status === "activated"
+          ? await prisma.wifiEntitlement.findFirst({
+              where: { customerPhone: intent.customerPhone, status: "active", expiresAt: { gt: new Date() } },
+              orderBy: { expiresAt: "desc" }
+            })
+          : null);
 
     return res.json({
       data: toJsonSafe({
@@ -1004,7 +1050,9 @@ publicRouter.get("/payments/:id", async (req, res, next) => {
 publicRouter.get("/entitlements/by-device/:mac", publicDeviceLookupLimit, async (req, res, next) => {
   try {
     const mac = normalizeDeviceMac(req.params.mac);
-    if (!mac) return res.status(400).json({ error: "Device MAC required" });
+    const ip = typeof req.query.ip === "string" ? req.query.ip.trim() : "";
+    if (!mac || !ip) return res.status(400).json({ error: "Hotspot device MAC and IP are required" });
+    if (!(await isCurrentHotspotHost(mac, ip))) return res.status(403).json({ error: "Reconnect from the device's active CAPTYN hotspot session." });
     const entitlement = await prisma.wifiEntitlement.findFirst({
       where: {
         ...activeAccessWhere(new Date()),
@@ -1285,7 +1333,7 @@ publicRouter.post("/payments/lookup-by-receipt", publicReceiptLookupLimit, async
 
     const entitlement =
       intent.entitlement ??
-      (intent.status === "activated" ? await findCurrentEntitlementForUsername(normalizeWifiUsername(intent.customerPhone)) : null);
+      (intent.status === "activated" ? await findCurrentEntitlementForPhone(intent.customerPhone) : null);
     if (!entitlement) return res.status(404).json({ error: "No payment found for that M-PESA code." });
     if (
       entitlement.status !== "active" ||
@@ -1353,16 +1401,34 @@ publicRouter.post("/payments/mpesa/stk", publicPaymentIpLimit, async (req, res, 
     // 1-device top-up used to extend a 2-device package at the 1-device
     // price. Otherwise the customer's choice, within what this package allows.
     const existingActive = await prisma.wifiEntitlement.findFirst({
-      where: { username: normalizeWifiUsername(phone), ...activeAccessWhere(new Date()) },
+      where: { customerPhone: phone, ...activeAccessWhere(new Date()) },
       orderBy: { expiresAt: "desc" },
       include: { devices: { select: { deviceMac: true, signedOutAt: true } } }
     });
 
-    // A new device paying into a package whose slots are all taken would
-    // only buy time for the other device (a laptop paid, stayed offline and
-    // the phone got the hours). Offer to add this device instead; the STK
-    // PIN on the package's phone is what authorizes it.
+    // If checkout selects a more expensive multi-device package while this
+    // phone already has access, don't silently charge for a top-up that would
+    // keep the old device limit. Route the customer to the authenticated,
+    // prorated one-time upgrade action instead.
     const payingMac = normalizeDeviceMac(parsed.deviceMac);
+    if (existingActive && !parsed.addToPackage) {
+      const pendingUpgrade = await prisma.wifiPaymentIntent.findFirst({ where: { targetEntitlementId: existingActive.id, purpose: { in: ["package_upgrade", "add_device"] }, status: { in: ["pending_confirmation", "confirmed", "paid_pending_activation"] } }, select: { id: true } });
+      if (pendingUpgrade) return res.status(409).json({ error: "A package upgrade payment is already waiting for confirmation." });
+    }
+    if (existingActive && !parsed.addToPackage && (parsed.deviceCount ?? plan.deviceLimit) > existingActive.deviceLimit) {
+      const currentPlan = await prisma.wifiPlan.findUnique({ where: { id: existingActive.planId } });
+      const currentPrice = currentPlan ? devicePrice(currentPlan, existingActive.deviceLimit) : 0;
+      const selectedPrice = devicePrice(plan, parsed.deviceCount ?? plan.deviceLimit);
+      if (currentPlan && plan.durationSeconds === currentPlan.durationSeconds && selectedPrice > currentPrice) {
+        return res.status(409).json({
+          error: existingActive.packageUpgradedAt
+            ? "This active package has already been upgraded. Renew it before changing the device count again."
+            : "This phone already has an active package. Sign in to its access details and use Upgrade package; that charges only the remaining-time difference and keeps the same login.",
+          code: "package_upgrade_available",
+          package: { expiresAt: existingActive.expiresAt, deviceLimit: existingActive.deviceLimit, targetPlanId: plan.id, targetDeviceCount: parsed.deviceCount ?? plan.deviceLimit }
+        });
+      }
+    }
     if (existingActive && payingMac && payingDeviceNeedsSlot(existingActive, existingActive.devices, payingMac)) {
       const packagePlan = await prisma.wifiPlan.findUnique({ where: { id: existingActive.planId }, include: { site: true } });
       const nextCount = existingActive.deviceLimit + 1;
@@ -1494,6 +1560,57 @@ publicRouter.post("/payments/mpesa/stk", publicPaymentIpLimit, async (req, res, 
   }
 });
 
+const packageUpgradeQuoteSchema = z.object({ username: z.string().trim().min(1), password: z.string().min(1) });
+
+publicRouter.post("/entitlements/package-upgrade/quote", publicDeviceListLimit, async (req, res, next) => {
+  try {
+    const parsed = packageUpgradeQuoteSchema.parse(req.body);
+    const entitlement = await authenticateEntitlementOwner(parsed.username, parsed.password);
+    if (!entitlement || entitlement.packageUpgradedAt || entitlement.expiresAt <= new Date() || entitlement.outagePausedAt || entitlement.promoPausedAt) return res.json({ data: { options: [], used: Boolean(entitlement?.packageUpgradedAt) } });
+    const pending = await prisma.wifiPaymentIntent.findFirst({ where: { OR: [{ targetEntitlementId: entitlement.id, purpose: { in: ["package_upgrade", "add_device"] } }, { customerPhone: entitlement.customerPhone, purpose: "purchase" }], status: { in: ["pending_confirmation", "confirmed", "paid_pending_activation"] } }, select: { id: true } });
+    if (pending) return res.json({ data: { options: [], pending: true, used: false } });
+    const current = await prisma.wifiPlan.findUnique({ where: { id: entitlement.planId } });
+    if (!current) return res.json({ data: { options: [] } });
+    const leftSeconds = Math.max(0, (entitlement.expiresAt.getTime() - Date.now()) / 1000);
+    const plans = await prisma.wifiPlan.findMany({ where: { siteId: entitlement.siteId, enabled: true, pppoeEnabled: false, source: { in: PUBLICLY_PURCHASABLE_SOURCES }, durationSeconds: current.durationSeconds }, orderBy: [{ priceKsh: "asc" }, { deviceLimit: "asc" }] });
+    const currentFullPrice = devicePrice(current, entitlement.deviceLimit);
+    const options = plans.flatMap((plan) => deviceOptions(plan)
+      .filter((option) => option.devices > entitlement.deviceLimit && option.priceKsh > currentFullPrice)
+      .map((option) => ({ planId: plan.id, name: plan.name, deviceLimit: option.devices, priceKsh: Math.max(1, Math.ceil((option.priceKsh - currentFullPrice) * leftSeconds / current.durationSeconds)) })))
+      .sort((a, b) => a.priceKsh - b.priceKsh || a.deviceLimit - b.deviceLimit);
+    return res.json({ data: { options, used: false, expiresAt: entitlement.expiresAt } });
+  } catch (error) { return next(error); }
+});
+
+const packageUpgradeStkSchema = packageUpgradeQuoteSchema.extend({ planId: z.string().min(1), deviceCount: z.coerce.number().int().min(2).max(MAX_DEVICES), phone: z.string().min(7), funnelSessionId: z.string().uuid().optional() });
+publicRouter.post("/payments/mpesa/package-upgrade", publicPaymentIpLimit, async (req, res, next) => {
+  try {
+    const parsed = packageUpgradeStkSchema.parse(req.body);
+    const phone = formatDarajaMsisdn(parsed.phone);
+    if (!phone) return res.status(400).json({ error: "Enter a valid Safaricom phone number." });
+    const entitlement = await authenticateEntitlementOwner(parsed.username, parsed.password);
+    if (!entitlement || entitlement.packageUpgradedAt || entitlement.expiresAt <= new Date() || entitlement.outagePausedAt || entitlement.promoPausedAt) return res.status(409).json({ error: "This package can only be upgraded once before its next renewal." });
+    const pending = await prisma.wifiPaymentIntent.findFirst({ where: { OR: [{ targetEntitlementId: entitlement.id, purpose: { in: ["package_upgrade", "add_device"] } }, { customerPhone: entitlement.customerPhone, purpose: "purchase" }], status: { in: ["pending_confirmation", "confirmed", "paid_pending_activation"] } }, select: { id: true } });
+    if (pending) return res.status(409).json({ error: "A WiFi payment for this account is already waiting for confirmation." });
+    const current = await prisma.wifiPlan.findUnique({ where: { id: entitlement.planId } });
+    const plan = await prisma.wifiPlan.findFirst({ where: { id: parsed.planId, siteId: entitlement.siteId, enabled: true, pppoeEnabled: false, source: { in: PUBLICLY_PURCHASABLE_SOURCES } } });
+    const currentFullPrice = current ? devicePrice(current, entitlement.deviceLimit) : 0;
+    const upgradedFullPrice = plan ? devicePrice(plan, parsed.deviceCount) : 0;
+    if (!current || !plan || plan.durationSeconds !== current.durationSeconds || parsed.deviceCount <= entitlement.deviceLimit || parsed.deviceCount > maxDevicesFor(plan) || upgradedFullPrice <= currentFullPrice) return res.status(400).json({ error: "Choose a higher-priced package or device count with the same duration." });
+    const leftSeconds = Math.max(0, (entitlement.expiresAt.getTime() - Date.now()) / 1000);
+    const amountKsh = Math.max(1, Math.ceil((upgradedFullPrice - currentFullPrice) * leftSeconds / current.durationSeconds));
+    const mpesa = getMpesaStatus();
+    if (!mpesa.configured) return res.status(503).json({ error: "M-PESA is not configured for WiFi payments." });
+    const reference = sourceReference();
+    const intent = await prisma.wifiPaymentIntent.create({ data: { siteId: entitlement.siteId, planId: plan.id, source: "captyn_wifi_portal", sourceReference: reference, customerPhone: phone, amountKsh, deviceCount: parsed.deviceCount, purpose: "package_upgrade", targetEntitlementId: entitlement.id, funnelSessionId: parsed.funnelSessionId, provider: "mpesa", status: "pending_confirmation" } });
+    const stk = await initiateWifiStkPush({ amount: amountKsh, phoneNumber: phone, accountReference: reference.slice(0, 12), transactionDesc: `CAPTYN upgrade ${plan.name}`.slice(0, 64), callbackUrl: config.mpesa.callbackUrl });
+    const checkoutRequestId = typeof stk.CheckoutRequestID === "string" ? stk.CheckoutRequestID : null;
+    const responseCode = typeof stk.ResponseCode === "string" ? stk.ResponseCode : null;
+    const updated = await prisma.wifiPaymentIntent.update({ where: { id: intent.id }, data: { providerReference: checkoutRequestId, status: responseCode === "0" ? "pending_confirmation" : "failed", rawPayload: stk as Prisma.InputJsonValue } });
+    return res.status(201).json({ data: toJsonSafe({ id: updated.id, status: updated.status, amountKsh, plan }) });
+  } catch (error) { return next(error); }
+});
+
 const addDeviceQuoteSchema = z.object({ username: z.string().trim().min(1), password: z.string().min(1) });
 
 // What adding devices to the running package costs right now.
@@ -1502,6 +1619,9 @@ publicRouter.post("/entitlements/add-device/quote", publicDeviceListLimit, async
     const parsed = addDeviceQuoteSchema.parse(req.body);
     const entitlement = await authenticateEntitlementOwner(parsed.username, parsed.password);
     if (!entitlement) return res.status(404).json({ error: "No matching active access record" });
+    if (entitlement.packageUpgradedAt) return res.json({ data: { deviceLimit: entitlement.deviceLimit, options: [], used: true } });
+    const pending = await prisma.wifiPaymentIntent.findFirst({ where: { targetEntitlementId: entitlement.id, purpose: { in: ["package_upgrade", "add_device"] }, status: { in: ["pending_confirmation", "confirmed", "paid_pending_activation"] } }, select: { id: true } });
+    if (pending) return res.json({ data: { deviceLimit: entitlement.deviceLimit, options: [], pending: true } });
     const plan = await prisma.wifiPlan.findUnique({ where: { id: entitlement.planId } });
     if (!plan || plan.priceKsh <= 0) return res.json({ data: { deviceLimit: entitlement.deviceLimit, options: [] } });
     const options = deviceOptions(plan)
@@ -1522,6 +1642,9 @@ publicRouter.post("/payments/mpesa/add-device", publicPaymentIpLimit, async (req
     if (!phone) return res.status(400).json({ error: "Enter a valid Safaricom phone number." });
     const entitlement = await authenticateEntitlementOwner(parsed.username, parsed.password);
     if (!entitlement) return res.status(404).json({ error: "No matching active access record" });
+    if (entitlement.packageUpgradedAt) return res.status(409).json({ error: "This package has already been upgraded for the current term." });
+    const pendingUpgrade = await prisma.wifiPaymentIntent.findFirst({ where: { targetEntitlementId: entitlement.id, purpose: { in: ["package_upgrade", "add_device"] }, status: { in: ["pending_confirmation", "confirmed", "paid_pending_activation"] } }, select: { id: true } });
+    if (pendingUpgrade) return res.status(409).json({ error: "An upgrade payment is already waiting for confirmation." });
     const plan = await prisma.wifiPlan.findUnique({ where: { id: entitlement.planId } });
     if (!plan || plan.priceKsh <= 0) return res.status(400).json({ error: "This package can't take extra devices." });
     if (parsed.deviceCount <= entitlement.deviceLimit || parsed.deviceCount > maxDevicesFor(plan)) {
@@ -1747,8 +1870,13 @@ publicRouter.post("/client-errors", publicClientErrorLimit, (req, res) => {
 // The phone a portal visit belongs to: the signed-in number, or the number
 // that last paid from this device.
 async function loyaltyPhone(usernameRaw: unknown, deviceMacRaw: unknown): Promise<string | null> {
-  const username = typeof usernameRaw === "string" ? normalizeWifiUsername(usernameRaw.trim()) : "";
+  const usernameInput = typeof usernameRaw === "string" ? usernameRaw.trim() : "";
+  const username = usernameInput ? normalizeWifiUsername(usernameInput) : "";
   if (/^254\d{9}$/.test(username)) return username;
+  if (usernameInput) {
+    const entitlement = await prisma.wifiEntitlement.findFirst({ where: { username: usernameInput }, orderBy: { createdAt: "desc" }, select: { customerPhone: true } });
+    if (entitlement?.customerPhone) return entitlement.customerPhone;
+  }
   const deviceMac = normalizeDeviceMac(typeof deviceMacRaw === "string" ? deviceMacRaw : null);
   if (!deviceMac) return null;
   const last = await prisma.wifiPaymentIntent.findFirst({
@@ -1824,6 +1952,7 @@ publicRouter.get("/loyalty/me", publicDeviceLookupLimit, async (req, res, next) 
 
 const rewardIdentitySchema = z.object({
   username: z.string().trim().optional().nullable(),
+  password: z.string().min(1).optional().nullable(),
   deviceMac: z.string().trim().optional().nullable()
 });
 
@@ -1831,7 +1960,8 @@ async function ownedAvailableReward(rewardId: string, body: z.infer<typeof rewar
   const reward = await prisma.wifiLoyaltyReward.findUnique({ where: { id: rewardId } });
   if (!reward) throw new PublicRouteError(404, "Reward not found.");
   const phone = await loyaltyPhone(body.username, body.deviceMac);
-  if (phone !== reward.customerPhone) throw new PublicRouteError(403, "This reward belongs to another number.");
+  const owner = body.username && body.password ? await prisma.wifiEntitlement.findFirst({ where: { username: body.username, customerPhone: reward.customerPhone }, orderBy: { createdAt: "desc" } }) : null;
+  if (phone !== reward.customerPhone || !owner || owner.cleartextSecret !== body.password) throw new PublicRouteError(403, "Sign in to the WiFi account that received this reward.");
   if (reward.status !== "available") throw new PublicRouteError(409, "This reward has already been used.");
   if (reward.expiresAt && reward.expiresAt <= new Date()) throw new PublicRouteError(410, "This reward has expired.");
   return reward;
@@ -1861,7 +1991,7 @@ publicRouter.post("/loyalty/rewards/:id/free", publicCreditActivationLimit, asyn
         createdBy: "loyalty"
       }
     });
-    const activated = await activateWifiCredit(credit.id, { username: reward.customerPhone, deviceMac });
+    const activated = await activateWifiCredit(credit.id, { username: body.username, password: body.password, deviceMac });
     return res.status(201).json({
       data: toJsonSafe({
         id: activated.intent.id,
@@ -1883,27 +2013,22 @@ publicRouter.post("/loyalty/rewards/:id/pay", publicPaymentIpLimit, (_req, res) 
   return res.status(410).json({ error: "Paid reward packages are no longer offered. Claim your free-time reward instead." });
 });
 
-publicRouter.get("/credits/redeemable", async (req, res, next) => {
-  try {
-    const now = new Date();
-    const usernameParam = typeof req.query.username === "string" ? req.query.username.trim() : "";
-    const username = usernameParam ? normalizeWifiUsername(usernameParam) : null;
-    const deviceMac = normalizeDeviceMac(typeof req.query.deviceMac === "string" ? req.query.deviceMac : null);
-    const identityFilters: Prisma.WifiCreditWhereInput[] = [];
-    if (deviceMac) identityFilters.push({ deviceMac });
-    if (username) identityFilters.push({ customerPhone: username, deviceMac: null });
-    if (!identityFilters.length) return res.json({ data: { notifications: [], unreadCount: 0 } });
+const creditListAuthSchema = z.object({ username: z.string().trim().min(1), password: z.string().min(1), deviceMac: z.string().trim().optional().nullable() });
 
+publicRouter.post("/credits/redeemable", publicCreditActivationLimit, async (req, res, next) => {
+  try {
+    const parsed = creditListAuthSchema.parse(req.body);
+    const owner = await prisma.wifiEntitlement.findFirst({ where: { username: parsed.username }, orderBy: { createdAt: "desc" } });
+    if (!owner || owner.cleartextSecret !== parsed.password) return res.status(403).json({ error: "Sign in to view credits for this WiFi account." });
+    const now = new Date();
+    const deviceMac = normalizeDeviceMac(parsed.deviceMac);
     const credits = await prisma.wifiCredit.findMany({
-      where: { AND: [activeCreditWhere(now), { OR: identityFilters }] },
-      orderBy: { createdAt: "desc" },
-      take: 20
+      where: { AND: [activeCreditWhere(now), { customerPhone: owner.customerPhone }, { OR: [{ deviceMac: null }, ...(deviceMac ? [{ deviceMac }] : [])] }] },
+      orderBy: { createdAt: "desc" }, take: 20
     });
     const notifications = credits.map((credit) => publicCreditNotification(credit, now));
     return res.json({ data: toJsonSafe({ notifications, unreadCount: notifications.length }) });
-  } catch (error) {
-    return next(error);
-  }
+  } catch (error) { return next(error); }
 });
 
 publicRouter.post("/credits/:id/activate", publicCreditActivationLimit, async (req, res, next) => {
@@ -1931,35 +2056,27 @@ publicRouter.post("/credits/:id/activate", publicCreditActivationLimit, async (r
   }
 });
 
-// Same trust model as /entitlements/:username/status -- no separate secret,
-// just the username, matching this API's existing risk tolerance for
-// low-sensitivity reads.
-publicRouter.get("/notifications/:username", async (req, res, next) => {
+const notificationAuthSchema = z.object({ username: z.string().trim().min(1), password: z.string().min(1) });
+
+publicRouter.post("/notifications", async (req, res, next) => {
   try {
-    const username = req.params.username.trim();
-    if (!username) return res.status(400).json({ error: "Username required" });
-    const notifications = await prisma.wifiNotification.findMany({
-      where: { customerPhone: username },
-      orderBy: { createdAt: "desc" },
-      take: 20
-    });
+    const parsed = notificationAuthSchema.parse(req.body);
+    const owner = await prisma.wifiEntitlement.findFirst({ where: { username: parsed.username }, orderBy: { createdAt: "desc" } });
+    if (!owner || owner.cleartextSecret !== parsed.password) return res.status(403).json({ error: "Sign in to view account notifications." });
+    const notifications = await prisma.wifiNotification.findMany({ where: { customerPhone: owner.customerPhone }, orderBy: { createdAt: "desc" }, take: 20 });
     const unreadCount = notifications.filter((item) => !item.readAt).length;
     return res.json({ data: toJsonSafe({ notifications, unreadCount }) });
-  } catch (error) {
-    return next(error);
-  }
+  } catch (error) { return next(error); }
 });
 
 publicRouter.post("/notifications/:id/read", async (req, res, next) => {
   try {
-    await prisma.wifiNotification.updateMany({
-      where: { id: req.params.id, readAt: null },
-      data: { readAt: new Date() }
-    });
+    const parsed = notificationAuthSchema.parse(req.body);
+    const owner = await prisma.wifiEntitlement.findFirst({ where: { username: parsed.username }, orderBy: { createdAt: "desc" } });
+    if (!owner || owner.cleartextSecret !== parsed.password) return res.status(403).json({ error: "Sign in to update account notifications." });
+    await prisma.wifiNotification.updateMany({ where: { id: req.params.id, customerPhone: owner.customerPhone, readAt: null }, data: { readAt: new Date() } });
     return res.json({ data: { ok: true } });
-  } catch (error) {
-    return next(error);
-  }
+  } catch (error) { return next(error); }
 });
 
 // The callback refuses to activate until an STK query confirms the payment,

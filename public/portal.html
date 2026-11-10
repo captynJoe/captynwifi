@@ -145,6 +145,13 @@
           <div id="access-devices-list"></div>
           <p id="access-devices-feedback" class="access-devices-feedback hidden"></p>
           <button id="add-device-btn" type="button" class="link-btn add-device-btn hidden">+ Add a device</button>
+          <button id="package-upgrade-btn" type="button" class="link-btn hidden">Upgrade package</button>
+          <div id="package-upgrade-panel" class="add-device-panel hidden">
+            <div id="package-upgrade-options"></div>
+            <label class="field" for="package-upgrade-phone"><span>M-PESA phone</span><input id="package-upgrade-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+254" /></label>
+            <button id="package-upgrade-pay" type="button" class="primary">Pay upgrade</button>
+            <p id="package-upgrade-status" class="status-text"></p>
+          </div>
           <div id="add-device-panel" class="add-device-panel hidden">
             <div id="add-device-options"></div>
             <label class="field" for="add-device-phone"><span>M-PESA phone</span><input id="add-device-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+254" /></label>

@@ -359,3 +359,24 @@ export async function kickPppoeUser(username: string): Promise<RouterSessionKick
     client.close();
   }
 }
+
+
+/** Verify that the MikroTik currently sees this exact MAC/IP on a hotspot host. */
+export async function isCurrentHotspotHost(deviceMac: string, deviceIp: string): Promise<boolean> {
+  if (missingRouterConfig() || !deviceIp.trim()) return false;
+  const client = new RouterOsApiClient();
+  try {
+    await client.connect();
+    await client.login();
+    const rows = sentencesToRows(await client.command([
+      "/ip/hotspot/host/print",
+      "=.proplist=mac-address,address",
+      `?mac-address=${deviceMac.toUpperCase()}`
+    ]));
+    return rows.some((row) => row["mac-address"]?.toUpperCase() === deviceMac.toUpperCase() && row.address === deviceIp.trim());
+  } catch {
+    return false;
+  } finally {
+    client.close();
+  }
+}

@@ -175,6 +175,7 @@ model WifiEntitlement {
   outagePausedAt   DateTime?
   outagePauseCause String?
   promoPausedAt    DateTime?
+  packageUpgradedAt DateTime?
   createdAt        DateTime              @default(now())
   updatedAt        DateTime              @updatedAt
   site             WifiSite              @relation(fields: [siteId], references: [id], onDelete: Cascade)

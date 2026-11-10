@@ -6,12 +6,12 @@ import { prisma } from "../prisma.js";
 import {
   buildRadiusProjection,
   createRadiusSecret,
-  normalizeDeviceMac,
-  normalizeWifiUsername
+  normalizeDeviceMac
 } from "../services/radiusProjection.js";
 import { issueVoucher } from "../services/voucherIssuance.js";
 import { normalizeKenyaPhone } from "../lib/phone.js";
 import { applyRadiusProjectionRows } from "../services/radiusSqlApply.js";
+import { createUniqueCaptynWifiUsername } from "../services/captynUsername.js";
 
 const MAX_BULK_VOUCHER_RECIPIENTS = 200;
 const MAX_LIST_TAKE = 200;
@@ -196,9 +196,8 @@ integrationRouter.post("/housing/payments/confirmed", async (req, res, next) => 
       });
       if (existing) return { intent, entitlement: existing, alreadyProcessed: true };
 
-      const username = normalizeWifiUsername(parsed.customerPhone);
       const existingActive = await tx.wifiEntitlement.findFirst({
-        where: { username, status: "active", expiresAt: { gt: startsAt } },
+        where: { customerPhone: parsed.customerPhone, status: "active", expiresAt: { gt: startsAt } },
         include: { projection: true },
         orderBy: { expiresAt: "desc" }
       });
@@ -261,6 +260,7 @@ integrationRouter.post("/housing/payments/confirmed", async (req, res, next) => 
       }
 
       const password = createRadiusSecret();
+      const username = await createUniqueCaptynWifiUsername(tx);
 
       const entitlement = await tx.wifiEntitlement.create({
         data: {

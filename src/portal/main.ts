@@ -54,6 +54,7 @@ interface EntitlementDevice {
 
 interface Entitlement {
   planId?: string;
+  packageUpgradedAt?: string | null;
   username: string;
   password: string;
   expiresAt: string;
@@ -167,6 +168,12 @@ const addDeviceOptions = requireElement<HTMLElement>("add-device-options");
 const addDevicePhone = requireElement<HTMLInputElement>("add-device-phone");
 const addDevicePay = requireElement<HTMLButtonElement>("add-device-pay");
 const addDeviceStatus = requireElement<HTMLParagraphElement>("add-device-status");
+const packageUpgradeBtn = requireElement<HTMLButtonElement>("package-upgrade-btn");
+const packageUpgradePanel = requireElement<HTMLElement>("package-upgrade-panel");
+const packageUpgradeOptions = requireElement<HTMLElement>("package-upgrade-options");
+const packageUpgradePhone = requireElement<HTMLInputElement>("package-upgrade-phone");
+const packageUpgradePay = requireElement<HTMLButtonElement>("package-upgrade-pay");
+const packageUpgradeStatus = requireElement<HTMLParagraphElement>("package-upgrade-status");
 const workspaceEl = document.querySelector<HTMLElement>(".workspace");
 const introRowEl = document.querySelector<HTMLElement>(".intro-row");
 const promoSection = requireElement<HTMLElement>("promo");
@@ -263,7 +270,7 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") setSettingsMenuOpen(false);
 });
 
-// Keyed by username (see /notifications/:username on the server) --
+// Keyed by the authenticated WiFi username on the server --
 // populated whenever the portal learns whose access it's showing, since
 // that's the same moment it has a trusted identity to fetch under.
 let notifUsername: string | null = null;
@@ -366,12 +373,15 @@ function renderNotifications() {
 }
 
 async function loadRedeemableCredits(username = notifUsername) {
-  const params = new URLSearchParams();
-  if (username) params.set("username", username);
-  if (state.hotspot?.mac) params.set("deviceMac", state.hotspot.mac);
-  if (!params.toString()) return;
+  if (!username) return;
   try {
-    const response = await fetch(api(`/credits/redeemable?${params.toString()}`));
+    const access = state.currentEntitlement || loadRememberedAccess();
+    if (!access?.username || !access.password) return;
+    const response = await fetch(api("/credits/redeemable"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: access.username, password: access.password, deviceMac: state.hotspot?.mac || undefined })
+    });
     if (!response.ok) return;
     const payload = await response.json();
     mergeNotificationItems(payload?.data?.notifications || []);
@@ -383,10 +393,17 @@ async function loadRedeemableCredits(username = notifUsername) {
   }
 }
 
-async function loadNotifications(username: string) {
+async function loadNotifications(username: string, password?: string) {
   notifUsername = username;
+  const access = state.currentEntitlement || loadRememberedAccess();
+  const secret = password || access?.password;
+  if (!secret) return;
   try {
-    const response = await fetch(api(`/notifications/${encodeURIComponent(username)}`));
+    const response = await fetch(api("/notifications"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password: secret })
+    });
     if (response.ok) {
       const payload = await response.json();
       mergeNotificationItems(payload?.data?.notifications || []);
@@ -413,7 +430,7 @@ async function activateCredit(creditId: string) {
     const response = await fetch(api(`/credits/${encodeURIComponent(creditId)}/activate`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: notifUsername || undefined, deviceMac: state.hotspot.mac })
+      body: JSON.stringify({ username: notifUsername || undefined, password: (state.currentEntitlement || loadRememberedAccess())?.password, deviceMac: state.hotspot.mac })
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || "Unable to activate this credit.");
@@ -439,7 +456,8 @@ const rewardsEl = document.getElementById("rewards");
 let rewardsData: any = null;
 let rewardBusy = false;
 function rewardIdentity() {
-  return { username: notifUsername || undefined, deviceMac: state.hotspot?.mac || undefined };
+  const access = state.currentEntitlement || loadRememberedAccess();
+  return { username: access?.username || notifUsername || undefined, password: access?.password, deviceMac: state.hotspot?.mac || undefined };
 }
 async function loadRewards() {
   const identity = rewardIdentity();
@@ -562,7 +580,13 @@ function setNotifMenuOpen(open: boolean) {
   if (!unread.length) return;
   unread.forEach((item) => { item.readAt = new Date().toISOString(); });
   renderNotifications();
-  void Promise.all(unread.map((item) => fetch(api(`/notifications/${item.id}/read`), { method: "POST" }).catch(() => {})));
+  const access = state.currentEntitlement || loadRememberedAccess();
+  if (access?.username && access.password) {
+    void Promise.all(unread.map((item) => fetch(api(`/notifications/${item.id}/read`), {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: access.username, password: access.password })
+    }).catch(() => {})));
+  }
 }
 notifToggleBtn?.addEventListener("click", (event) => {
   event.stopPropagation();
@@ -917,7 +941,11 @@ function renderDeviceList(entitlement: Entitlement) {
   // packages show devices used out of how many different ones they allow.
   const multiDevice = limit > 1;
   accessDevicesCount.textContent = multiDevice ? `${devices.length}/${entitlement.deviceCap || limit} used` : "";
-  addDeviceBtn.classList.toggle("hidden", limit >= 3 || !addDevicePanel.classList.contains("hidden"));
+  // Package Upgrade now covers both a higher tier and adding devices, with
+  // one shared upgrade limit for the term. Keep the legacy add-device panel
+  // wired for older portal bundles, but show only the unified action.
+  addDeviceBtn.classList.add("hidden");
+  packageUpgradeBtn.classList.toggle("hidden", Boolean(entitlement.packageUpgradedAt));
   const devicesLabel = document.getElementById("access-devices-label");
   if (devicesLabel) devicesLabel.textContent = multiDevice ? "Devices" : "Device";
   accessDevicesList.innerHTML = devices.length
@@ -1396,13 +1424,17 @@ function findPlanByName(name: string) {
   const key = name.toLowerCase();
   return state.plans.find((plan) => planName(plan) === key) || null;
 }
-function suggestedUpgrade(plan: PortalPlan) {
+function suggestedUpgrade(plan: PortalPlan, devices = checkoutDevices(plan)) {
+  const currentPrice = devicePriceFor(plan, devices);
+  const eligible = (candidate: PortalPlan) => candidate.id !== plan.id
+    && maxDevicesForPlan(candidate) >= devices
+    && devicePriceFor(candidate, devices) > currentPrice;
   const mapped = UPGRADE_SUGGESTIONS[planName(plan)];
   if (mapped) {
     const target = findPlanByName(mapped);
-    if (target && target.id !== plan.id && Number(target.priceKsh || 0) > Number(plan.priceKsh || 0)) return target;
+    if (target && eligible(target)) return target;
   }
-  return state.plans.find((candidate) => Number(candidate.priceKsh || 0) > Number(plan.priceKsh || 0)) || null;
+  return state.plans.filter(eligible).sort((a, b) => devicePriceFor(a, devices) - devicePriceFor(b, devices))[0] || null;
 }
 function upgradeReason(plan: PortalPlan, upgrade: PortalPlan) {
   const currentRate = rateParts(plan.rateLimit);
@@ -1413,9 +1445,10 @@ function upgradeReason(plan: PortalPlan, upgrade: PortalPlan) {
   return "a stronger option";
 }
 function upgradeCard(plan: PortalPlan) {
-  const upgrade = suggestedUpgrade(plan);
+  const devices = checkoutDevices(plan);
+  const upgrade = suggestedUpgrade(plan, devices);
   if (!upgrade) return "";
-  const extra = Number(upgrade.priceKsh || 0) - Number(plan.priceKsh || 0);
+  const extra = devicePriceFor(upgrade, devices) - devicePriceFor(plan, devices);
   if (extra <= 0) return "";
   return `<div class="upgrade-card">
     <button type="button" class="upgrade-main" data-plan-id="${esc(upgrade.id)}">
@@ -1632,12 +1665,18 @@ function selectPlan(planId, isUpgrade = false) {
   const selected = state.plans.find((plan) => plan.id === planId);
   if (!selected) return;
   const previousPlanId = state.selectedPlanId;
+  const previousPlan = state.plans.find((plan) => plan.id === previousPlanId);
+  const previousDeviceCount = previousPlan ? checkoutDevices(previousPlan) : selected.deviceLimit;
   trackFunnel(isUpgrade ? "upgrade_selected" : "package_selected", planId, isUpgrade ? previousPlanId : undefined);
   state.selectedPlanId = planId;
-  // Picked from "Multiple devices": start checkout at 2 devices.
-  state.selectedDevices = state.packageView === "multi"
-    ? Math.min(maxDevicesForPlan(selected), Math.max(selected.deviceLimit, 2))
-    : selected.deviceLimit;
+  // A compare/upgrade action preserves the device count so its quoted price
+  // remains the price shown after selecting the upgrade.
+  state.selectedDevices = isUpgrade
+    ? Math.min(maxDevicesForPlan(selected), Math.max(selected.deviceLimit, previousDeviceCount))
+    // Picked from "Multiple devices": start checkout at 2 devices.
+    : state.packageView === "multi"
+      ? Math.min(maxDevicesForPlan(selected), Math.max(selected.deviceLimit, 2))
+      : selected.deviceLimit;
   const selectedTier = speedTierForPlan(selected);
   if (selectedTier && !isSupportOnlyPlan(selected)) state.activeNeed = selectedTier.key;
   access.classList.add("hidden");
@@ -1802,7 +1841,7 @@ function showConnectedPanel(entitlement: Entitlement, { heading, skipAutoConnect
   // Remembered access (a later visit on this device) doesn't carry the
   // device code -- fetch it so "Code for another device" always shows.
   if (!entitlement.connectCode && entitlement.password) void loadConnectCode(entitlement);
-  void loadNotifications(entitlement.username);
+  void loadNotifications(entitlement.username, entitlement.password);
   access.classList.remove("hidden");
   setStep("access");
   closeCheckoutSheet();
@@ -1894,7 +1933,7 @@ paymentForm.addEventListener("submit", async (event) => {
       const response = await fetch(api("/access/free"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ planId: plan.id, deviceMac: state.hotspot?.mac || undefined, funnelSessionId })
+        body: JSON.stringify({ planId: plan.id, deviceMac: state.hotspot?.mac || undefined, deviceIp: state.hotspot?.ip || undefined, funnelSessionId })
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -1975,6 +2014,14 @@ async function requestStkPayment(plan, normalizedPhone: string, addToPackage = f
     const payload = await response.json().catch(() => ({}));
     if (response.status === 409 && payload.code === "package_on_other_device") {
       offerAddToPackage(plan, normalizedPhone, payload);
+      return;
+    }
+    if (response.status === 409 && payload.code === "package_upgrade_available" && state.currentEntitlement?.password) {
+      hidePaymentModal();
+      resetPayButton(plan);
+      showError("");
+      showConnectedPanel(state.currentEntitlement, { heading: "Upgrade your active package", skipAutoConnect: true });
+      packageUpgradeBtn.click();
       return;
     }
     if (!response.ok) throw new Error(payload.error || "Unable to start M-PESA payment.");
@@ -2293,7 +2340,9 @@ async function attemptReturningDeviceAutoConnect() {
   const mac = state.hotspot?.mac;
   if (!mac) return false;
   try {
-    const response = await fetch(api(`/entitlements/by-device/${encodeURIComponent(mac)}`));
+    const ip = state.hotspot?.ip;
+    if (!ip) return false;
+    const response = await fetch(api(`/entitlements/by-device/${encodeURIComponent(mac)}?ip=${encodeURIComponent(ip)}`));
     if (!response.ok) return false;
     const payload = await response.json();
     if (!payload?.data?.username) return false;
@@ -2471,6 +2520,86 @@ selectedSummary.addEventListener("click", (event) => {
   if (!option) return;
   state.selectedDevices = Number(option.dataset.devices || 1);
   renderSelectedPlan();
+});
+
+let selectedUpgradePlanId = "";
+packageUpgradeBtn.addEventListener("click", async () => {
+  const entitlement = state.currentEntitlement;
+  if (!entitlement) return;
+  packageUpgradePanel.classList.remove("hidden");
+  packageUpgradeStatus.textContent = "";
+  packageUpgradeOptions.innerHTML = '<p class="device-locked">Checking available upgrades...</p>';
+  try {
+    const response = await fetch(api("/entitlements/package-upgrade/quote"), {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: entitlement.username, password: entitlement.password })
+    });
+    const payload = await response.json().catch(() => ({}));
+    const options: Array<{ planId: string; name: string; deviceLimit: number; priceKsh: number }> = payload.data?.options || [];
+    if (!response.ok || !options.length) {
+      packageUpgradeOptions.innerHTML = `<p class="device-locked">${payload.data?.pending ? "An upgrade payment is already waiting for confirmation." : payload.data?.used ? "This package has already been upgraded. You can upgrade again after your next renewal." : "No eligible package upgrade is available right now."}</p>`;
+      packageUpgradePay.disabled = true;
+      return;
+    }
+    selectedUpgradePlanId = options[0].planId;
+    const render = () => {
+      packageUpgradeOptions.innerHTML = `<div class="device-picker">${options.map((option) => `<button type="button" class="device-option ${option.planId === selectedUpgradePlanId ? "active" : ""}" data-upgrade-plan="${esc(option.planId)}" data-upgrade-devices="${option.deviceLimit}"><strong>${esc(option.name)}</strong><span>${option.deviceLimit} devices</span><em>+${money(option.priceKsh)}</em></button>`).join("")}</div>`;
+      const chosen = options.find((option) => option.planId === selectedUpgradePlanId);
+      packageUpgradePay.textContent = chosen ? `Pay ${money(chosen.priceKsh)}` : "Pay upgrade";
+      packageUpgradePay.disabled = !chosen;
+    };
+    packageUpgradeOptions.onclick = (event) => {
+      const button = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-upgrade-plan]") : null;
+      if (!button) return;
+      selectedUpgradePlanId = button.dataset.upgradePlan || "";
+      render();
+    };
+    render();
+  } catch (_error) {
+    packageUpgradeOptions.innerHTML = '<p class="device-locked">Couldn't load upgrade options. Try again.</p>';
+  }
+});
+packageUpgradePay.addEventListener("click", async () => {
+  const entitlement = state.currentEntitlement;
+  const phone = normalizeMpesaPhoneInput(packageUpgradePhone.value);
+  if (!entitlement || !selectedUpgradePlanId) return;
+  if (!phone) { packageUpgradeStatus.textContent = "Enter the M-PESA number to pay with."; return; }
+  packageUpgradePay.disabled = true;
+  packageUpgradeStatus.textContent = "Check your phone for the M-PESA prompt.";
+  try {
+    const response = await fetch(api("/payments/mpesa/package-upgrade"), {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: entitlement.username, password: entitlement.password, planId: selectedUpgradePlanId, deviceCount: Number(packageUpgradeOptions.querySelector<HTMLElement>("[data-upgrade-plan].active")?.dataset.upgradeDevices || 0), phone: phone.replace(/^\+/, ""), funnelSessionId })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "Couldn't send the M-PESA prompt.");
+    const paymentId = payload.data.id;
+    const startedAt = Date.now();
+    const poll = async () => {
+      const result = await fetch(api(`/payments/${encodeURIComponent(paymentId)}`)).then((r) => r.json()).catch(() => null);
+      if (result?.data?.status === "activated" && result.data.entitlement) {
+        packageUpgradePanel.classList.add("hidden");
+        packageUpgradePay.disabled = false;
+        showConnectedPanel(result.data.entitlement, { heading: "Package upgraded", message: "Your package has been upgraded. Your login and expiry stay the same.", hideCredentials: true, freshGrant: true });
+        return;
+      }
+      if (result?.data?.status === "failed") {
+        packageUpgradeStatus.textContent = result?.data?.failureReason || "Payment didn't go through. Try again.";
+        packageUpgradePay.disabled = false;
+        return;
+      }
+      if (Date.now() - startedAt > 3 * 60 * 1000) {
+        packageUpgradeStatus.textContent = "Still waiting for M-PESA. If you paid, the package will update shortly.";
+        packageUpgradePay.disabled = false;
+        return;
+      }
+      setTimeout(poll, 3000);
+    };
+    setTimeout(poll, 3000);
+  } catch (error) {
+    packageUpgradeStatus.textContent = error instanceof Error ? error.message : "Couldn't send the M-PESA prompt.";
+    packageUpgradePay.disabled = false;
+  }
 });
 
 // "Add a device": pay the time-left share to raise this package's device
