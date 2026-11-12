@@ -178,7 +178,7 @@ async function tick() {
 
   const accounting = await evaluateAccountingOutage(prisma);
   if (accounting.paused) {
-    console.log(`Paused ${accounting.pausedCount} active WiFi entitlement(s): RADIUS accounting has been silent fleet-wide (network path likely down)`);
+    console.log(`Paused ${accounting.pausedCount} active WiFi entitlement(s): RADIUS accounting was silent and MikroTik WAN/Internet probes confirmed loss`);
   }
 
   const resumed = await resumePausedEntitlements(prisma);
@@ -198,7 +198,7 @@ async function main() {
   console.log("CAPTYN WiFi RADIUS SQL worker running");
   const startupCheck = await applyOutageCredit(prisma);
   if (startupCheck.paused) {
-    console.log(`Paused ${startupCheck.pausedCount} active WiFi entitlement(s): worker was down for ${startupCheck.outageSeconds}s`);
+    console.log(`Paused ${startupCheck.pausedCount} active WiFi entitlement(s): worker was down for ${startupCheck.outageSeconds}s, with RADIUS silence and MikroTik probes confirming loss`);
   }
 
   for (;;) {

@@ -175,6 +175,7 @@ model WifiEntitlement {
   outagePausedAt   DateTime?
   outagePauseCause String?
   outageRemainingSeconds Float?
+  outageEvidence Json?
   promoPausedAt    DateTime?
   packageUpgradedAt DateTime?
   createdAt        DateTime              @default(now())
@@ -368,6 +369,7 @@ model WifiOutageCredit {
   outageEndedAt        DateTime
   creditedSeconds      Int
   remainingSeconds     Float    @default(0)
+  evidence             Json?
   affectedEntitlements Int      @default(0)
   entitlementId        String?
   createdAt            DateTime @default(now())

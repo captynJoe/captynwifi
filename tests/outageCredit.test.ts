@@ -1,9 +1,52 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { decideAccountingOutageAction, decideResumeAction, expiryFromFrozenBalance } from "../src/services/outageCredit.js";
+import { decideAccountingOutageAction, decideResumeAction, expiryFromFrozenBalance, confirmsCustomerPathOutage } from "../src/services/outageCredit.js";
 
 const GRACE_SECONDS = 600;
 const RECONNECT_WINDOW_SECONDS = 60 * 60 * 48;
+
+test("RADIUS silence alone never confirms an outage when the router says Internet is up", () => {
+  assert.equal(confirmsCustomerPathOutage(true, {
+    configured: true,
+    routerReachable: true,
+    wanLinkUp: true,
+    internetReachable: true,
+    reachableTargets: ["1.1.1.1"],
+    checkedAt: "2026-11-12T00:00:00.000Z"
+  }), false);
+});
+
+test("an unreachable or unconfigured RouterOS probe is unknown, not outage confirmation", () => {
+  assert.equal(confirmsCustomerPathOutage(true, {
+    configured: true,
+    routerReachable: false,
+    wanLinkUp: null,
+    internetReachable: null,
+    reachableTargets: [],
+    checkedAt: "2026-11-12T00:00:00.000Z",
+    error: "timeout"
+  }), false);
+  assert.equal(confirmsCustomerPathOutage(true, {
+    configured: false,
+    routerReachable: false,
+    wanLinkUp: null,
+    internetReachable: null,
+    reachableTargets: [],
+    checkedAt: "2026-11-12T00:00:00.000Z"
+  }), false);
+});
+
+test("RADIUS silence plus a reachable MikroTik reporting WAN or Internet loss confirms outage", () => {
+  const base = {
+    configured: true,
+    routerReachable: true,
+    reachableTargets: [],
+    checkedAt: "2026-11-12T00:00:00.000Z"
+  };
+  assert.equal(confirmsCustomerPathOutage(true, { ...base, wanLinkUp: false, internetReachable: false }), true);
+  assert.equal(confirmsCustomerPathOutage(true, { ...base, wanLinkUp: true, internetReachable: false }), true);
+  assert.equal(confirmsCustomerPathOutage(false, { ...base, wanLinkUp: false, internetReachable: false }), false);
+});
 
 test("real activity moving forward advances the checkpoint and is never treated as an outage", () => {
   const checkpoint = new Date("2026-08-16T10:00:00Z");

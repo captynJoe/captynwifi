@@ -1,5 +1,6 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { config } from "../config.js";
+import { probeRouterOutageHealth, type RouterOutageProbe } from "./routeros.js";
 import { applyRadiusProjectionRows } from "./radiusSqlApply.js";
 import { buildRadiusProjection } from "./radiusProjection.js";
 
@@ -31,6 +32,7 @@ type EntitlementForCredit = {
   deviceLimit: number;
   outagePausedAt: Date | null;
   outagePauseCause: string | null;
+  outageEvidence: Prisma.JsonValue | null;
 };
 
 export const ACCOUNTING_OUTAGE_SERVICE = "captyn-wifi-radius-accounting";
@@ -44,6 +46,20 @@ export type AccountingOutageDecision =
 export type ResumeDecision =
   | { type: "still-paused" }
   | { type: "resume"; creditedSeconds: number; reconnectedAt: Date };
+
+export function confirmsCustomerPathOutage(accountingSilent: boolean, probe: RouterOutageProbe) {
+  if (!accountingSilent || !probe.configured || !probe.routerReachable) return false;
+  return probe.wanLinkUp === false || probe.internetReachable === false;
+}
+
+let routerProbeCache: { checkedAt: number; result: RouterOutageProbe } | null = null;
+async function getRouterProbeCached(): Promise<RouterOutageProbe> {
+  const now = Date.now();
+  if (routerProbeCache && now - routerProbeCache.checkedAt < 30_000) return routerProbeCache.result;
+  const result = await probeRouterOutageHealth();
+  routerProbeCache = { checkedAt: Date.now(), result };
+  return result;
+}
 
 function secondsBetween(start: Date, end: Date) {
   return Math.max(0, Math.floor((end.getTime() - start.getTime()) / 1000));
@@ -226,11 +242,17 @@ async function creditEntitlement(
 // original outage start time is preserved even if a detector re-fires while
 // the same outage is still ongoing. Doesn't touch RADIUS state -- that only
 // changes once the entitlement actually resumes (see resumePausedEntitlements).
-async function pauseActiveEntitlements(tx: Prisma.TransactionClient, outageStartedAt: Date, cause: string): Promise<number> {
+async function pauseActiveEntitlements(
+  tx: Prisma.TransactionClient,
+  outageStartedAt: Date,
+  cause: string,
+  evidence: Prisma.InputJsonValue
+): Promise<number> {
   const paused = await tx.$queryRaw<Array<{ id: string }>>`
     UPDATE "WifiEntitlement"
     SET "outagePausedAt" = ${outageStartedAt},
         "outagePauseCause" = ${cause},
+        "outageEvidence" = ${JSON.stringify(evidence)}::jsonb,
         "outageRemainingSeconds" = GREATEST(
           0,
           EXTRACT(EPOCH FROM ("expiresAt" - ${outageStartedAt}))::DOUBLE PRECISION
@@ -274,18 +296,25 @@ export async function applyOutageCredit(prisma: PrismaClient): Promise<PauseSumm
       return { paused: false, pausedCount: 0, outageSeconds };
     }
 
-    // The worker being down doesn't take anyone offline -- RADIUS and the
-    // router keep working; it only runs background jobs. A routine restart
-    // (npm ci + build, ~3 min) used to freeze every package and hand out
-    // free time. Only freeze if RADIUS accounting also went silent, i.e.
-    // customers really were cut off (Lane B catches that case too).
+    // Worker downtime alone is not customer downtime. Require stale RADIUS
+    // activity and a live RouterOS response that confirms the WAN link or
+    // outbound Internet path is down. Unknown RouterOS status never pauses.
     const lastActivity = await lastRadiusAccountingActivity(tx);
     if (lastActivity && lastActivity.getTime() > lastSeenAt.getTime() + config.outageCredit.graceSeconds * 1000) {
       await upsertHeartbeat(tx, service, now);
       return { paused: false, pausedCount: 0, outageSeconds };
     }
+    const probe = await getRouterProbeCached();
+    if (!confirmsCustomerPathOutage(true, probe)) {
+      await upsertHeartbeat(tx, service, now);
+      return { paused: false, pausedCount: 0, outageSeconds };
+    }
 
-    const pausedCount = await pauseActiveEntitlements(tx, lastSeenAt, service);
+    const pausedCount = await pauseActiveEntitlements(tx, lastSeenAt, service, {
+      accountingLastActivityAt: lastActivity?.toISOString() ?? null,
+      outageCheckpointAt: lastSeenAt.toISOString(),
+      routerProbe: probe
+    });
     await upsertHeartbeat(tx, service, now);
 
     return { paused: pausedCount > 0, pausedCount, outageSeconds };
@@ -367,7 +396,16 @@ export async function evaluateAccountingOutage(prisma: PrismaClient): Promise<Pa
       return { paused: false, pausedCount: 0, outageSeconds: secondsBetween(checkpoint, now) };
     }
 
-    const pausedCount = await pauseActiveEntitlements(tx, decision.outageStartedAt, ACCOUNTING_OUTAGE_SERVICE);
+    const probe = await getRouterProbeCached();
+    if (!confirmsCustomerPathOutage(true, probe)) {
+      return { paused: false, pausedCount: 0, outageSeconds: decision.creditedSeconds };
+    }
+
+    const pausedCount = await pauseActiveEntitlements(tx, decision.outageStartedAt, ACCOUNTING_OUTAGE_SERVICE, {
+      accountingLastActivityAt: lastActivity.toISOString(),
+      outageCheckpointAt: decision.outageStartedAt.toISOString(),
+      routerProbe: probe
+    });
     // Do not move the activity checkpoint on silence. resumePausedEntitlements
     // reads this same heartbeat as recovery evidence, so advancing it here
     // would let the detector certify its own false recovery one second later.
@@ -402,7 +440,8 @@ export async function resumePausedEntitlements(prisma: PrismaClient): Promise<Re
         deviceLimit: true,
         outagePausedAt: true,
         outagePauseCause: true,
-        outageRemainingSeconds: true
+        outageRemainingSeconds: true,
+        outageEvidence: true
       }
     });
 
@@ -454,7 +493,8 @@ export async function resumePausedEntitlements(prisma: PrismaClient): Promise<Re
         rateLimit: entitlement.rateLimit,
         deviceLimit: entitlement.deviceLimit,
         outagePausedAt: audit.outageStartedAt,
-        outagePauseCause: audit.service
+        outagePauseCause: audit.service,
+        outageEvidence: audit.evidence
       }, remainingSeconds, audit.outageEndedAt, now);
       await tx.wifiCredit.update({ where: { id: credit.id }, data: { expiresAt: now } });
       resumed += 1;
@@ -484,8 +524,8 @@ export async function resumePausedEntitlements(prisma: PrismaClient): Promise<Re
       const outageSeconds = secondsBetween(pausedAt, reconnectedAt);
       const service = entitlement.outagePauseCause ?? "unknown";
       const inserted = await tx.$queryRaw<CreditInsertRow[]>`
-        INSERT INTO "WifiOutageCredit" ("service", "outageStartedAt", "outageEndedAt", "creditedSeconds", "remainingSeconds", "affectedEntitlements", "entitlementId")
-        VALUES (${service}, ${pausedAt}, ${reconnectedAt}, ${outageSeconds}, ${remainingSeconds}, 1, ${entitlement.id})
+        INSERT INTO "WifiOutageCredit" ("service", "outageStartedAt", "outageEndedAt", "creditedSeconds", "remainingSeconds", "evidence", "affectedEntitlements", "entitlementId")
+        VALUES (${service}, ${pausedAt}, ${reconnectedAt}, ${outageSeconds}, ${remainingSeconds}, ${entitlement.outageEvidence ? JSON.stringify(entitlement.outageEvidence) : null}::jsonb, 1, ${entitlement.id})
         ON CONFLICT ("service", "outageStartedAt", "outageEndedAt", "entitlementId") DO NOTHING
         RETURNING "id"
       `;

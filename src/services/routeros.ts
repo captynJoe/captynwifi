@@ -161,6 +161,88 @@ function sentencesToRows(sentences: RouterSentence[]) {
   return sentences.filter((sentence) => sentence.type === "!re").map((sentence) => sentence.attrs);
 }
 
+export type RouterOutageProbe = {
+  configured: boolean;
+  routerReachable: boolean;
+  wanLinkUp: boolean | null;
+  internetReachable: boolean | null;
+  reachableTargets: string[];
+  checkedAt: string;
+  error?: string;
+};
+
+/**
+ * Read-only outage corroboration. A silent RADIUS accounting stream alone is
+ * ambiguous; this checks the MikroTik WAN link and two independent public IPs.
+ * API failures are unknown, never evidence that the customer network is down.
+ */
+export async function probeRouterOutageHealth(): Promise<RouterOutageProbe> {
+  const checkedAt = new Date().toISOString();
+  const missingConfig = missingRouterConfig();
+  const unavailable: RouterOutageProbe = {
+    configured: !missingConfig,
+    routerReachable: false,
+    wanLinkUp: null,
+    internetReachable: null,
+    reachableTargets: [],
+    checkedAt,
+    error: missingConfig || undefined
+  };
+  if (!unavailable.configured) return unavailable;
+
+  const client = new RouterOsApiClient();
+  try {
+    await client.connect();
+    await client.login();
+
+    const wanRow = sentencesToRows(await client.command([
+      "/interface/ethernet/monitor", "=numbers=ether1", "=once="
+    ]))[0] || {};
+    const wanLinkUp = wanRow.status === "link-ok"
+      ? true
+      : wanRow.status === "no-link"
+        ? false
+        : wanRow.running === "true"
+          ? true
+          : wanRow.running === "false"
+            ? false
+            : null;
+    const reachableTargets: string[] = [];
+
+    if (wanLinkUp !== false) {
+      for (const address of ["1.1.1.1", "8.8.8.8"]) {
+        const sentences = await client.command([
+          "/ping", `=address=${address}`, "=count=2", "=interval=250ms"
+        ]);
+        const rows = sentencesToRows(sentences);
+        const done = sentences.find((sentence) => sentence.type === "!done");
+        const reportedReceived = Number(done?.attrs.received);
+        const replies = Number.isFinite(reportedReceived)
+          ? reportedReceived
+          : rows.filter((row) => row.status !== "timeout" && (row.time !== undefined || row.ttl !== undefined)).length;
+        if (replies > 0) reachableTargets.push(address);
+      }
+    }
+
+    client.close();
+    return {
+      configured: true,
+      routerReachable: true,
+      wanLinkUp,
+      internetReachable: wanLinkUp === false ? false : reachableTargets.length > 0,
+      reachableTargets,
+      checkedAt
+    };
+  } catch (error) {
+    client.close();
+    return {
+      ...unavailable,
+      routerReachable: false,
+      error: error instanceof Error ? error.message : "RouterOS outage probe failed"
+    };
+  }
+}
+
 function rateMbps(value: string | undefined): number | null {
   if (!value) return null;
   const match = value.trim().match(/^([\d.]+)\s*(k|M|G)?(?:bps)?$/i);

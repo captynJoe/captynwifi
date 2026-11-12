@@ -12,7 +12,7 @@ import { config } from "../config.js";
 import { getMpesaStatus } from "../services/mpesa.js";
 import { buildRadiusProjection, normalizeDeviceMac, normalizeWifiUsername } from "../services/radiusProjection.js";
 import { applyRadiusProjectionRows, hasOtherActiveEntitlement } from "../services/radiusSqlApply.js";
-import { getRouterCapacityStatus, kickHotspotUser } from "../services/routeros.js";
+import { getRouterCapacityStatus, kickHotspotUser, probeRouterOutageHealth } from "../services/routeros.js";
 import { issueVoucher } from "../services/voucherIssuance.js";
 import { normalizeKenyaPhone } from "../lib/phone.js";
 import { PROMO_PLAN_SOURCE, endPromo, getActivePromo, startPromo } from "../services/promo.js";
@@ -1417,7 +1417,7 @@ adminRouter.get("/dynamic-plan-status", async (_req, res, next) => {
 
 adminRouter.get("/outage-credits", async (_req, res, next) => {
   try {
-    const [recentCredits, heartbeats, currentlyPaused] = await Promise.all([
+    const [recentCredits, heartbeats, currentlyPaused, routerProbe] = await Promise.all([
       prisma.$queryRaw<Array<{
         id: string;
         service: string;
@@ -1426,9 +1426,10 @@ adminRouter.get("/outage-credits", async (_req, res, next) => {
         creditedSeconds: number;
         affectedEntitlements: number;
         entitlementId: string | null;
+        evidence: Prisma.JsonValue | null;
         createdAt: Date;
       }>>(Prisma.sql`
-        select id, service, "outageStartedAt", "outageEndedAt", "creditedSeconds", "affectedEntitlements", "entitlementId", "createdAt"
+        select id, service, "outageStartedAt", "outageEndedAt", "creditedSeconds", "affectedEntitlements", "entitlementId", evidence, "createdAt"
         from "WifiOutageCredit"
         order by "createdAt" desc
         limit 60
@@ -1440,7 +1441,8 @@ adminRouter.get("/outage-credits", async (_req, res, next) => {
         where: { outagePausedAt: { not: null } },
         orderBy: { outagePausedAt: "asc" },
         select: { id: true, username: true, customerPhone: true, outagePausedAt: true, outagePauseCause: true, expiresAt: true }
-      })
+      }),
+      probeRouterOutageHealth()
     ]);
 
     return sendData(res, {
@@ -1452,9 +1454,64 @@ adminRouter.get("/outage-credits", async (_req, res, next) => {
         reconnectWindowSeconds: config.outageCredit.reconnectWindowSeconds
       },
       heartbeats,
+      routerProbe,
       currentlyPaused,
       recentCredits
     });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+
+adminRouter.get("/access-reconciliation", async (_req, res, next) => {
+  try {
+    const issues = await prisma.$queryRaw<Array<{
+      issue: string;
+      entitlementId: string | null;
+      username: string;
+      status: string | null;
+      expiresAt: Date | null;
+      projectionStatus: string | null;
+      totalCount: number;
+    }>>(Prisma.sql`
+      WITH active_access AS (
+        SELECT e.id, e.username, e.status::text AS status, e."expiresAt", e."rateLimit",
+               p.status::text AS "projectionStatus",
+               EXISTS (SELECT 1 FROM radcheck rc WHERE rc.username = e.username AND rc.attribute = 'Cleartext-Password') AS has_password,
+               EXISTS (SELECT 1 FROM radreply rr WHERE rr.username = e.username AND rr.attribute = 'Mikrotik-Rate-Limit') AS has_rate_limit
+        FROM "WifiEntitlement" e
+        LEFT JOIN "WifiRadiusProjection" p ON p."entitlementId" = e.id
+        WHERE e.status = 'active'
+          AND (e."expiresAt" > now() OR e."outagePausedAt" IS NOT NULL OR e."promoPausedAt" IS NOT NULL)
+      ), issues AS (
+        SELECT CASE WHEN NOT has_password THEN 'active_missing_radius_password'
+                    WHEN "rateLimit" IS NOT NULL AND NOT has_rate_limit THEN 'active_missing_radius_rate_limit'
+                    ELSE 'active_projection_not_applied' END AS issue,
+               id AS "entitlementId", username, status, "expiresAt", "projectionStatus"
+        FROM active_access
+        WHERE NOT has_password OR ("rateLimit" IS NOT NULL AND NOT has_rate_limit) OR "projectionStatus" IS DISTINCT FROM 'applied'
+        UNION ALL
+        SELECT 'stale_radius_credentials' AS issue, NULL::text AS "entitlementId", credentials.username,
+               NULL::text AS status, NULL::timestamp AS "expiresAt", NULL::text AS "projectionStatus"
+        FROM (SELECT DISTINCT username FROM radcheck UNION SELECT DISTINCT username FROM radreply) credentials
+        WHERE NOT EXISTS (
+          SELECT 1 FROM "WifiEntitlement" e
+          WHERE e.username = credentials.username AND e.status = 'active'
+            AND (e."expiresAt" > now() OR e."outagePausedAt" IS NOT NULL OR e."promoPausedAt" IS NOT NULL)
+        )
+      )
+      SELECT issue, "entitlementId", username, status, "expiresAt", "projectionStatus", count(*) OVER()::int AS "totalCount"
+      FROM issues
+      ORDER BY issue, username
+      LIMIT 200
+    `);
+    const summary = issues.reduce<Record<string, number>>((counts, row) => {
+      counts[row.issue] = (counts[row.issue] ?? 0) + 1;
+      return counts;
+    }, {});
+    const totalIssues = issues[0]?.totalCount ?? 0;
+    return sendData(res, { generatedAt: new Date(), limit: 200, totalIssues, truncated: totalIssues > issues.length, summary, issues });
   } catch (error) {
     return next(error);
   }
