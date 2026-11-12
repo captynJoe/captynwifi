@@ -1,4 +1,4 @@
-import type { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import { config } from "../config.js";
 import { probeRouterOutageHealth, type RouterOutageProbe } from "./routeros.js";
 import { applyRadiusProjectionRows } from "./radiusSqlApply.js";
@@ -46,6 +46,43 @@ export type AccountingOutageDecision =
 export type ResumeDecision =
   | { type: "still-paused" }
   | { type: "resume"; creditedSeconds: number; reconnectedAt: Date };
+
+export type AccountingSessionObservation = { username: string; lastActivityAt: Date };
+export type AccountingOutageCohort = {
+  confirmed: boolean;
+  outageStartedAt: Date | null;
+  sessionCount: number;
+  cohortSessionCount: number;
+  usernames: string[];
+};
+
+// Infer a shared outage from a cluster of sessions that were recently active
+// and then all stopped reporting. Requiring both a minimum cohort and a high
+// share avoids turning one or two idle devices into a fleet incident.
+export function assessAccountingOutageCohort(
+  sessions: AccountingSessionObservation[],
+  now: Date,
+  graceSeconds: number,
+  minimumSessions = 3,
+  minimumShare = 0.7
+): AccountingOutageCohort {
+  const stale = sessions.filter((session) => secondsBetween(session.lastActivityAt, now) > graceSeconds);
+  if (!stale.length) {
+    return { confirmed: false, outageStartedAt: null, sessionCount: sessions.length, cohortSessionCount: 0, usernames: [] };
+  }
+  const latestStaleActivity = stale.reduce((latest, session) =>
+    session.lastActivityAt > latest ? session.lastActivityAt : latest, stale[0]!.lastActivityAt);
+  const clusterFloor = latestStaleActivity.getTime() - graceSeconds * 1000;
+  const cohort = stale.filter((session) => session.lastActivityAt.getTime() >= clusterFloor);
+  const confirmed = cohort.length >= minimumSessions && cohort.length / Math.max(1, sessions.length) >= minimumShare;
+  return {
+    confirmed,
+    outageStartedAt: confirmed ? latestStaleActivity : null,
+    sessionCount: sessions.length,
+    cohortSessionCount: cohort.length,
+    usernames: confirmed ? [...new Set(cohort.map((session) => session.username))] : []
+  };
+}
 
 export function confirmsCustomerPathOutage(accountingSilent: boolean, probe: RouterOutageProbe) {
   if (!accountingSilent || !probe.configured || !probe.routerReachable) return false;
@@ -246,8 +283,10 @@ async function pauseActiveEntitlements(
   tx: Prisma.TransactionClient,
   outageStartedAt: Date,
   cause: string,
-  evidence: Prisma.InputJsonValue
+  evidence: Prisma.InputJsonValue,
+  usernames: string[]
 ): Promise<number> {
+  if (!usernames.length) return 0;
   const paused = await tx.$queryRaw<Array<{ id: string }>>`
     UPDATE "WifiEntitlement"
     SET "outagePausedAt" = ${outageStartedAt},
@@ -261,6 +300,7 @@ async function pauseActiveEntitlements(
     WHERE status = 'active'
       AND "outagePausedAt" IS NULL
       AND "expiresAt" > ${outageStartedAt}
+      AND username IN (${Prisma.join(usernames)})
     RETURNING id
   `;
   return paused.length;
@@ -296,28 +336,29 @@ export async function applyOutageCredit(prisma: PrismaClient): Promise<PauseSumm
       return { paused: false, pausedCount: 0, outageSeconds };
     }
 
-    // Worker downtime alone is not customer downtime. Require stale RADIUS
-    // activity and a live RouterOS response that confirms the WAN link or
-    // outbound Internet path is down. Unknown RouterOS status never pauses.
-    const lastActivity = await lastRadiusAccountingActivity(tx);
-    if (lastActivity && lastActivity.getTime() > lastSeenAt.getTime() + config.outageCredit.graceSeconds * 1000) {
+    // Worker downtime alone is not customer downtime. Infer customer impact
+    // from a clustered loss of active accounting sessions. The router probe
+    // remains useful evidence, but cannot be required because a powered-off
+    // router is itself unreachable.
+    const cohort = await accountingOutageCohort(tx, now, config.outageCredit.graceSeconds);
+    if (!cohort.confirmed || !cohort.outageStartedAt) {
       await upsertHeartbeat(tx, service, now);
       return { paused: false, pausedCount: 0, outageSeconds };
     }
     const probe = await getRouterProbeCached();
-    if (!confirmsCustomerPathOutage(true, probe)) {
-      await upsertHeartbeat(tx, service, now);
-      return { paused: false, pausedCount: 0, outageSeconds };
-    }
 
-    const pausedCount = await pauseActiveEntitlements(tx, lastSeenAt, service, {
-      accountingLastActivityAt: lastActivity?.toISOString() ?? null,
-      outageCheckpointAt: lastSeenAt.toISOString(),
+    const pausedCount = await pauseActiveEntitlements(tx, cohort.outageStartedAt, service, {
+      accountingSessionCohort: {
+        sessionCount: cohort.sessionCount,
+        affectedSessions: cohort.cohortSessionCount,
+        affectedUsernames: cohort.usernames
+      },
+      outageCheckpointAt: cohort.outageStartedAt.toISOString(),
       routerProbe: probe
-    });
+    }, cohort.usernames);
     await upsertHeartbeat(tx, service, now);
 
-    return { paused: pausedCount > 0, pausedCount, outageSeconds };
+    return { paused: pausedCount > 0, pausedCount, outageSeconds: secondsBetween(cohort.outageStartedAt, now) };
   }, { maxWait: 10_000, timeout: 30_000 });
 }
 
@@ -328,39 +369,28 @@ export async function touchOutageHeartbeat(prisma: PrismaClient) {
   });
 }
 
-async function hasInterimDueActiveEntitlements(tx: Prisma.TransactionClient): Promise<boolean> {
-  const rows = await tx.$queryRaw<{ exists: boolean }[]>`
-    SELECT EXISTS (
-      SELECT 1
-      FROM radacct r
-      JOIN "WifiEntitlement" e ON e.username = r.username
-      WHERE e.status = 'active' AND e."expiresAt" > now()
-        AND r.acctstoptime IS NULL
-        AND coalesce(r.acctupdatetime, r.acctstarttime)
-          <= now() - (e."acctInterimSeconds" * interval '1 second')
-    ) as "exists"
-  `;
-  return rows[0]?.exists ?? false;
-}
-
-async function lastRadiusAccountingActivity(tx: Prisma.TransactionClient): Promise<Date | null> {
-  const rows = await tx.$queryRaw<{ last: Date | null }[]>`
-    SELECT max(coalesce(r.acctupdatetime, r.acctstarttime)) as last
+async function accountingOutageCohort(
+  tx: Prisma.TransactionClient,
+  now: Date,
+  graceSeconds: number
+): Promise<AccountingOutageCohort> {
+  const rows = await tx.$queryRaw<AccountingSessionObservation[]>`
+    SELECT r.username, coalesce(r.acctupdatetime, r.acctstarttime) as "lastActivityAt"
     FROM radacct r
-    JOIN "WifiEntitlement" e ON e.username = r.username
-    WHERE e.status = 'active' AND e."expiresAt" > now()
-      AND r.acctstoptime IS NULL
+    WHERE r.acctstoptime IS NULL
+      AND EXISTS (
+        SELECT 1 FROM "WifiEntitlement" e
+        WHERE e.username = r.username AND e.status = 'active'
+          AND e."expiresAt" > ${new Date(now.getTime() - graceSeconds * 1000)}
+          AND e."outagePausedAt" IS NULL AND e."promoPausedAt" IS NULL
+      )
   `;
-  return rows[0]?.last ?? null;
+  return assessAccountingOutageCohort(rows, now, graceSeconds);
 }
 
-// Lane B: fleet-wide RADIUS accounting silence, checked every tick. The
-// self-heartbeat lane above can only ever catch the worker process itself
-// crashing/restarting -- it can't see a live process whose actual path to
-// customers is broken (e.g. the WireGuard tunnel to the MikroTik silently
-// pointing at a dead port). This lane watches real RADIUS accounting
-// activity instead, so it can flag an outage mid-incident rather than
-// waiting for the next restart.
+// Lane B checks the live-session cohort every tick. It catches a shared loss
+// of client sessions even when the worker itself is healthy and the router is
+// unreachable, as happens when the site loses power.
 export async function evaluateAccountingOutage(prisma: PrismaClient): Promise<PauseSummary> {
   if (!config.outageCredit.enabled) {
     return { paused: false, pausedCount: 0, outageSeconds: 0 };
@@ -369,50 +399,22 @@ export async function evaluateAccountingOutage(prisma: PrismaClient): Promise<Pa
   return prisma.$transaction(async (tx) => {
     const now = new Date();
 
-    const lastActivity = await lastRadiusAccountingActivity(tx);
-    if (!lastActivity) {
+    const cohort = await accountingOutageCohort(tx, now, config.outageCredit.accountingGraceSeconds);
+    if (!cohort.confirmed || !cohort.outageStartedAt) {
       return { paused: false, pausedCount: 0, outageSeconds: 0 };
     }
-
-    const checkpointRows = await tx.$queryRaw<HeartbeatRow[]>`
-      SELECT "lastSeenAt" FROM "WifiServiceHeartbeat" WHERE "service" = ${ACCOUNTING_OUTAGE_SERVICE} LIMIT 1
-    `;
-    const checkpoint = checkpointRows[0]?.lastSeenAt ?? lastActivity;
-    if (!checkpointRows[0]) {
-      await upsertHeartbeat(tx, ACCOUNTING_OUTAGE_SERVICE, checkpoint);
-    }
-
-    const decision = decideAccountingOutageAction(checkpoint, lastActivity, now, config.outageCredit.accountingGraceSeconds);
-
-    // Advance on fresh activity first: a newly reconnected session is normally
-    // too fresh for the interim-due predicate, but it is the evidence that
-    // releases every entitlement paused during the outage.
-    if (decision.type === "advance") {
-      await upsertHeartbeat(tx, ACCOUNTING_OUTAGE_SERVICE, decision.checkpoint);
-      return { paused: false, pausedCount: 0, outageSeconds: 0 };
-    }
-
-    if (decision.type === "healthy" || !(await hasInterimDueActiveEntitlements(tx))) {
-      return { paused: false, pausedCount: 0, outageSeconds: secondsBetween(checkpoint, now) };
-    }
-
     const probe = await getRouterProbeCached();
-    if (!confirmsCustomerPathOutage(true, probe)) {
-      return { paused: false, pausedCount: 0, outageSeconds: decision.creditedSeconds };
-    }
-
-    const pausedCount = await pauseActiveEntitlements(tx, decision.outageStartedAt, ACCOUNTING_OUTAGE_SERVICE, {
-      accountingLastActivityAt: lastActivity.toISOString(),
-      outageCheckpointAt: decision.outageStartedAt.toISOString(),
+    const pausedCount = await pauseActiveEntitlements(tx, cohort.outageStartedAt, ACCOUNTING_OUTAGE_SERVICE, {
+      accountingSessionCohort: {
+        sessionCount: cohort.sessionCount,
+        affectedSessions: cohort.cohortSessionCount,
+        affectedUsernames: cohort.usernames
+      },
+      outageCheckpointAt: cohort.outageStartedAt.toISOString(),
       routerProbe: probe
-    });
-    // Do not move the activity checkpoint on silence. resumePausedEntitlements
-    // reads this same heartbeat as recovery evidence, so advancing it here
-    // would let the detector certify its own false recovery one second later.
-    // The checkpoint advances only in the `advance` branch above, on new
-    // radacct activity.
+    }, cohort.usernames);
 
-    return { paused: pausedCount > 0, pausedCount, outageSeconds: decision.creditedSeconds };
+    return { paused: pausedCount > 0, pausedCount, outageSeconds: secondsBetween(cohort.outageStartedAt, now) };
   }, { maxWait: 10_000, timeout: 30_000 });
 }
 
@@ -444,12 +446,6 @@ export async function resumePausedEntitlements(prisma: PrismaClient): Promise<Re
         outageEvidence: true
       }
     });
-
-    const recoveryRows = await tx.$queryRaw<HeartbeatRow[]>`
-      SELECT "lastSeenAt" FROM "WifiServiceHeartbeat"
-      WHERE "service" = ${ACCOUNTING_OUTAGE_SERVICE} LIMIT 1
-    `;
-    const fleetRecoveredAt = recoveryRows[0]?.lastSeenAt ?? null;
 
     let resumed = 0;
     let totalCreditedSeconds = 0;
@@ -505,19 +501,27 @@ export async function resumePausedEntitlements(prisma: PrismaClient): Promise<Re
       const pausedAt = entitlement.outagePausedAt;
       if (!pausedAt) continue;
 
-      const reconnectRows = await tx.$queryRaw<{ acctstarttime: Date }[]>`
-        SELECT acctstarttime FROM radacct
-        WHERE username = ${entitlement.username} AND acctstarttime > ${pausedAt}
-          AND (
-            ${entitlement.deviceMac}::text IS NULL
-            OR regexp_replace(upper(coalesce(callingstationid, '')), '[^A-F0-9]', '', 'g')
-              = regexp_replace(upper(${entitlement.deviceMac}::text), '[^A-F0-9]', '', 'g')
-          )
-        ORDER BY acctstarttime ASC
-        LIMIT 1
+      const reconnectRows = await tx.$queryRaw<{ reconnectedAt: Date | null }[]>`
+        SELECT min(reconnected_at) as "reconnectedAt" FROM (
+          SELECT acctstarttime as reconnected_at FROM radacct
+          WHERE username = ${entitlement.username} AND acctstarttime > ${pausedAt}
+            AND (
+              ${entitlement.deviceMac}::text IS NULL
+              OR regexp_replace(upper(coalesce(callingstationid, '')), '[^A-F0-9]', '', 'g')
+                = regexp_replace(upper(${entitlement.deviceMac}::text), '[^A-F0-9]', '', 'g')
+            )
+          UNION ALL
+          SELECT acctupdatetime as reconnected_at FROM radacct
+          WHERE username = ${entitlement.username} AND acctupdatetime > ${pausedAt}
+            AND acctstarttime <= ${pausedAt} AND acctstoptime IS NULL
+            AND (
+              ${entitlement.deviceMac}::text IS NULL
+              OR regexp_replace(upper(coalesce(callingstationid, '')), '[^A-F0-9]', '', 'g')
+                = regexp_replace(upper(${entitlement.deviceMac}::text), '[^A-F0-9]', '', 'g')
+            )
+        ) recovery_events
       `;
-      const deviceReconnectedAt = reconnectRows[0]?.acctstarttime ?? null;
-      const reconnectedAt = deviceReconnectedAt ?? (fleetRecoveredAt && fleetRecoveredAt > pausedAt ? fleetRecoveredAt : null);
+      const reconnectedAt = reconnectRows[0]?.reconnectedAt ?? null;
       if (!reconnectedAt) continue;
 
       const remainingSeconds = entitlement.outageRemainingSeconds ?? secondsBetween(pausedAt, entitlement.expiresAt);

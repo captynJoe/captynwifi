@@ -1,9 +1,50 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { decideAccountingOutageAction, decideResumeAction, expiryFromFrozenBalance, confirmsCustomerPathOutage } from "../src/services/outageCredit.js";
+import { assessAccountingOutageCohort, decideAccountingOutageAction, decideResumeAction, expiryFromFrozenBalance, confirmsCustomerPathOutage } from "../src/services/outageCredit.js";
 
 const GRACE_SECONDS = 600;
 const RECONNECT_WINDOW_SECONDS = 60 * 60 * 48;
+
+const at = (minutesAgo: number, now: Date) => new Date(now.getTime() - minutesAgo * 60_000);
+
+test("a clustered majority of recently active sessions identifies an outage cohort", () => {
+  const now = new Date("2026-11-12T12:00:00Z");
+  const sessions = [0, 1, 2, 3, 4, 5, 6].map((index) => ({
+    username: `client-${index}`,
+    lastActivityAt: at(12 + index, now)
+  }));
+  sessions.push({ username: "still-active", lastActivityAt: at(2, now) });
+  const result = assessAccountingOutageCohort(sessions, now, 10 * 60);
+  assert.equal(result.confirmed, true);
+  assert.equal(result.sessionCount, 8);
+  assert.equal(result.cohortSessionCount, 7);
+  assert.equal(result.usernames.length, 7);
+  assert.equal(result.outageStartedAt?.toISOString(), at(12, now).toISOString());
+});
+
+test("a small minority going silent does not trigger an outage", () => {
+  const now = new Date("2026-11-12T12:00:00Z");
+  const sessions = Array.from({ length: 8 }, (_, index) => ({
+    username: `client-${index}`,
+    lastActivityAt: at(index < 2 ? 30 : 2, now)
+  }));
+  assert.equal(assessAccountingOutageCohort(sessions, now, 10 * 60).confirmed, false);
+});
+
+test("widely separated stale sessions do not form a common outage cohort", () => {
+  const now = new Date("2026-11-12T12:00:00Z");
+  const sessions = [0, 20, 40, 60].map((minutesAgo, index) => ({
+    username: `client-${index}`,
+    lastActivityAt: at(minutesAgo, now)
+  }));
+  assert.equal(assessAccountingOutageCohort(sessions, now, 10 * 60).confirmed, false);
+});
+
+test("fewer than three sessions cannot establish a fleet outage", () => {
+  const now = new Date("2026-11-12T12:00:00Z");
+  const sessions = [1, 2].map((index) => ({ username: `client-${index}`, lastActivityAt: at(30, now) }));
+  assert.equal(assessAccountingOutageCohort(sessions, now, 10 * 60).confirmed, false);
+});
 
 test("RADIUS silence alone never confirms an outage when the router says Internet is up", () => {
   assert.equal(confirmsCustomerPathOutage(true, {
