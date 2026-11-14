@@ -1427,6 +1427,99 @@ adminRouter.get("/dynamic-plan-status", async (_req, res, next) => {
   }
 });
 
+type OutageCreditAuditStatus = "consistent" | "expired" | "legacy_unverified" | "mismatch" | "duplicate_candidate";
+
+function jsonObjectRecord(value: Prisma.JsonValue | null): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function outageRestorationTargetId(evidence: Prisma.JsonValue | null): string | null {
+  const record = jsonObjectRecord(evidence);
+  const restoration = jsonObjectRecord((record?.restoration as Prisma.JsonValue | undefined) ?? null);
+  return typeof restoration?.targetEntitlementId === "string" ? restoration.targetEntitlementId : null;
+}
+
+function auditOutageCredit(
+  row: { remainingSeconds: number; evidence: Prisma.JsonValue | null; entitlementId: string | null },
+  currentTarget: { id: string; status: string; expiresAt: Date } | undefined,
+  duplicateCandidate: boolean
+) {
+  const evidence = jsonObjectRecord(row.evidence);
+  const resolution = typeof evidence?.resolution === "string" ? evidence.resolution : "";
+  const restoredSeconds = Math.max(0, Number(row.remainingSeconds || 0));
+
+  if (duplicateCandidate) {
+    return { status: "duplicate_candidate" as OutageCreditAuditStatus, label: "Duplicate review", color: "red", restoredSeconds, forfeitedSeconds: null, detail: "Multiple ledger rows share this service, outage start and entitlement; review for duplicate restoration." };
+  }
+
+  if (resolution === "reconnect_window_expired") {
+    const hasFutureActiveAccess = currentTarget?.status === "active" && currentTarget.expiresAt.getTime() > Date.now();
+    if (restoredSeconds > 1 || hasFutureActiveAccess) {
+      return {
+        status: "mismatch" as OutageCreditAuditStatus,
+        label: "Mismatch",
+        color: "red",
+        restoredSeconds,
+        forfeitedSeconds: Number(evidence?.forfeitedRemainingSeconds || 0),
+        currentExpiresAt: currentTarget?.expiresAt ?? null,
+        detail: restoredSeconds > 1
+          ? "Window expired but ledger records restored time."
+          : "Window expired but the original entitlement still has future active access."
+      };
+    }
+    return { status: "expired" as OutageCreditAuditStatus, label: "Window expired", color: "yellow", restoredSeconds: 0, forfeitedSeconds: Number(evidence?.forfeitedRemainingSeconds || 0), detail: "No time restored because the reconnect window expired." };
+  }
+
+  if (resolution !== "reconnected_within_window" && resolution !== "legacy_wallet_credit_redeemed") {
+    return { status: "legacy_unverified" as OutageCreditAuditStatus, label: "Legacy review", color: "yellow", restoredSeconds, forfeitedSeconds: null, detail: "This record predates the restoration audit snapshot." };
+  }
+
+  const restoration = jsonObjectRecord((evidence?.restoration as Prisma.JsonValue | undefined) ?? null);
+  if (!restoration) {
+    return { status: "legacy_unverified" as OutageCreditAuditStatus, label: "Legacy review", color: "yellow", restoredSeconds, forfeitedSeconds: null, detail: "Restoration target and resulting expiry were not recorded." };
+  }
+
+  const snapshotSeconds = Number(restoration.restoredSeconds);
+  const expiryBaseMs = Date.parse(String(restoration.expiryBaseAt || ""));
+  const resultingExpiryMs = Date.parse(String(restoration.resultingExpiresAt || ""));
+  const expectedExpiryMs = expiryBaseMs + snapshotSeconds * 1000;
+  const targetId = typeof restoration.targetEntitlementId === "string" ? restoration.targetEntitlementId : "";
+  const secondsMatch = Number.isFinite(snapshotSeconds) && Math.abs(snapshotSeconds - restoredSeconds) <= 1;
+  const expiryMatches = Number.isFinite(expiryBaseMs) && Number.isFinite(resultingExpiryMs) && Math.abs(resultingExpiryMs - expectedExpiryMs) <= 1000;
+  const projectionApplied = restoration.radiusProjectionStatus === "applied";
+  const targetExists = Boolean(targetId && currentTarget?.id === targetId);
+  const currentExpiryPreservesRestoration = targetExists && currentTarget!.expiresAt.getTime() >= resultingExpiryMs - 1000;
+
+  if (!targetId || !secondsMatch || !expiryMatches || !projectionApplied || !targetExists || !currentExpiryPreservesRestoration) {
+    return {
+      status: "mismatch" as OutageCreditAuditStatus,
+      label: "Mismatch",
+      color: "red",
+      restoredSeconds,
+      forfeitedSeconds: 0,
+      targetEntitlementId: targetId || null,
+      expectedExpiresAt: Number.isFinite(resultingExpiryMs) ? new Date(resultingExpiryMs) : null,
+      currentExpiresAt: currentTarget?.expiresAt ?? null,
+      detail: "Restored amount, expiry calculation, target existence or current expiry does not reconcile."
+    };
+  }
+
+  return {
+    status: "consistent" as OutageCreditAuditStatus,
+    label: "Consistent",
+    color: "green",
+    restoredSeconds,
+    forfeitedSeconds: 0,
+    targetEntitlementId: targetId,
+    expectedExpiresAt: new Date(resultingExpiryMs),
+    currentExpiresAt: currentTarget!.expiresAt,
+    currentStatus: currentTarget!.status,
+    detail: "Restored seconds and expiry calculation match the snapshot; current entitlement expiry preserves the restored endpoint."
+  };
+}
+
 adminRouter.get("/outage-credits", async (_req, res, next) => {
   try {
     const [recentCredits, heartbeats, currentlyPaused, routerProbe] = await Promise.all([
@@ -1466,8 +1559,45 @@ adminRouter.get("/outage-credits", async (_req, res, next) => {
       probeRouterOutageHealth()
     ]);
 
+    const duplicateCounts = new Map<string, number>();
+    for (const credit of recentCredits) {
+      if (!credit.entitlementId) continue;
+      const key = `${credit.service}|${credit.outageStartedAt.toISOString()}|${credit.entitlementId}`;
+      duplicateCounts.set(key, (duplicateCounts.get(key) ?? 0) + 1);
+    }
+    const targetIds = [...new Set(recentCredits.flatMap((credit) => [
+      credit.entitlementId,
+      outageRestorationTargetId(credit.evidence)
+    ]).filter((id): id is string => Boolean(id)))];
+    const currentTargets = targetIds.length
+      ? await prisma.wifiEntitlement.findMany({
+          where: { id: { in: targetIds } },
+          select: { id: true, status: true, expiresAt: true }
+        })
+      : [];
+    const targetsById = new Map(currentTargets.map((target) => [target.id, target]));
+    const auditedCredits = recentCredits.map((credit) => {
+      const targetId = outageRestorationTargetId(credit.evidence) ?? credit.entitlementId;
+      const duplicateKey = credit.entitlementId
+        ? `${credit.service}|${credit.outageStartedAt.toISOString()}|${credit.entitlementId}`
+        : "";
+      return {
+        ...credit,
+        reconciliation: auditOutageCredit(
+          credit,
+          targetId ? targetsById.get(targetId) : undefined,
+          Boolean(duplicateKey && (duplicateCounts.get(duplicateKey) ?? 0) > 1)
+        )
+      };
+    });
+    const auditSummary = auditedCredits.reduce((summary, credit) => {
+      summary[credit.reconciliation.status] += 1;
+      return summary;
+    }, { consistent: 0, expired: 0, legacy_unverified: 0, mismatch: 0, duplicate_candidate: 0 });
+
     return sendData(res, {
       generatedAt: new Date(),
+      reconciliationSummary: auditSummary,
       config: {
         enabled: config.outageCredit.enabled,
         graceSeconds: config.outageCredit.graceSeconds,
@@ -1477,7 +1607,7 @@ adminRouter.get("/outage-credits", async (_req, res, next) => {
       heartbeats,
       routerProbe,
       currentlyPaused,
-      recentCredits
+      recentCredits: auditedCredits
     });
   } catch (error) {
     return next(error);

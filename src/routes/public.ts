@@ -456,6 +456,12 @@ async function claimRewardBoost(tx: Prisma.TransactionClient, paymentIntent: Wif
 
 async function activatePaymentIntent(intent: WifiPaymentIntent, confirmedAt = new Date()) {
   return prisma.$transaction(async (tx) => {
+    // Callback delivery and the pending-payment reconciler can activate the
+    // same intent concurrently. Lock the intent first so retries become
+    // idempotent even for top-ups/upgrades that do not create a new linked
+    // entitlement. Then serialize different purchases for the same phone so
+    // two renewals cannot both calculate expiry from the same old endpoint.
+    await tx.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`wifi-payment:${intent.id}`}))`);
     const paymentIntent = await tx.wifiPaymentIntent.findUnique({
       where: { id: intent.id },
       include: { site: true, plan: true, entitlement: { include: { projection: true } } }
@@ -463,6 +469,22 @@ async function activatePaymentIntent(intent: WifiPaymentIntent, confirmedAt = ne
     if (!paymentIntent) throw new Error("Payment intent not found");
     if (paymentIntent.accessType === "pppoe") {
       return activatePppoePayment(tx, paymentIntent, confirmedAt);
+    }
+
+    await tx.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`wifi-hotspot:${paymentIntent.customerPhone}`}))`);
+
+    // For an extension, package upgrade, or add-device purchase, the payment
+    // intent is intentionally not linked as WifiEntitlement.paymentIntentId.
+    // Its activated status is therefore the idempotency marker after acquiring
+    // the intent lock above.
+    if (paymentIntent.status === "activated") {
+      return {
+        intent: paymentIntent,
+        entitlement: paymentIntent.entitlement,
+        projection: paymentIntent.entitlement?.projection ?? null,
+        alreadyProcessed: true,
+        extended: false
+      };
     }
     if (paymentIntent.entitlement) {
       const updatedIntent = await tx.wifiPaymentIntent.update({

@@ -852,13 +852,18 @@ function renderOutageCredits() {
   if (modeLabel) modeLabel.textContent = config.enabled ? "Watching" : "Off";
 
   const last24h = credits.filter((item) => Date.now() - new Date(item.createdAt).getTime() < 24 * 60 * 60 * 1000);
-  const totalCreditedSeconds24h = last24h.reduce((sum, item) => sum + Number(item.creditedSeconds || 0), 0);
+  const restoredLast24h = last24h.filter((item) => Number(item.remainingSeconds || 0) > 0);
+  const totalRestoredSeconds24h = restoredLast24h.reduce((sum, item) => sum + Number(item.remainingSeconds || 0), 0);
+  const audit = data.reconciliationSummary || {};
+  const auditNeedsReview = Number(audit.legacy_unverified || 0) + Number(audit.mismatch || 0) + Number(audit.duplicate_candidate || 0);
+  const auditTotal = Number(audit.consistent || 0) + Number(audit.expired || 0) + auditNeedsReview;
 
   const summary = document.getElementById("outage-credits-summary");
   if (summary) {
     summary.innerHTML = `
       <div class="governor-card ${paused.length ? "state-card red" : ""}"><span>Currently paused</span><strong>${paused.length}</strong><em>waiting to reconnect</em></div>
-      <div class="governor-card"><span>Credits (24h)</span><strong>${last24h.length}</strong><em>${durationMinutes(totalCreditedSeconds24h * 1000)} min credited</em></div>
+      <div class="governor-card"><span>Packages resumed (24h)</span><strong>${restoredLast24h.length}</strong><em>${durationMinutes(totalRestoredSeconds24h * 1000)} min of existing package balance restored</em></div>
+      <div class="governor-card ${auditNeedsReview ? "state-card red" : ""}"><span>Audit (last ${auditTotal})</span><strong>${auditNeedsReview}</strong><em>${Number(audit.consistent || 0)} consistent · ${Number(audit.expired || 0)} expired · ${Number(audit.duplicate_candidate || 0)} duplicates · needs review</em></div>
       <div class="governor-card"><span>Grace (self)</span><strong>${governorNumber(config.graceSeconds, 0)}s</strong><em>worker-down detection</em></div>
       <div class="governor-card"><span>Grace (network)</span><strong>${governorNumber(config.accountingGraceSeconds, 0)}s</strong><em>silent-RADIUS detection</em></div>
     `;
@@ -886,9 +891,12 @@ function renderOutageCredits() {
     escapeHtml(item.service),
     fmtDate(item.outageStartedAt),
     fmtDate(item.outageEndedAt),
-    `${durationMinutes(Number(item.creditedSeconds || 0) * 1000)} min`,
+    `${durationMinutes(Number(item.creditedSeconds || 0) * 1000)} min outage`,
+    `${durationMinutes(Number(item.remainingSeconds || 0) * 1000)} min restored`,
+    item.reconciliation?.forfeitedSeconds == null ? "Unknown" : `${durationMinutes(Number(item.reconciliation.forfeitedSeconds) * 1000)} min forfeited`,
+    `<span title="${escapeHtml(item.reconciliation?.detail || "Audit result unavailable")}">${status(item.reconciliation?.color || "yellow")}</span>`,
     item.entitlementId ? `<span class="mono">${escapeHtml(item.entitlementId.slice(0, 8))}</span>` : "-"
-  ], 6);
+  ], 9);
 }
 
 function renderPromo() {

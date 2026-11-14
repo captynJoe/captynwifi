@@ -5,6 +5,7 @@ import { prisma } from "../prisma.js";
 import { applyRadiusProjectionRows, hasOtherActiveEntitlement } from "../services/radiusSqlApply.js";
 import { applyOutageCredit, evaluateAccountingOutage, resumePausedEntitlements, touchOutageHeartbeat } from "../services/outageCredit.js";
 import { activateDuePromos, endPromo, getActivePromo } from "../services/promo.js";
+import { kickHotspotUser } from "../services/routeros.js";
 
 async function applyProjection(id: string) {
   await prisma.$transaction(async (tx) => {
@@ -50,10 +51,38 @@ async function expireEntitlements() {
   });
 
   for (const entitlement of expired) {
-    await prisma.$transaction(async (tx) => {
-      await tx.wifiEntitlement.update({ where: { id: entitlement.id }, data: { status: "expired" } });
-      const keepRows = await hasOtherActiveEntitlement(tx, entitlement.username, entitlement.id, now);
-      if (!keepRows) {
+    const shouldDisconnect = await prisma.$transaction(async (tx) => {
+      // A payment can extend this entitlement after the initial scan above.
+      // Claim expiry only if it is still due and unpaused inside this
+      // transaction; an unconditional update-by-id could revoke that renewal.
+      const claimed = await tx.wifiEntitlement.updateMany({
+        where: {
+          id: entitlement.id,
+          status: "active",
+          expiresAt: { lte: now },
+          outagePausedAt: null,
+          promoPausedAt: null
+        },
+        data: { status: "expired" }
+      });
+      if (claimed.count !== 1) return false;
+
+      // Shared usernames can have a separate paused entitlement whose
+      // credentials must remain in place until its resume path runs.
+      const anotherAccess = await tx.wifiEntitlement.findFirst({
+        where: {
+          username: entitlement.username,
+          id: { not: entitlement.id },
+          status: "active",
+          OR: [
+            { expiresAt: { gt: now } },
+            { outagePausedAt: { not: null } },
+            { promoPausedAt: { not: null } }
+          ]
+        },
+        select: { id: true }
+      });
+      if (!anotherAccess) {
         await tx.$executeRaw`DELETE FROM radcheck WHERE username = ${entitlement.username}`;
         await tx.$executeRaw`DELETE FROM radreply WHERE username = ${entitlement.username}`;
       }
@@ -67,7 +96,20 @@ async function expireEntitlements() {
           data: { status: "applied", lastError: null, appliedAt: now }
         });
       }
+      return !anotherAccess;
     });
+
+    // RADIUS row deletion prevents new logins, but does not terminate an
+    // already authenticated MikroTik hotspot session. Disconnect only this
+    // expired username, and only when no active or paused access shares it.
+    if (shouldDisconnect) {
+      const kicked = await kickHotspotUser(entitlement.username);
+      if (kicked.error) {
+        console.error(`Could not disconnect expired hotspot user ${entitlement.username}: ${kicked.error}`);
+      } else if (kicked.removed > 0) {
+        console.log(`Disconnected ${kicked.removed} expired hotspot session(s) for ${entitlement.username}`);
+      }
+    }
   }
 }
 
@@ -216,13 +258,17 @@ async function tick() {
   await touchOutageHeartbeat(prisma);
   await activateScheduledPromo();
   await endExpiredPromo();
-  const staleClosed = await closeStaleSessions();
-  if (staleClosed > 0) console.log(`Closed ${staleClosed} stale RADIUS session(s)`);
-
+  // Detect and snapshot a silent-session outage before stale-session cleanup.
+  // Cleanup closes old radacct rows as soon as any client is reporting again;
+  // if it runs first, it erases the stale cohort needed to identify who was
+  // online before the outage and can suppress their time restoration.
   const accounting = await evaluateAccountingOutage(prisma);
   if (accounting.paused) {
     console.log(`Paused ${accounting.pausedCount} active WiFi entitlement(s): a shared customer-path outage was inferred from the RADIUS session cohort; router probe status is recorded separately`);
   }
+
+  const staleClosed = await closeStaleSessions();
+  if (staleClosed > 0) console.log(`Closed ${staleClosed} stale RADIUS session(s)`);
 
   const resumed = await resumePausedEntitlements(prisma);
   if (resumed.resumed > 0 || resumed.expired > 0) {

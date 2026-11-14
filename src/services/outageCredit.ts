@@ -7,6 +7,13 @@ import { buildRadiusProjection } from "./radiusProjection.js";
 type HeartbeatRow = { lastSeenAt: Date };
 
 type CreditInsertRow = { id: string };
+type RestorationAudit = {
+  targetEntitlementId: string;
+  restoredSeconds: number;
+  expiryBaseAt: string;
+  resultingExpiresAt: string;
+  radiusProjectionStatus: "applied";
+};
 
 type PauseSummary = {
   paused: boolean;
@@ -182,7 +189,10 @@ async function creditEntitlement(
   remainingSeconds: number,
   recoveredAt: Date,
   now: Date
-) {
+): Promise<RestorationAudit> {
+  if (!Number.isFinite(remainingSeconds) || remainingSeconds <= 0) {
+    throw new Error(`Refusing to restore a zero or invalid WiFi balance for entitlement ${entitlement.id}`);
+  }
   const pausedAt = entitlement.outagePausedAt ?? now;
   // Keep the paid entitlement and credentials in place. Restore the frozen
   // balance at the observed recovery timestamp so only the actual outage
@@ -273,6 +283,14 @@ async function creditEntitlement(
       }
     }
   });
+
+  return {
+    targetEntitlementId: target.id,
+    restoredSeconds: remainingSeconds,
+    expiryBaseAt: timeBase.toISOString(),
+    resultingExpiresAt: expiresAt.toISOString(),
+    radiusProjectionStatus: "applied"
+  };
 }
 
 // Marks every currently-active, not-already-paused entitlement as paused as
@@ -290,17 +308,17 @@ async function pauseActiveEntitlements(
   if (!usernames.length) return 0;
   const paused = await tx.$queryRaw<Array<{ id: string }>>`
     UPDATE "WifiEntitlement"
-    SET "outagePausedAt" = ${outageStartedAt},
+    SET "outagePausedAt" = GREATEST(${outageStartedAt}, "startsAt"),
         "outagePauseCause" = ${cause},
         "outageEvidence" = ${JSON.stringify(evidence)}::jsonb,
         "outageRemainingSeconds" = GREATEST(
           0,
-          EXTRACT(EPOCH FROM ("expiresAt" - ${outageStartedAt}))::DOUBLE PRECISION
+          EXTRACT(EPOCH FROM ("expiresAt" - GREATEST(${outageStartedAt}, "startsAt")))::DOUBLE PRECISION
         ),
         "updatedAt" = now()
     WHERE status = 'active'
       AND "outagePausedAt" IS NULL
-      AND "expiresAt" > ${outageStartedAt}
+      AND "expiresAt" > GREATEST(${outageStartedAt}, "startsAt")
       AND username IN (${Prisma.join(usernames)})
     RETURNING id
   `;
@@ -478,7 +496,7 @@ export async function resumePausedEntitlements(prisma: PrismaClient): Promise<Re
       const remainingSeconds = audit?.remainingSeconds ?? audit?.creditedSeconds ?? 0;
       if (!audit || remainingSeconds <= 0) continue;
 
-      await creditEntitlement(tx, {
+      const restoration = await creditEntitlement(tx, {
         id: entitlement.id,
         customerPhone: entitlement.customerPhone,
         username: entitlement.username,
@@ -493,6 +511,11 @@ export async function resumePausedEntitlements(prisma: PrismaClient): Promise<Re
         outagePauseCause: audit.service,
         outageEvidence: audit.evidence
       }, remainingSeconds, audit.outageEndedAt, now);
+      await tx.$executeRaw`
+        UPDATE "WifiOutageCredit"
+        SET evidence = COALESCE(evidence, '{}'::jsonb) || ${JSON.stringify({ resolution: "legacy_wallet_credit_redeemed", restoration })}::jsonb
+        WHERE id = ${audit.id}
+      `;
       await tx.wifiCredit.update({ where: { id: credit.id }, data: { expiresAt: now } });
       resumed += 1;
       totalCreditedSeconds += remainingSeconds;
@@ -557,27 +580,40 @@ export async function resumePausedEntitlements(prisma: PrismaClient): Promise<Re
         reconnectedAt && reconnectedAt.getTime() - pausedAt.getTime() <= config.outageCredit.reconnectWindowSeconds * 1000
       );
       const outageSeconds = secondsBetween(pausedAt, recoveredAt);
+      const balanceRestorable = reconnectedWithinWindow && Number.isFinite(remainingSeconds) && remainingSeconds > 0;
       const evidence = {
         original: entitlement.outageEvidence,
         reconnectWindowSeconds: config.outageCredit.reconnectWindowSeconds,
         reconnectObservedAt: reconnectedAt?.toISOString() ?? null,
-        forfeitedRemainingSeconds: reconnectedWithinWindow ? 0 : remainingSeconds,
-        resolution: reconnectedWithinWindow ? "reconnected_within_window" : "reconnect_window_expired"
+        frozenPackageSeconds: remainingSeconds,
+        forfeitedRemainingSeconds: balanceRestorable ? 0 : remainingSeconds,
+        resolution: balanceRestorable
+          ? "reconnected_within_window"
+          : reconnectedWithinWindow
+            ? "reconnected_with_no_remaining_balance"
+            : "reconnect_window_expired"
       };
       const inserted = await tx.$queryRaw<CreditInsertRow[]>`
         INSERT INTO "WifiOutageCredit" ("service", "outageStartedAt", "outageEndedAt", "creditedSeconds", "remainingSeconds", "evidence", "affectedEntitlements", "entitlementId")
-        VALUES (${service}, ${pausedAt}, ${recoveredAt}, ${outageSeconds}, ${reconnectedWithinWindow ? remainingSeconds : 0}, ${JSON.stringify(evidence)}::jsonb, 1, ${entitlement.id})
+        VALUES (${service}, ${pausedAt}, ${recoveredAt}, ${outageSeconds}, ${balanceRestorable ? remainingSeconds : 0}, ${JSON.stringify(evidence)}::jsonb, 1, ${entitlement.id})
         ON CONFLICT ("service", "outageStartedAt", "outageEndedAt", "entitlementId") DO NOTHING
         RETURNING "id"
       `;
       if (!inserted[0]?.id) continue;
 
-      if (reconnectedWithinWindow) {
-        await creditEntitlement(tx, entitlement, remainingSeconds, recoveredAt, now);
+      if (balanceRestorable) {
+        const restoration = await creditEntitlement(tx, entitlement, remainingSeconds, recoveredAt, now);
+        await tx.$executeRaw`
+          UPDATE "WifiOutageCredit"
+          SET evidence = COALESCE(evidence, '{}'::jsonb) || ${JSON.stringify({ restoration })}::jsonb
+          WHERE id = ${inserted[0].id}
+        `;
         totalCreditedSeconds += remainingSeconds;
         resumed += 1;
       } else {
-        const closedAt = new Date(pausedAt.getTime() + config.outageCredit.reconnectWindowSeconds * 1000);
+        const closedAt = reconnectedWithinWindow
+          ? pausedAt
+          : new Date(pausedAt.getTime() + config.outageCredit.reconnectWindowSeconds * 1000);
         await tx.wifiEntitlement.update({
           where: { id: entitlement.id },
           data: {

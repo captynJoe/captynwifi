@@ -42,7 +42,7 @@ export function createRadiusSecret(): string {
 export function buildRadiusProjection(input: BuildEntitlementInput) {
   const username = input.username ?? normalizeWifiUsername(input.phone);
   const password = input.password ?? createRadiusSecret();
-  const sessionTimeout = Math.max(60, Math.round(input.durationSeconds));
+  const sessionTimeout = Math.max(1, Math.floor(input.durationSeconds));
   const idleTimeout = Math.round(config.defaultIdleTimeoutSeconds);
   const interim = config.defaultAcctInterimSeconds;
 
