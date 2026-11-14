@@ -1758,7 +1758,7 @@ publicRouter.post("/payments/mpesa/callback", async (req, res, next) => {
       // CheckoutRequestID on its intent. Recover only an unambiguous, recent
       // pending intent for the same customer and paid amount.
       const callbackPhone = formatDarajaMsisdn(String(phone));
-      const recentIntents = await prisma.wifiPaymentIntent.findMany({
+      const recentIntents = callbackPhone ? await prisma.wifiPaymentIntent.findMany({
         where: {
           provider: "mpesa",
           status: "pending_confirmation",
@@ -1769,7 +1769,7 @@ publicRouter.post("/payments/mpesa/callback", async (req, res, next) => {
         },
         orderBy: { createdAt: "desc" },
         take: 2
-      });
+      }) : [];
       if (recentIntents.length === 1) {
         const candidate = recentIntents[0];
         const claimed = await prisma.wifiPaymentIntent.updateMany({

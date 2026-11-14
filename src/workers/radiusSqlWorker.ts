@@ -139,7 +139,7 @@ async function expireStalePaymentIntents() {
       status: "pending_confirmation",
       updatedAt: { lt: cutoff },
       OR: [
-        { rawPayload: Prisma.DbNull },
+        { rawPayload: { equals: Prisma.DbNull } },
         { NOT: { rawPayload: { path: ["_callbackVerificationPending"], equals: true } } }
       ]
     },
