@@ -962,6 +962,18 @@ adminRouter.delete("/plans/:id", async (req, res, next) => {
   }
 });
 
+adminRouter.get("/mpesa-unmatched-callbacks", async (_req, res, next) => {
+  try {
+    const data = await prisma.wifiMpesaUnmatchedCallback.findMany({
+      orderBy: { receivedAt: "desc" },
+      take: 100
+    });
+    return sendData(res, data);
+  } catch (error) {
+    return next(error);
+  }
+});
+
 adminRouter.get("/payment-intents", async (_req, res, next) => {
   try {
     const data = await prisma.wifiPaymentIntent.findMany({
@@ -1424,12 +1436,13 @@ adminRouter.get("/outage-credits", async (_req, res, next) => {
         outageStartedAt: Date;
         outageEndedAt: Date;
         creditedSeconds: number;
+        remainingSeconds: number;
         affectedEntitlements: number;
         entitlementId: string | null;
         evidence: Prisma.JsonValue | null;
         createdAt: Date;
       }>>(Prisma.sql`
-        select id, service, "outageStartedAt", "outageEndedAt", "creditedSeconds", "affectedEntitlements", "entitlementId", evidence, "createdAt"
+        select id, service, "outageStartedAt", "outageEndedAt", "creditedSeconds", "remainingSeconds", "affectedEntitlements", "entitlementId", evidence, "createdAt"
         from "WifiOutageCredit"
         order by "createdAt" desc
         limit 60
@@ -1440,7 +1453,15 @@ adminRouter.get("/outage-credits", async (_req, res, next) => {
       prisma.wifiEntitlement.findMany({
         where: { outagePausedAt: { not: null } },
         orderBy: { outagePausedAt: "asc" },
-        select: { id: true, username: true, customerPhone: true, outagePausedAt: true, outagePauseCause: true, expiresAt: true }
+        select: {
+          id: true,
+          username: true,
+          customerPhone: true,
+          outagePausedAt: true,
+          outagePauseCause: true,
+          outageRemainingSeconds: true,
+          expiresAt: true
+        }
       }),
       probeRouterOutageHealth()
     ]);

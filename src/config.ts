@@ -89,7 +89,7 @@ export const config = {
     accountingGraceSeconds: readPositiveInt("CAPTYN_WIFI_OUTAGE_CREDIT_ACCOUNTING_GRACE_SECONDS", 300),
     // How long a customer frozen by an outage has to reconnect and keep
     // their remaining time; after that it's forfeited.
-    reconnectWindowSeconds: readPositiveInt("CAPTYN_WIFI_OUTAGE_CREDIT_MAX_SECONDS", 60 * 60 * 48),
+    reconnectWindowSeconds: readPositiveInt("CAPTYN_WIFI_OUTAGE_CREDIT_MAX_SECONDS", 60 * 60 * 24),
     batchSize: readPositiveInt("CAPTYN_WIFI_OUTAGE_CREDIT_BATCH_SIZE", 500)
   },
   routeros: {

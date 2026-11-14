@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { Prisma } from "@prisma/client";
 import { config } from "../config.js";
 import { prisma } from "../prisma.js";
 import { applyRadiusProjectionRows, hasOtherActiveEntitlement } from "../services/radiusSqlApply.js";
@@ -76,6 +77,39 @@ async function expireEntitlements() {
 // ever created. updatedAt is what moves this window: the STK-initiate step
 // touches it once right after creation, so this only counts idle time since
 // then, not time since the customer first tapped Pay.
+async function removeStaleExpiredRadiusCredentials() {
+  const usernames = await prisma.$queryRaw<Array<{ username: string }>>`
+    SELECT DISTINCT e.username
+    FROM "WifiEntitlement" e
+    WHERE e.status IN ('expired', 'revoked', 'suspended')
+      AND NOT EXISTS (
+        SELECT 1 FROM "WifiEntitlement" active
+        WHERE active.username = e.username
+          AND active.status = 'active'
+          AND active."expiresAt" > now()
+      )
+      AND (
+        EXISTS (SELECT 1 FROM radcheck c WHERE c.username = e.username)
+        OR EXISTS (SELECT 1 FROM radreply r WHERE r.username = e.username)
+      )
+    ORDER BY e.username
+    LIMIT ${config.radiusSql.batchSize}
+  `;
+
+  for (const { username } of usernames) {
+    await prisma.$transaction(async (tx) => {
+      const usable = await tx.wifiEntitlement.findFirst({
+        where: { username, status: "active", expiresAt: { gt: new Date() } },
+        select: { id: true }
+      });
+      if (usable) return;
+      await tx.$executeRaw`DELETE FROM radcheck WHERE username = ${username}`;
+      await tx.$executeRaw`DELETE FROM radreply WHERE username = ${username}`;
+    });
+  }
+  return usernames.length;
+}
+
 async function expirePppoeAccounts() {
   const now = new Date();
   const expired = await prisma.wifiPppoeAccount.findMany({
@@ -101,7 +135,14 @@ async function expirePppoeAccounts() {
 async function expireStalePaymentIntents() {
   const cutoff = new Date(Date.now() - config.mpesa.pendingTimeoutSeconds * 1000);
   const result = await prisma.wifiPaymentIntent.updateMany({
-    where: { status: "pending_confirmation", updatedAt: { lt: cutoff } },
+    where: {
+      status: "pending_confirmation",
+      updatedAt: { lt: cutoff },
+      OR: [
+        { rawPayload: Prisma.DbNull },
+        { NOT: { rawPayload: { path: ["_callbackVerificationPending"], equals: true } } }
+      ]
+    },
     data: { status: "failed" }
   });
   return result.count;
@@ -165,6 +206,8 @@ async function closeStaleSessions() {
 
 async function tick() {
   await expireEntitlements();
+  const staleRadiusCredentials = await removeStaleExpiredRadiusCredentials();
+  if (staleRadiusCredentials > 0) console.log(`Removed stale RADIUS credentials for ${staleRadiusCredentials} expired or suspended WiFi username(s)`);
   const expiredPppoe = await expirePppoeAccounts();
   if (expiredPppoe > 0) console.log(`Expired ${expiredPppoe} PPPoE subscription(s)`);
   const timedOutPayments = await expireStalePaymentIntents();
@@ -178,12 +221,12 @@ async function tick() {
 
   const accounting = await evaluateAccountingOutage(prisma);
   if (accounting.paused) {
-    console.log(`Paused ${accounting.pausedCount} active WiFi entitlement(s): RADIUS accounting was silent and MikroTik WAN/Internet probes confirmed loss`);
+    console.log(`Paused ${accounting.pausedCount} active WiFi entitlement(s): a shared customer-path outage was inferred from the RADIUS session cohort; router probe status is recorded separately`);
   }
 
   const resumed = await resumePausedEntitlements(prisma);
-  if (resumed.resumed > 0) {
-    console.log(`Resumed ${resumed.resumed} entitlement(s) on reconnect, credited ${resumed.totalCreditedSeconds}s total`);
+  if (resumed.resumed > 0 || resumed.expired > 0) {
+    console.log(`Outage recovery resolved ${resumed.resumed} entitlement(s) with ${resumed.totalCreditedSeconds}s of remaining package time restored and expired ${resumed.expired} entitlement(s) that missed the reconnect window`);
   }
 
   if (applied > 0) console.log(`Applied ${applied} RADIUS projection(s)`);
@@ -198,7 +241,7 @@ async function main() {
   console.log("CAPTYN WiFi RADIUS SQL worker running");
   const startupCheck = await applyOutageCredit(prisma);
   if (startupCheck.paused) {
-    console.log(`Paused ${startupCheck.pausedCount} active WiFi entitlement(s): worker was down for ${startupCheck.outageSeconds}s, with RADIUS silence and MikroTik probes confirming loss`);
+    console.log(`Paused ${startupCheck.pausedCount} active WiFi entitlement(s): worker was down for ${startupCheck.outageSeconds}s and a shared customer-path outage was inferred from the RADIUS session cohort`);
   }
 
   for (;;) {

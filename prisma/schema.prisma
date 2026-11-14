@@ -117,6 +117,25 @@ model WifiPaymentIntent {
 }
 
 
+model WifiMpesaUnmatchedCallback {
+  id                       String   @id @default(uuid())
+  checkoutRequestId        String   @unique
+  resultCode               Int
+  resultDescription        String?
+  receiptNumber            String?
+  amountKsh                Int?
+  customerPhone            String?
+  rawPayload               Json
+  status                   String   @default("unmatched")
+  matchedPaymentIntentId   String?
+  receivedAt               DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  @@index([status, receivedAt])
+  @@index([receiptNumber])
+  @@index([customerPhone, receivedAt])
+}
+
 model WifiPppoeAccount {
   id              String   @id @default(uuid())
   siteId          String

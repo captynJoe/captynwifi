@@ -206,17 +206,17 @@ function mpesaFailureReason(rawPayload: unknown): string | null {
   return MPESA_FAILURE_MESSAGES[callback.ResultCode] ?? callback.ResultDesc ?? "Payment did not complete.";
 }
 
-// Sums every outage credit ever applied to this entitlement (see
+// Sums the frozen package time actually restored to this entitlement (see
 // outageCredit.ts's resumePausedEntitlements), so the portal can tell a
-// customer how much time they've gotten back from past network outages —
+// customer how much package time was preserved —
 // on top of whatever's currently paused (outagePausedAt on the entitlement
 // itself), which hasn't been credited yet since it hasn't resumed.
 async function sumOutageCreditSeconds(entitlementId: string): Promise<number> {
   const result = await prisma.wifiOutageCredit.aggregate({
     where: { entitlementId },
-    _sum: { creditedSeconds: true }
+    _sum: { remainingSeconds: true }
   });
-  return result._sum.creditedSeconds ?? 0;
+  return result._sum.remainingSeconds ?? 0;
 }
 
 async function publicEntitlement(entitlement: {
@@ -345,6 +345,35 @@ function rawPayloadMerchantRequestId(rawPayload: unknown) {
   if (!rawPayload || typeof rawPayload !== "object" || Array.isArray(rawPayload)) return null;
   const value = (rawPayload as { MerchantRequestID?: unknown }).MerchantRequestID;
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function isCallbackAwaitingMpesaVerification(rawPayload: unknown): boolean {
+  return Boolean(
+    rawPayload &&
+      typeof rawPayload === "object" &&
+      !Array.isArray(rawPayload) &&
+      (rawPayload as Record<string, unknown>)._callbackVerificationPending === true
+  );
+}
+
+function callbackVerificationPendingPayload(existingPayload: unknown, callbackPayload: unknown, reason: string): Prisma.InputJsonValue {
+  const existing =
+    existingPayload && typeof existingPayload === "object" && !Array.isArray(existingPayload)
+      ? (existingPayload as Record<string, Prisma.InputJsonValue>)
+      : {};
+  const callback = readStkCallback(callbackPayload);
+  return {
+    ...existing,
+    ...(typeof existing.MerchantRequestID === "string"
+      ? {}
+      : callback?.MerchantRequestID
+        ? { MerchantRequestID: callback.MerchantRequestID }
+        : {}),
+    _callbackVerificationPending: true,
+    _callbackReceivedAt: new Date().toISOString(),
+    _callbackVerificationReason: reason,
+    _callbackPayload: callbackPayload as Prisma.InputJsonValue
+  } as Prisma.InputJsonValue;
 }
 
 // Raises the target package's device limit and re-applies its RADIUS rows
@@ -1720,13 +1749,72 @@ publicRouter.post("/payments/mpesa/callback", async (req, res, next) => {
         " receipt=" + (receipt ?? "-")
     );
 
-    const intent = await prisma.wifiPaymentIntent.findFirst({
+    let intent = await prisma.wifiPaymentIntent.findFirst({
       where: { provider: "mpesa", providerReference: checkoutRequestId },
       include: { plan: true }
     });
+    if (!intent && resultCode === 0 && paidAmount !== null && phone !== undefined && phone !== null) {
+      // The provider can call back before the STK initiation request has saved
+      // CheckoutRequestID on its intent. Recover only an unambiguous, recent
+      // pending intent for the same customer and paid amount.
+      const callbackPhone = formatDarajaMsisdn(String(phone));
+      const recentIntents = await prisma.wifiPaymentIntent.findMany({
+        where: {
+          provider: "mpesa",
+          status: "pending_confirmation",
+          providerReference: null,
+          customerPhone: callbackPhone,
+          amountKsh: { lte: Math.round(paidAmount) },
+          createdAt: { gte: new Date(Date.now() - 2 * 60 * 1000) }
+        },
+        orderBy: { createdAt: "desc" },
+        take: 2
+      });
+      if (recentIntents.length === 1) {
+        const candidate = recentIntents[0];
+        const claimed = await prisma.wifiPaymentIntent.updateMany({
+          where: { id: candidate.id, status: "pending_confirmation", providerReference: null },
+          data: {
+            providerReference: checkoutRequestId,
+            rawPayload: callbackVerificationPendingPayload(null, req.body, "callback-arrived-before-provider-reference")
+          }
+        });
+        if (claimed.count === 1) {
+          intent = await prisma.wifiPaymentIntent.findUnique({ where: { id: candidate.id }, include: { plan: true } });
+        }
+      }
+    }
     if (!intent) {
       console.warn("M-PESA STK callback matched no payment intent: checkoutRequestId=" + checkoutRequestId);
-      return res.json({ data: { accepted: true, matched: false } });
+      if (resultCode === 0) {
+        const customerPhone = phone === undefined || phone === null
+          ? null
+          : formatDarajaMsisdn(String(phone));
+        await prisma.wifiMpesaUnmatchedCallback.upsert({
+          where: { checkoutRequestId },
+          create: {
+            checkoutRequestId,
+            resultCode,
+            resultDescription: callback.ResultDesc ?? null,
+            receiptNumber: typeof receipt === "string" ? receipt : null,
+            amountKsh: paidAmount === null ? null : Math.round(paidAmount),
+            customerPhone,
+            rawPayload: req.body as Prisma.InputJsonValue
+          },
+          update: {
+            resultCode,
+            resultDescription: callback.ResultDesc ?? null,
+            receiptNumber: typeof receipt === "string" ? receipt : null,
+            amountKsh: paidAmount === null ? null : Math.round(paidAmount),
+            customerPhone,
+            rawPayload: req.body as Prisma.InputJsonValue
+          }
+        });
+        // We have durably recorded the captured payment for operator review;
+        // acknowledging avoids a callback retry loop without losing the receipt.
+        return res.json({ data: { accepted: true, matched: false, reviewRequired: true } });
+      }
+      return res.json({ data: { accepted: true, matched: false, verificationPending: false } });
     }
 
     // Already settled (a repeated callback, or the reconciler below got there
@@ -1739,6 +1827,12 @@ publicRouter.post("/payments/mpesa/callback", async (req, res, next) => {
     if (expectedMerchantRequestId && callback.MerchantRequestID !== expectedMerchantRequestId) {
       console.warn("M-PESA STK callback rejected: merchant request id mismatch for checkoutRequestId=" + checkoutRequestId);
       return res.status(400).json({ error: "Invalid M-PESA callback" });
+    }
+
+    // Do not let a late failure callback overwrite a success callback that is
+    // already waiting for the provider's verification endpoint to recover.
+    if (resultCode !== 0 && isCallbackAwaitingMpesaVerification(intent.rawPayload)) {
+      return res.json({ data: { accepted: true, matched: true, activated: false, verificationPending: true } });
     }
 
     if (resultCode === 0) {
@@ -1767,12 +1861,28 @@ publicRouter.post("/payments/mpesa/callback", async (req, res, next) => {
         verification = await queryWifiStkPush(checkoutRequestId);
       } catch (error) {
         console.error("M-PESA STK callback verification failed for checkoutRequestId=" + checkoutRequestId, error);
-        return res.status(503).json({ error: "Unable to verify M-PESA payment yet." });
+        await prisma.wifiPaymentIntent.updateMany({
+          where: { id: intent.id, status: { in: ["pending_confirmation", "failed"] } },
+          data: {
+            rawPayload: callbackVerificationPendingPayload(intent.rawPayload, req.body, "stk-query-unavailable"),
+            providerReference: checkoutRequestId
+          }
+        });
+        // Daraja does not reliably resend callbacks. Acknowledge receipt and
+        // let the reconciler retry verification; never grant access here.
+        return res.json({ data: { accepted: true, matched: true, activated: false, verificationPending: true } });
       }
 
       if (!isSuccessfulStkQuery(verification, checkoutRequestId)) {
         console.warn("M-PESA STK callback refused: provider query did not confirm success for checkoutRequestId=" + checkoutRequestId);
-        return res.status(503).json({ error: "M-PESA payment is not verified yet." });
+        await prisma.wifiPaymentIntent.updateMany({
+          where: { id: intent.id, status: { in: ["pending_confirmation", "failed"] } },
+          data: {
+            rawPayload: callbackVerificationPendingPayload(intent.rawPayload, req.body, "stk-query-not-confirmed"),
+            providerReference: checkoutRequestId
+          }
+        });
+        return res.json({ data: { accepted: true, matched: true, activated: false, verificationPending: true } });
       }
     }
 
@@ -2089,20 +2199,29 @@ const RECONCILE_WINDOW_MS = 2 * 60 * 60 * 1000;
 
 export async function reconcilePendingMpesaPayments(): Promise<{ activated: number; failed: number }> {
   const now = Date.now();
+  const reconciliationWindow = {
+    provider: "mpesa",
+    providerReference: { not: null },
+    createdAt: { lt: new Date(now - RECONCILE_AFTER_MS), gt: new Date(now - RECONCILE_WINDOW_MS) }
+  };
   const pending = await prisma.wifiPaymentIntent.findMany({
-    where: {
-      provider: "mpesa",
-      status: { in: ["pending_confirmation", "confirmed"] },
-      providerReference: { not: null },
-      createdAt: { lt: new Date(now - RECONCILE_AFTER_MS), gt: new Date(now - RECONCILE_WINDOW_MS) }
-    },
+    where: { ...reconciliationWindow, status: { in: ["pending_confirmation", "confirmed"] } },
     orderBy: { createdAt: "asc" },
     take: 20
   });
+  // Recover recent intents that the old callback path may have marked failed
+  // after Daraja's STK Query endpoint errored. Only a successful provider query
+  // can reopen one, and this small separate batch cannot starve pending checks.
+  const recentlyFailed = await prisma.wifiPaymentIntent.findMany({
+    where: { ...reconciliationWindow, status: "failed" },
+    orderBy: { createdAt: "desc" },
+    take: 5
+  });
+  const candidates = [...pending, ...recentlyFailed];
 
   let activated = 0;
   let failed = 0;
-  for (const intent of pending) {
+  for (const intent of candidates) {
     const checkoutRequestId = intent.providerReference as string;
     let query: Awaited<ReturnType<typeof queryWifiStkPush>>;
     try {
@@ -2120,9 +2239,9 @@ export async function reconcilePendingMpesaPayments(): Promise<{ activated: numb
 
     if (isSuccessfulStkQuery(query, checkoutRequestId)) {
       const confirmedAt = new Date();
-      if (intent.status === "pending_confirmation") {
+      if (intent.status === "pending_confirmation" || intent.status === "failed") {
         const claimed = await prisma.wifiPaymentIntent.updateMany({
-          where: { id: intent.id, status: "pending_confirmation" },
+          where: { id: intent.id, status: intent.status },
           data: { status: "confirmed", confirmedAt, rawPayload }
         });
         if (claimed.count === 0) continue; // the callback settled it meanwhile
@@ -2130,6 +2249,10 @@ export async function reconcilePendingMpesaPayments(): Promise<{ activated: numb
       await activatePaymentIntent(intent, intent.confirmedAt ?? confirmedAt);
       activated += 1;
     } else {
+      // A success callback is independent evidence that the customer paid.
+      // Daraja's query endpoint can lag or fail, so do not discard that payment
+      // based only on a contradictory/incomplete query response.
+      if (isCallbackAwaitingMpesaVerification(intent.rawPayload)) continue;
       const updated = await prisma.wifiPaymentIntent.updateMany({
         where: { id: intent.id, status: "pending_confirmation" },
         data: { status: "failed", rawPayload }
