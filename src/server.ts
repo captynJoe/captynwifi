@@ -76,8 +76,8 @@ app.listen(config.port, () => {
 
 setInterval(() => {
   reconcilePendingMpesaPayments()
-    .then(({ activated, failed }) => {
-      if (activated || failed) console.log(`M-PESA reconcile: activated ${activated}, failed ${failed}`);
+    .then(({ queued, failed }) => {
+      if (queued || failed) console.log(`M-PESA reconcile: queued ${queued}, failed ${failed}`);
     })
     .catch((error) => console.error("M-PESA reconcile error:", error));
 }, 2 * 60 * 1000).unref();

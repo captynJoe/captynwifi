@@ -14,7 +14,8 @@
     "prisma:deploy": "prisma migrate deploy",
     "radius:worker": "node dist/workers/radiusSqlWorker.js",
     "build:portal": "tsc -p tsconfig.portal.json",
-    "governor:worker": "node dist/workers/dynamicGovernorWorker.js"
+    "governor:worker": "node dist/workers/dynamicGovernorWorker.js",
+    "payment-activation:worker": "node dist/workers/paymentActivationWorker.js"
   },
   "dependencies": {
     "@prisma/client": "^6.3.1",

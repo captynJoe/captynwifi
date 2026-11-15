@@ -84,6 +84,27 @@ services:
     mem_reservation: ${CAPTYN_WIFI_RADIUS_WORKER_MEM_RESERVATION:-192m}
     restart: unless-stopped
 
+  payment_activation_worker:
+    image: node:22-alpine
+    working_dir: /app
+    command: node dist/workers/paymentActivationWorker.js
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+    volumes:
+      - .:/app
+      - wifi_api_node_modules:/app/node_modules
+    depends_on:
+      wifi_db:
+        condition: service_healthy
+      wifi_api:
+        condition: service_healthy
+    cpus: ${CAPTYN_WIFI_PAYMENT_WORKER_CPUS:-0.25}
+    mem_limit: ${CAPTYN_WIFI_PAYMENT_WORKER_MEM_LIMIT:-512m}
+    mem_reservation: ${CAPTYN_WIFI_PAYMENT_WORKER_MEM_RESERVATION:-128m}
+    restart: unless-stopped
+
   wifi_governor:
     image: node:22-alpine
     working_dir: /app

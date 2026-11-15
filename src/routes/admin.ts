@@ -497,6 +497,10 @@ adminRouter.get("/network-status", async (_req, res, next) => {
       stalePendingPaymentCount,
       confirmedPaymentCount,
       staleConfirmedPaymentCount,
+      queuedPaymentActivationCount,
+      processingPaymentActivationCount,
+      stalePaymentActivationCount,
+      manualReviewPaymentActivationCount,
       activeEntitlementCount,
       activeWithoutProjectionCount,
       pendingProjectionCount,
@@ -521,6 +525,15 @@ adminRouter.get("/network-status", async (_req, res, next) => {
       prisma.wifiPaymentIntent.count({ where: { status: "pending_confirmation", updatedAt: { lt: stalePaymentCutoff } } }),
       prisma.wifiPaymentIntent.count({ where: { status: "confirmed" } }),
       prisma.wifiPaymentIntent.count({ where: { status: "confirmed", updatedAt: { lt: stalePaymentCutoff } } }),
+      prisma.wifiPaymentActivationJob.count({ where: { status: "queued" } }),
+      prisma.wifiPaymentActivationJob.count({ where: { status: "processing" } }),
+      prisma.wifiPaymentActivationJob.count({
+        where: { OR: [
+          { status: "queued", createdAt: { lt: stalePaymentCutoff } },
+          { status: "processing", lockedAt: { lt: stalePaymentCutoff } }
+        ] }
+      }),
+      prisma.wifiPaymentActivationJob.count({ where: { status: "manual_review" } }),
       prisma.wifiEntitlement.count({ where: { status: "active", expiresAt: { gt: now } } }),
       prisma.wifiEntitlement.count({ where: { status: "active", expiresAt: { gt: now }, projection: null } }),
       prisma.wifiRadiusProjection.count({ where: { status: "pending" } }),
@@ -606,9 +619,11 @@ adminRouter.get("/network-status", async (_req, res, next) => {
       pipelineItem(
         "payments",
         "Payment confirmations",
-        staleConfirmedPaymentCount > 0 ? "bad" : stalePendingPaymentCount > 0 ? "warn" : "ok",
-        staleConfirmedPaymentCount > 0
-          ? `${staleConfirmedPaymentCount} provider-confirmed payment${staleConfirmedPaymentCount === 1 ? "" : "s"} older than 15 minutes still need access activation.`
+        manualReviewPaymentActivationCount > 0 || staleConfirmedPaymentCount > 0 || stalePaymentActivationCount > 0 ? "bad" : stalePendingPaymentCount > 0 ? "warn" : "ok",
+        manualReviewPaymentActivationCount > 0
+          ? `${manualReviewPaymentActivationCount} confirmed payment${manualReviewPaymentActivationCount === 1 ? "" : "s"} need manual activation review.`
+          : staleConfirmedPaymentCount > 0 || stalePaymentActivationCount > 0
+          ? `${staleConfirmedPaymentCount} confirmed payment${staleConfirmedPaymentCount === 1 ? "" : "s"} and ${stalePaymentActivationCount} stale activation job${stalePaymentActivationCount === 1 ? "" : "s"} older than 15 minutes need attention.`
           : stalePendingPaymentCount > 0
             ? `${stalePendingPaymentCount} payment${stalePendingPaymentCount === 1 ? "" : "s"} awaiting confirmation for over 15 minutes.`
             : `${pendingPaymentCount} payment${pendingPaymentCount === 1 ? "" : "s"} awaiting confirmation; ${confirmedPaymentCount} confirmed.`
@@ -667,6 +682,10 @@ adminRouter.get("/network-status", async (_req, res, next) => {
         stalePendingPaymentCount,
         confirmedPaymentCount,
         staleConfirmedPaymentCount,
+        queuedPaymentActivationCount,
+        processingPaymentActivationCount,
+        stalePaymentActivationCount,
+        manualReviewPaymentActivationCount,
         activeEntitlementCount,
         activeWithoutProjectionCount,
         pendingProjectionCount,

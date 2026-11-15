@@ -19,6 +19,7 @@ import { LOYALTY_REASON, PURCHASABLE_PLAN_WHERE, climbGap, monthStandings, nairo
 import { boostRateLimit, fasterRateLimit } from "../services/rateLimit.js";
 import { activatePppoePayment, publicPppoeAccount } from "../services/pppoe.js";
 import { createUniqueCaptynWifiUsername } from "../services/captynUsername.js";
+import { enqueuePaymentActivation } from "../services/paymentActivationQueue.js";
 
 export const publicRouter = Router();
 
@@ -1684,6 +1685,17 @@ publicRouter.post("/entitlements/add-device/quote", publicDeviceListLimit, async
   }
 });
 
+export async function activateConfirmedPaymentIntentById(paymentIntentId: string) {
+  const intent = await prisma.wifiPaymentIntent.findUnique({ where: { id: paymentIntentId } });
+  if (!intent || intent.provider !== "mpesa" || !intent.providerReference) {
+    throw new Error("Payment is not a provider-verified M-PESA intent");
+  }
+  if (intent.status !== "confirmed" && intent.status !== "activated") {
+    throw new Error(`Payment is not confirmed (status=${intent.status})`);
+  }
+  return activatePaymentIntent(intent, new Date());
+}
+
 // Pays to raise a running package's device limit; activatePaymentIntent
 // applies it to the package (purpose "add_device") instead of selling time.
 publicRouter.post("/payments/mpesa/add-device", publicPaymentIpLimit, async (req, res, next) => {
@@ -1748,6 +1760,13 @@ publicRouter.post("/payments/mpesa/add-device", publicPaymentIpLimit, async (req
     return next(error);
   }
 });
+
+async function completePaymentActivationJobForIntent(paymentIntentId: string) {
+  await prisma.wifiPaymentActivationJob.updateMany({
+    where: { paymentIntentId },
+    data: { status: "completed", lockedAt: null, completedAt: new Date(), lastError: null }
+  });
+}
 
 publicRouter.post("/payments/mpesa/callback", async (req, res, next) => {
   try {
@@ -1909,35 +1928,56 @@ publicRouter.post("/payments/mpesa/callback", async (req, res, next) => {
     }
 
     const confirmedAt = resultCode === 0 ? new Date() : null;
-    await prisma.wifiPaymentIntent.update({
-      where: { id: intent.id },
-      data: {
-        rawPayload: req.body as Prisma.InputJsonValue,
-        providerReference: checkoutRequestId,
-        receiptNumber: resultCode === 0 && typeof receipt === "string" ? receipt : intent.receiptNumber,
-        status: resultCode === 0 ? "confirmed" : "failed",
-        confirmedAt
-      }
-    });
-
     if (resultCode !== 0) {
+      await prisma.wifiPaymentIntent.update({
+        where: { id: intent.id },
+        data: {
+          rawPayload: req.body as Prisma.InputJsonValue,
+          providerReference: checkoutRequestId,
+          status: "failed",
+          confirmedAt: null
+        }
+      });
       return res.json({ data: { accepted: true, matched: true, activated: false, resultCode, resultDesc: callback.ResultDesc } });
     }
 
-    const activated = await activatePaymentIntent(intent, confirmedAt ?? new Date());
-    return res.json({
-      data: toJsonSafe({
-        accepted: true,
-        matched: true,
-        activated: true,
-        receipt,
-        amount,
-        phone,
-        paymentIntentId: intent.id,
-        entitlementId: "entitlement" in activated ? activated.entitlement?.id ?? null : null,
-        pppoeAccountId: "account" in activated ? activated.account.id : null
-      })
+    await prisma.$transaction(async (tx) => {
+      await tx.wifiPaymentIntent.update({
+        where: { id: intent.id },
+        data: {
+          rawPayload: req.body as Prisma.InputJsonValue,
+          providerReference: checkoutRequestId,
+          receiptNumber: typeof receipt === "string" ? receipt : intent.receiptNumber,
+          status: "confirmed",
+          confirmedAt
+        }
+      });
+      await enqueuePaymentActivation(tx, intent.id);
     });
+
+    try {
+      const activated = await activateConfirmedPaymentIntentById(intent.id);
+      await completePaymentActivationJobForIntent(intent.id);
+      return res.json({
+        data: toJsonSafe({
+          accepted: true,
+          matched: true,
+          activated: true,
+          receipt,
+          amount,
+          phone,
+          paymentIntentId: intent.id,
+          entitlementId: "entitlement" in activated ? activated.entitlement?.id ?? null : null,
+          pppoeAccountId: "account" in activated ? activated.account.id : null
+        })
+      });
+    } catch (error) {
+      console.error("Provider-confirmed Wi-Fi payment queued for activation retry", {
+        paymentIntentId: intent.id,
+        error: error instanceof Error ? error.message : error
+      });
+      return res.json({ data: { accepted: true, matched: true, activated: false, activationPending: true, paymentIntentId: intent.id } });
+    }
   } catch (error) {
     return next(error);
   }
@@ -2220,7 +2260,7 @@ const RECONCILE_AFTER_MS = 90_000;
 // Keep delayed but provider-confirmed purchases recoverable across a full day.
 const RECONCILE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-export async function reconcilePendingMpesaPayments(): Promise<{ activated: number; failed: number }> {
+export async function reconcilePendingMpesaPayments(): Promise<{ queued: number; failed: number }> {
   const now = Date.now();
   const reconciliationWindow = {
     provider: "mpesa",
@@ -2242,7 +2282,7 @@ export async function reconcilePendingMpesaPayments(): Promise<{ activated: numb
   });
   const candidates = [...pending, ...recentlyFailed];
 
-  let activated = 0;
+  let queued = 0;
   let failed = 0;
   for (const intent of candidates) {
     const checkoutRequestId = intent.providerReference as string;
@@ -2263,27 +2303,23 @@ export async function reconcilePendingMpesaPayments(): Promise<{ activated: numb
     if (isSuccessfulStkQuery(query, checkoutRequestId)) {
       const confirmedAt = new Date();
       if (intent.status === "pending_confirmation" || intent.status === "failed") {
-        const claimed = await prisma.wifiPaymentIntent.updateMany({
-          where: { id: intent.id, status: intent.status },
-          data: { status: "confirmed", confirmedAt, rawPayload }
+        const enqueued = await prisma.$transaction(async (tx) => {
+          const claimed = await tx.wifiPaymentIntent.updateMany({
+            where: { id: intent.id, status: intent.status },
+            data: { status: "confirmed", confirmedAt, rawPayload }
+          });
+          if (claimed.count === 0) return false; // callback settled it meanwhile
+          await enqueuePaymentActivation(tx, intent.id);
+          return true;
         });
-        if (claimed.count === 0) continue; // the callback settled it meanwhile
+        if (!enqueued) continue;
+        queued += 1;
+      } else {
+        await prisma.$transaction((tx) => enqueuePaymentActivation(tx, intent.id));
+        queued += 1;
       }
-      // Start paid time when access is actually provisioned. If callbacks or
-      // activation were delayed, anchoring expiry to the old confirmation time
-      // could make a freshly recovered short package expire immediately.
-      try {
-        await activatePaymentIntent(intent, new Date());
-        activated += 1;
-      } catch (error) {
-        // A single broken entitlement/projection must not prevent this pass
-        // from activating other independently verified customer payments.
-        console.error("M-PESA confirmed payment activation failed; will retry", {
-          paymentIntentId: intent.id,
-          sourceReference: intent.sourceReference,
-          error
-        });
-      }
+      // A database-backed worker provisions confirmed payments independently
+      // of callback delivery and records every retry durably.
     } else {
       // A success callback is independent evidence that the customer paid.
       // Daraja's query endpoint can lag or fail, so do not discard that payment
@@ -2296,5 +2332,5 @@ export async function reconcilePendingMpesaPayments(): Promise<{ activated: numb
       failed += updated.count;
     }
   }
-  return { activated, failed };
+  return { queued, failed };
 }

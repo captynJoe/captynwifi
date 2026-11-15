@@ -29,6 +29,13 @@ enum WifiProjectionStatus {
   failed
 }
 
+enum WifiPaymentActivationJobStatus {
+  queued
+  processing
+  completed
+  manual_review
+}
+
 model WifiSite {
   id          String       @id
   name        String
@@ -108,12 +115,33 @@ model WifiPaymentIntent {
   plan                WifiPlan                @relation(fields: [planId], references: [id], onDelete: Restrict)
   entitlement         WifiEntitlement?
   pppoeSubscription   WifiPppoeSubscription?
+  activationJob       WifiPaymentActivationJob?
 
   @@unique([source, sourceReference])
   @@index([siteId, status, createdAt])
   @@index([provider, providerReference])
   @@index([receiptNumber])
   @@index([funnelSessionId, status, createdAt])
+}
+
+
+model WifiPaymentActivationJob {
+  id              String                         @id @default(uuid())
+  paymentIntentId String                         @unique
+  status          WifiPaymentActivationJobStatus @default(queued)
+  attempts        Int                            @default(0)
+  nextAttemptAt   DateTime                       @default(now())
+  lockedAt        DateTime?
+  lastAttemptAt   DateTime?
+  completedAt     DateTime?
+  lastAlertedAt   DateTime?
+  lastError       String?
+  createdAt       DateTime                       @default(now())
+  updatedAt       DateTime                       @updatedAt
+  paymentIntent   WifiPaymentIntent              @relation(fields: [paymentIntentId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt])
+  @@index([status, lockedAt])
 }
 
 
