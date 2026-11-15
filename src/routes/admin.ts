@@ -495,6 +495,8 @@ adminRouter.get("/network-status", async (_req, res, next) => {
       paymentCount,
       pendingPaymentCount,
       stalePendingPaymentCount,
+      confirmedPaymentCount,
+      staleConfirmedPaymentCount,
       activeEntitlementCount,
       activeWithoutProjectionCount,
       pendingProjectionCount,
@@ -517,6 +519,8 @@ adminRouter.get("/network-status", async (_req, res, next) => {
       prisma.wifiPaymentIntent.count(),
       prisma.wifiPaymentIntent.count({ where: { status: "pending_confirmation" } }),
       prisma.wifiPaymentIntent.count({ where: { status: "pending_confirmation", updatedAt: { lt: stalePaymentCutoff } } }),
+      prisma.wifiPaymentIntent.count({ where: { status: "confirmed" } }),
+      prisma.wifiPaymentIntent.count({ where: { status: "confirmed", updatedAt: { lt: stalePaymentCutoff } } }),
       prisma.wifiEntitlement.count({ where: { status: "active", expiresAt: { gt: now } } }),
       prisma.wifiEntitlement.count({ where: { status: "active", expiresAt: { gt: now }, projection: null } }),
       prisma.wifiRadiusProjection.count({ where: { status: "pending" } }),
@@ -602,10 +606,12 @@ adminRouter.get("/network-status", async (_req, res, next) => {
       pipelineItem(
         "payments",
         "Payment confirmations",
-        stalePendingPaymentCount > 0 ? "warn" : "ok",
-        stalePendingPaymentCount > 0
-          ? `${stalePendingPaymentCount} pending payment${stalePendingPaymentCount === 1 ? "" : "s"} older than 15 minutes.`
-          : `${pendingPaymentCount} payment${pendingPaymentCount === 1 ? "" : "s"} waiting now.`
+        staleConfirmedPaymentCount > 0 ? "bad" : stalePendingPaymentCount > 0 ? "warn" : "ok",
+        staleConfirmedPaymentCount > 0
+          ? `${staleConfirmedPaymentCount} provider-confirmed payment${staleConfirmedPaymentCount === 1 ? "" : "s"} older than 15 minutes still need access activation.`
+          : stalePendingPaymentCount > 0
+            ? `${stalePendingPaymentCount} payment${stalePendingPaymentCount === 1 ? "" : "s"} awaiting confirmation for over 15 minutes.`
+            : `${pendingPaymentCount} payment${pendingPaymentCount === 1 ? "" : "s"} awaiting confirmation; ${confirmedPaymentCount} confirmed.`
       ),
       pipelineItem(
         "entitlements",
@@ -659,6 +665,8 @@ adminRouter.get("/network-status", async (_req, res, next) => {
         paymentCount,
         pendingPaymentCount,
         stalePendingPaymentCount,
+        confirmedPaymentCount,
+        staleConfirmedPaymentCount,
         activeEntitlementCount,
         activeWithoutProjectionCount,
         pendingProjectionCount,

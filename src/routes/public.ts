@@ -2272,8 +2272,18 @@ export async function reconcilePendingMpesaPayments(): Promise<{ activated: numb
       // Start paid time when access is actually provisioned. If callbacks or
       // activation were delayed, anchoring expiry to the old confirmation time
       // could make a freshly recovered short package expire immediately.
-      await activatePaymentIntent(intent, new Date());
-      activated += 1;
+      try {
+        await activatePaymentIntent(intent, new Date());
+        activated += 1;
+      } catch (error) {
+        // A single broken entitlement/projection must not prevent this pass
+        // from activating other independently verified customer payments.
+        console.error("M-PESA confirmed payment activation failed; will retry", {
+          paymentIntentId: intent.id,
+          sourceReference: intent.sourceReference,
+          error
+        });
+      }
     } else {
       // A success callback is independent evidence that the customer paid.
       // Daraja's query endpoint can lag or fail, so do not discard that payment
