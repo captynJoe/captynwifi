@@ -5,7 +5,7 @@ import { prisma } from "../prisma.js";
 import { applyRadiusProjectionRows, hasOtherActiveEntitlement } from "../services/radiusSqlApply.js";
 import { applyOutageCredit, evaluateAccountingOutage, resumePausedEntitlements, touchOutageHeartbeat } from "../services/outageCredit.js";
 import { activateDuePromos, endPromo, getActivePromo } from "../services/promo.js";
-import { kickHotspotUser } from "../services/routeros.js";
+import { kickHotspotUser, kickPppoeUser } from "../services/routeros.js";
 
 async function applyProjection(id: string) {
   await prisma.$transaction(async (tx) => {
@@ -161,15 +161,27 @@ async function expirePppoeAccounts() {
   });
 
   for (const account of expired) {
-    await prisma.$transaction(async (tx) => {
-      const claimed = await tx.wifiPppoeAccount.updateMany({
+    const claimed = await prisma.$transaction(async (tx) => {
+      const updated = await tx.wifiPppoeAccount.updateMany({
         where: { id: account.id, status: "active", expiresAt: { lte: now } },
         data: { status: "expired" }
       });
-      if (!claimed.count) return;
+      if (!updated.count) return false;
       await tx.$executeRaw`DELETE FROM radcheck WHERE username = ${account.username}`;
       await tx.$executeRaw`DELETE FROM radreply WHERE username = ${account.username}`;
+      return true;
     });
+
+    // Removing credentials blocks a new login but leaves a live PPP session
+    // authenticated until the router drops it. End it at the paid expiry.
+    if (claimed) {
+      const kicked = await kickPppoeUser(account.username);
+      if (kicked.error) {
+        console.error(`Could not disconnect expired PPPoE account ${account.username}: ${kicked.error}`);
+      } else if (kicked.removed > 0) {
+        console.log(`Disconnected ${kicked.removed} expired PPPoE session(s) for ${account.username}`);
+      }
+    }
   }
   return expired.length;
 }

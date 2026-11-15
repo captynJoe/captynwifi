@@ -987,7 +987,8 @@ function renderCapacityStatus() {
     ["ISP physical link", wan.rate || "Unknown", wan.status === "link-ok" ? "Link up" : (wan.status || "Unknown")],
     ["Download now", formatMbps(wan.rxMbps), "WAN receive"],
     ["Upload now", formatMbps(wan.txMbps), "WAN transmit"],
-    ["Active queue minimums", `${formatMbps(queueSummary.guaranteedDownloadMbps)} ↓ · ${formatMbps(queueSummary.guaranteedUploadMbps)} ↑`, `${queueSummary.activeCount || 0} active queues`]
+    ["Active queue minimums", `${formatMbps(queueSummary.guaranteedDownloadMbps)} ↓ · ${formatMbps(queueSummary.guaranteedUploadMbps)} ↑`, `${queueSummary.activeCount || 0} active queues`],
+    ["Live PPPoE sessions", Array.isArray(data.pppoeSessions) ? data.pppoeSessions.length : "—", Array.isArray(data.pppoeSessions) ? "sampled from MikroTik" : "session list unavailable"]
   ].map(([label, value, detail]) => `<div class="capacity-stat"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><em>${escapeHtml(detail)}</em></div>`).join("");
 
   const ports = data.ethernet || [];
@@ -1017,12 +1018,12 @@ function renderCapacityHistory() {
     button.classList.toggle("active", Number(button.dataset.capacityHours) === state.capacityHours);
   });
   if (history.error) {
-    body.innerHTML = `<tr><td colspan="6" class="empty-state">${escapeHtml(history.error)}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="8" class="empty-state">${escapeHtml(history.error)}</td></tr>`;
     return;
   }
   const rows = history.rows || [];
   if (!rows.length) {
-    body.innerHTML = '<tr><td colspan="6" class="empty-state">No samples yet. Monitoring will build this history over time.</td></tr>';
+    body.innerHTML = '<tr><td colspan="8" class="empty-state">No samples yet. Monitoring will build this history over time.</td></tr>';
     return;
   }
   const timeFormatter = new Intl.DateTimeFormat("en-KE", {
@@ -1035,6 +1036,8 @@ function renderCapacityHistory() {
     <td>${Number(row.overcommittedSamples || 0)}</td>
     <td>${Number(row.unavailableSamples || 0)}</td>
     <td>${Number(row.slowPortSamples || 0)}</td>
+    <td>${row.minPppoeSessions == null ? "—" : `${Number(row.minPppoeSessions)} / ${Number(row.maxPppoeSessions)}`}</td>
+    <td>${row.minPppoeSessions == null ? "—" : Number(row.pppoeReconnects || 0)}</td>
   </tr>`).join("");
 }
 

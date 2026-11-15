@@ -155,6 +155,7 @@ export type RouterCapacityStatus = {
   ethernet: Array<{ name: string; status: string; rate: string; rateMbps: number | null; fullDuplex: boolean | null; partnerAdvertising: string }>;
   queues: Array<{ name: string; target: string; limitAt: string; maxLimit: string; rate: string }>;
   queueSummary: { activeCount: number; guaranteedUploadMbps: number; guaranteedDownloadMbps: number };
+  pppoeSessions: Array<{ username: string; callerId: string; address: string; sessionId: string }> | null;
 };
 
 function sentencesToRows(sentences: RouterSentence[]) {
@@ -270,7 +271,8 @@ export async function getRouterCapacityStatus(): Promise<RouterCapacityStatus> {
     wan: { interface: "ether1", status: "unknown", rate: "", rateMbps: null, rxMbps: null, txMbps: null },
     ethernet: [],
     queues: [],
-    queueSummary: { activeCount: 0, guaranteedUploadMbps: 0, guaranteedDownloadMbps: 0 }
+    queueSummary: { activeCount: 0, guaranteedUploadMbps: 0, guaranteedDownloadMbps: 0 },
+    pppoeSessions: null
   };
   if (!unavailable.configured) return unavailable;
 
@@ -313,6 +315,22 @@ export async function getRouterCapacityStatus(): Promise<RouterCapacityStatus> {
       // Traffic counters are optional; physical link status remains useful.
     }
 
+    let pppoeSessions: RouterCapacityStatus["pppoeSessions"] = null;
+    try {
+      pppoeSessions = sentencesToRows(await client.command([
+        "/ppp/active/print",
+        "=.proplist=name,service,caller-id,address,session-id",
+        "?service=pppoe"
+      ])).map((row) => ({
+        username: row.name || "",
+        callerId: row["caller-id"] || "",
+        address: row.address || "",
+        sessionId: row["session-id"] || ""
+      }));
+    } catch {
+      // Keep link/traffic data even when the router cannot return PPP sessions.
+    }
+
     const wanPort = ethernet.find((port) => port.name === "ether1");
     const queues = sentencesToRows(await client.command([
       "/queue/simple/print",
@@ -348,7 +366,8 @@ export async function getRouterCapacityStatus(): Promise<RouterCapacityStatus> {
         activeCount: queues.length,
         guaranteedUploadMbps: Math.round(guaranteed.upload * 10) / 10,
         guaranteedDownloadMbps: Math.round(guaranteed.download * 10) / 10
-      }
+      },
+      pppoeSessions
     };
   } catch (error) {
     return {

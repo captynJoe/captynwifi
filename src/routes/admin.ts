@@ -455,7 +455,38 @@ adminRouter.get("/capacity-history", async (req, res, next) => {
       unavailableSamples: number;
       overcommittedSamples: number;
       slowPortSamples: number;
+      minPppoeSessions: number | null;
+      maxPppoeSessions: number | null;
+      pppoeReconnects: number;
     }>>(Prisma.sql`
+      WITH pppoe_sessions AS (
+        SELECT sample."createdAt",
+               date_trunc('hour', sample."createdAt") AS hour,
+               item->>'name' AS username,
+               item->>'callerId' AS caller_id,
+               item->>'sessionId' AS session_id
+        FROM "WifiNetworkCapacitySample" sample
+        CROSS JOIN LATERAL jsonb_array_elements(COALESCE(sample."pppoeSessions", '[]'::jsonb)) AS item
+        WHERE sample."createdAt" >= now() - (${hours} * interval '1 hour')
+      ),
+      pppoe_reconnects AS (
+        SELECT current.hour
+        FROM pppoe_sessions current
+        JOIN LATERAL (
+          SELECT previous.session_id
+          FROM pppoe_sessions previous
+          WHERE previous.username = current.username
+            AND previous.caller_id IS NOT DISTINCT FROM current.caller_id
+            AND previous."createdAt" < current."createdAt"
+          ORDER BY previous."createdAt" DESC
+          LIMIT 1
+        ) previous ON true
+        WHERE current.session_id IS NOT NULL AND current.session_id <> ''
+          AND previous.session_id IS NOT NULL
+          AND previous.session_id <> current.session_id
+      ),
+
+      hourly AS (
       SELECT date_trunc('hour', "createdAt") AS hour,
              count(*)::int AS samples,
              round(avg("wanDownloadMbps")::numeric, 1)::float AS "avgDownloadMbps",
@@ -470,11 +501,20 @@ adminRouter.get("/capacity-history", async (req, res, next) => {
                WHERE port->>'name' <> 'ether1'
                  AND port->>'status' = 'link-ok'
                  AND nullif(port->>'rateMbps', 'null')::float < 1000
-             ))::int AS "slowPortSamples"
+             ))::int AS "slowPortSamples",
+             min(jsonb_array_length("pppoeSessions")) FILTER (WHERE "pppoeSessions" IS NOT NULL)::int AS "minPppoeSessions",
+             max(jsonb_array_length("pppoeSessions")) FILTER (WHERE "pppoeSessions" IS NOT NULL)::int AS "maxPppoeSessions"
       FROM "WifiNetworkCapacitySample"
       WHERE "createdAt" >= now() - (${hours} * interval '1 hour')
       GROUP BY 1
-      ORDER BY 1 DESC
+      )
+      SELECT hourly.*, count(pppoe_reconnects.hour)::int AS "pppoeReconnects"
+      FROM hourly
+      LEFT JOIN pppoe_reconnects USING (hour)
+      GROUP BY hourly.hour, hourly.samples, hourly."avgDownloadMbps", hourly."peakDownloadMbps",
+               hourly."avgUploadMbps", hourly."peakUploadMbps", hourly."unavailableSamples",
+               hourly."overcommittedSamples", hourly."slowPortSamples", hourly."minPppoeSessions", hourly."maxPppoeSessions"
+      ORDER BY hourly.hour DESC
     `);
     return sendData(res, { generatedAt: new Date(), hours, rows });
   } catch (error) {
@@ -516,7 +556,9 @@ adminRouter.get("/network-status", async (_req, res, next) => {
       radacctCount,
       recentRadacctCount,
       activeWithRadacctCount,
-      activeWithRecentRadacctCount
+      activeWithRecentRadacctCount,
+      activePppoeAccounts,
+      activePppoeWithRecentRadacctCount
     ] = await Promise.all([
       prisma.wifiSite.count(),
       prisma.wifiPlan.count({ where: { enabled: true } }),
@@ -590,6 +632,16 @@ adminRouter.get("/network-status", async (_req, res, next) => {
         where entitlement.status = 'active'
           and entitlement."expiresAt" > ${now}
           and (coalesce(accounting.acctupdatetime, accounting.acctstarttime) > ${recentAccountingCutoff} or accounting.acctstoptime is null)
+      `),
+      prisma.wifiPppoeAccount.count({ where: { status: "active", expiresAt: { gt: now } } }),
+      rawCount(Prisma.sql`
+        select count(distinct account.username)::bigint as count
+        from "WifiPppoeAccount" account
+        join radacct accounting on accounting.username = account.username
+        where account.status = 'active'
+          and account."expiresAt" > ${now}
+          and accounting.acctstoptime is null
+          and coalesce(accounting.acctupdatetime, accounting.acctstarttime) > ${recentAccountingCutoff}
       `)
     ]);
 
@@ -657,6 +709,16 @@ adminRouter.get("/network-status", async (_req, res, next) => {
             : `${radcheck.count} check row${radcheck.count === 1 ? "" : "s"}, ${radreply.count} reply row${radreply.count === 1 ? "" : "s"}.`
       ),
       pipelineItem(
+        "pppoe_accounting",
+        "PPPoE session monitoring",
+        activePppoeAccounts === 0 ? "idle" : !activePppoeWithRecentRadacctCount.ok ? "bad" : activePppoeWithRecentRadacctCount.count === 0 ? "warn" : "ok",
+        activePppoeAccounts === 0
+          ? "No active PPPoE subscriptions."
+          : !activePppoeWithRecentRadacctCount.ok
+            ? "Could not query live PPPoE RADIUS accounting records."
+            : `${activePppoeWithRecentRadacctCount.count} of ${activePppoeAccounts} active PPPoE subscription(s) have a live RADIUS session with an interim update in the last 30 minutes.`
+      ),
+      pipelineItem(
         "router_accounting",
         "MikroTik accounting",
         !accountingHealthy ? "bad" : activeRecentAccountingCount > 0 ? "ok" : activeEntitlementCount > 0 ? "warn" : "idle",
@@ -701,10 +763,17 @@ adminRouter.get("/network-status", async (_req, res, next) => {
         activeWithAccountingCount: activeAccountingCount,
         activeWithRecentAccountingCount: activeRecentAccountingCount,
         appMirrorActiveWithAccountingCount: activeWithAccountingCount.count,
-        appMirrorActiveWithRecentAccountingCount: activeWithRecentAccountingCount.count
+        appMirrorActiveWithRecentAccountingCount: activeWithRecentAccountingCount.count,
+        activePppoeAccountCount: activePppoeAccounts,
+        activePppoeWithRecentAccountingCount: activePppoeWithRecentRadacctCount.count
       },
       mpesa: { enabled: mpesa.enabled, configured: mpesa.configured, missing: mpesa.configured ? [] : mpesa.missing },
       radiusSql: { ok: radiusSqlHealthy, errors: [radcheck, radreply, activeAppliedMissingRadiusRows].filter((item) => !item.ok).map((item) => item.error) },
+      pppoeAccounting: {
+        ok: activePppoeWithRecentRadacctCount.ok,
+        activeSubscriptions: activePppoeAccounts,
+        activeWithRecentAccounting: activePppoeWithRecentRadacctCount.count
+      },
       pipeline
     });
   } catch (error) {

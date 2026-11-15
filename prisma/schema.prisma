@@ -345,6 +345,7 @@ model WifiNetworkCapacitySample {
   guaranteedDownloadMbps   Float    @default(0)
   overcommitted            Boolean  @default(false)
   ethernetLinks            Json?
+  pppoeSessions            Json?
 
   @@index([createdAt])
   @@index([connected, createdAt])

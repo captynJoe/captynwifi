@@ -31,7 +31,8 @@ export async function captureNetworkCapacitySample() {
         guaranteedUploadMbps,
         guaranteedDownloadMbps,
         overcommitted,
-        ethernetLinks: snapshot.ethernet
+        ethernetLinks: snapshot.ethernet,
+        ...(snapshot.pppoeSessions !== null ? { pppoeSessions: snapshot.pppoeSessions } : {})
       }
     });
 
