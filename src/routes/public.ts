@@ -461,7 +461,7 @@ async function activatePaymentIntent(intent: WifiPaymentIntent, confirmedAt = ne
     // idempotent even for top-ups/upgrades that do not create a new linked
     // entitlement. Then serialize different purchases for the same phone so
     // two renewals cannot both calculate expiry from the same old endpoint.
-    await tx.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`wifi-payment:${intent.id}`}))`);
+    await tx.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`wifi-payment:${intent.id}`}))::text`);
     const paymentIntent = await tx.wifiPaymentIntent.findUnique({
       where: { id: intent.id },
       include: { site: true, plan: true, entitlement: { include: { projection: true } } }
@@ -471,7 +471,7 @@ async function activatePaymentIntent(intent: WifiPaymentIntent, confirmedAt = ne
       return activatePppoePayment(tx, paymentIntent, confirmedAt);
     }
 
-    await tx.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`wifi-hotspot:${paymentIntent.customerPhone}`}))`);
+    await tx.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`wifi-hotspot:${paymentIntent.customerPhone}`}))::text`);
 
     // For an extension, package upgrade, or add-device purchase, the payment
     // intent is intentionally not linked as WifiEntitlement.paymentIntentId.
@@ -2217,7 +2217,8 @@ publicRouter.post("/notifications/:id/read", async (req, res, next) => {
 // marked it failed, even when the customer had paid. Ask M-PESA directly
 // about payments still pending after the prompt should have been answered.
 const RECONCILE_AFTER_MS = 90_000;
-const RECONCILE_WINDOW_MS = 2 * 60 * 60 * 1000;
+// Keep delayed but provider-confirmed purchases recoverable across a full day.
+const RECONCILE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 export async function reconcilePendingMpesaPayments(): Promise<{ activated: number; failed: number }> {
   const now = Date.now();
@@ -2268,7 +2269,10 @@ export async function reconcilePendingMpesaPayments(): Promise<{ activated: numb
         });
         if (claimed.count === 0) continue; // the callback settled it meanwhile
       }
-      await activatePaymentIntent(intent, intent.confirmedAt ?? confirmedAt);
+      // Start paid time when access is actually provisioned. If callbacks or
+      // activation were delayed, anchoring expiry to the old confirmation time
+      // could make a freshly recovered short package expire immediately.
+      await activatePaymentIntent(intent, new Date());
       activated += 1;
     } else {
       // A success callback is independent evidence that the customer paid.
