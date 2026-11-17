@@ -1,4 +1,4 @@
-"use strict";
+import { readApiJson } from "./apiResponse.js";
 function requireElement(id) {
     const element = document.getElementById(id);
     if (!element)
@@ -1648,13 +1648,19 @@ function renderPlans(sites) {
 }
 async function loadPlans() {
     const [response, colorResponse] = await Promise.all([fetch(api("/sites")), fetch(api("/speed-colors")).catch(() => null)]);
-    const payload = await response.json();
-    if (!response.ok)
-        throw new Error(payload.error || "Unable to load WiFi packages.");
+    const payload = await readApiJson(response, "Unable to load WiFi packages.");
+    if (!Array.isArray(payload.data)) {
+        throw new Error("WiFi packages could not be loaded. Please try again.");
+    }
     if (colorResponse?.ok) {
-        const colorPayload = await colorResponse.json();
-        if (Array.isArray(colorPayload.data) && colorPayload.data.length === 4)
-            state.speedColors = colorPayload.data;
+        try {
+            const colorPayload = await readApiJson(colorResponse, "Unable to load WiFi package colors.");
+            if (Array.isArray(colorPayload.data) && colorPayload.data.length === 4)
+                state.speedColors = colorPayload.data;
+        }
+        catch {
+            // Package colors are optional; keep the built-in palette if unavailable.
+        }
     }
     renderPlans(payload.data || []);
 }
