@@ -1,3 +1,26 @@
+# Calculate access time from the live entitlement on every authentication.
+# radreply.Session-Timeout is only a snapshot written when a package is issued
+# or extended; FreeRADIUS does not decrement that SQL value as time passes.
+# WiFi usernames have an entitlement row; PPPoE and other RADIUS users do not.
+captyn_session_expiry {
+	if (&User-Name) {
+		update control {
+			&Tmp-Integer-0 := "%{sql:SELECT CASE WHEN COUNT(*) = 0 THEN -1 ELSE COALESCE(MAX(CASE WHEN status = 'active' AND \"expiresAt\" > NOW() AND \"outagePausedAt\" IS NULL AND \"promoPausedAt\" IS NULL THEN FLOOR(EXTRACT(EPOCH FROM (\"expiresAt\" - NOW())))::bigint END), 0) END FROM \"WifiEntitlement\" WHERE username = '%{SQL-User-Name}'}"
+		}
+		if (&control:Tmp-Integer-0 >= 0) {
+			if (&control:Tmp-Integer-0 <= 0) {
+				update reply {
+					&Reply-Message := "This WiFi package has expired or is paused. Please reconnect after restoring access."
+				}
+				reject
+			}
+			update reply {
+				&Session-Timeout := &control:Tmp-Integer-0
+			}
+		}
+	}
+}
+
 # CAPTYN device ledger and switch cap (see the wifi_device_ledger migration).
 
 # authorize: turn away a new device once the package has used its allowance

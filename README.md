@@ -29,6 +29,8 @@ Set `CAPTYN_WIFI_RADIUS_SQL_ENABLED=false` to disable the worker. The Docker Com
 
 `CAPTYN_WIFI_IDLE_TIMEOUT_SECONDS` controls the RADIUS `Idle-Timeout` returned to MikroTik. The default is `21600` seconds (6 hours). Set it to `0` to omit `Idle-Timeout` entirely and rely on RouterOS user-profile idle policy.
 
+FreeRADIUS recalculates the WiFi `Session-Timeout` from the entitlement expiry on every login. The `radreply` timeout remains a stored snapshot, so the authorization policy replaces it with the current remaining seconds and rejects expired or paused WiFi entitlements. Existing RouterOS sessions are still terminated by the expiry worker at the entitlement expiry.
+
 ## FreeRADIUS
 
 The Docker Compose stack includes a `freeradius` service bound to the private/WireGuard address in `CAPTYN_WIFI_RADIUS_BIND_IP` on UDP `1812` and `1813`.
