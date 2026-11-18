@@ -342,6 +342,7 @@ async function activateCredit(creditId) {
 // ---------- Weekly rewards ----------
 // This month's live rank and this week's snapshotted free-time reward.
 const rewardsEl = document.getElementById("rewards");
+const LOYALTY_PROMO_SUSPENDED = true;
 let rewardsData = null;
 let rewardBusy = false;
 function rewardIdentity() {
@@ -372,7 +373,16 @@ function renderRewards() {
     if (!rewardsEl)
         return;
     const data = rewardsData;
-    if (!data?.enabled || !data.known || !data.standing) {
+    if (!data?.known) {
+        rewardsEl.classList.add("hidden");
+        return;
+    }
+    if (LOYALTY_PROMO_SUSPENDED) {
+        rewardsEl.innerHTML = '<article class="rewards-card"><p class="rewards-next" role="status" aria-live="polite">Promo unavailable. Check back soon.</p></article>';
+        rewardsEl.classList.remove("hidden");
+        return;
+    }
+    if (!data.enabled || !data.standing) {
         rewardsEl.classList.add("hidden");
         return;
     }
