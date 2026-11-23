@@ -74,7 +74,14 @@ class RouterOsApiClient {
 
   async connect() {
     await new Promise<void>((resolve, reject) => {
-      const socket = net.createConnection({ host: config.routeros.host, port: config.routeros.port }, resolve);
+      // The timer guards connecting only. It used to be cleared just on close,
+      // so any conversation still running 5s after connecting had its socket
+      // destroyed mid-command -- the full capacity read takes 3.5-5s over the
+      // VPN, and 10-45% of samples a day came back as "router unreachable".
+      const socket = net.createConnection({ host: config.routeros.host, port: config.routeros.port }, () => {
+        clearTimeout(timer);
+        resolve();
+      });
       const timer = setTimeout(() => {
         socket.destroy(new Error("RouterOS API connection timed out"));
       }, config.routeros.timeoutMs);
