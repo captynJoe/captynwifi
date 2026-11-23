@@ -1188,7 +1188,7 @@ access.addEventListener("click", (event) => {
   accessConnectMessage.textContent = "Take your time. Wi-Fi will connect when you tap Connect now.";
 });
 
-async function attemptAutoConnect(username, password, statusEl, formEl, { freshGrant = false } = {}) {
+async function attemptAutoConnect(username, password, statusEl, formEl, { freshGrant = false, holdBeforeConnect = freshGrant } = {}) {
   const alreadyOnline = freshGrant ? false : await checkInternetReachable(900);
   // The router's login page is plain http and this portal is https, so a
   // hidden-iframe login is blocked as mixed content by browsers and
@@ -1200,7 +1200,7 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
     setConnectState(statusEl, formEl, "connecting", "Signing this device in...");
     await rememberDeviceForEntitlement(username, password);
     await saveAccessBeforeLeaving(username, password);
-    if (freshGrant) {
+    if (holdBeforeConnect) {
       updateAccessCopy("Package ready");
       holdFreshGrantConnection(username, password);
       return;
@@ -2438,7 +2438,10 @@ async function checkPromo(): Promise<boolean> {
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || "Couldn't activate free access.");
-    await attemptAutoConnect(payload.data.username, payload.data.password, promoStatus, null, { freshGrant: true });
+    // No device-code countdown here: the access panel that shows it (and its
+    // Connect now button) is hidden during a promo, so the hold was a silent
+    // 15-second wait on "Signing this device in...".
+    await attemptAutoConnect(payload.data.username, payload.data.password, promoStatus, null, { freshGrant: true, holdBeforeConnect: false });
   } catch (error) {
     promoStatus.textContent = error instanceof Error ? error.message : "Couldn't activate free access.";
   }

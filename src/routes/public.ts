@@ -348,6 +348,15 @@ function rawPayloadMerchantRequestId(rawPayload: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+// M-PESA's own callback already said how the prompt ended (cancelled, wrong
+// PIN, no balance, short payment); asking STK Query again can't change that.
+function isCallbackSettledFailure(rawPayload: unknown): boolean {
+  if (isCallbackAwaitingMpesaVerification(rawPayload)) return false;
+  if ((rawPayload as { source?: unknown } | null)?.source === "stk-query") return false;
+  const resultCode = readStkCallback(rawPayload)?.ResultCode;
+  return resultCode !== undefined && resultCode !== null && String(resultCode) !== "";
+}
+
 function isCallbackAwaitingMpesaVerification(rawPayload: unknown): boolean {
   return Boolean(
     rawPayload &&
@@ -2275,11 +2284,13 @@ export async function reconcilePendingMpesaPayments(): Promise<{ queued: number;
   // Recover recent intents that the old callback path may have marked failed
   // after Daraja's STK Query endpoint errored. Only a successful provider query
   // can reopen one, and this small separate batch cannot starve pending checks.
-  const recentlyFailed = await prisma.wifiPaymentIntent.findMany({
+  // Failures M-PESA itself reported are final and skipped, or the newest
+  // cancelled prompts get re-queried every round for a whole day.
+  const recentlyFailed = (await prisma.wifiPaymentIntent.findMany({
     where: { ...reconciliationWindow, status: "failed" },
     orderBy: { createdAt: "desc" },
-    take: 5
-  });
+    take: 50
+  })).filter((intent) => !isCallbackSettledFailure(intent.rawPayload)).slice(0, 5);
   const candidates = [...pending, ...recentlyFailed];
 
   let queued = 0;
