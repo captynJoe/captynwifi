@@ -1137,7 +1137,7 @@ async function saveAccessBeforeLeaving(username: string, password: string) {
     if (data?.expiresAt) saveRememberedAccess({ username, password, expiresAt: data.expiresAt, startsAt: data.startsAt, deviceLimit: data.deviceLimit });
   } catch (_error) {}
 }
-const FRESH_CONNECT_DELAY_SECONDS = 15;
+const FRESH_CONNECT_DELAY_SECONDS = 5;
 
 function connectFreshGrantNow() {
   if (!pendingFreshConnect) return;
@@ -1183,6 +1183,9 @@ accessConnectNow.addEventListener("click", connectFreshGrantNow);
 access.addEventListener("click", (event) => {
   if (!pendingFreshConnect || !(event.target instanceof HTMLElement)) return;
   if (event.target.closest("#access-connect-now")) return;
+  // Only a deliberate action (copying the code, adding a device) holds the
+  // connection; a stray tap on the panel used to stop the countdown for good.
+  if (!event.target.closest("button, a, input, select")) return;
   if (freshConnectInterval) clearInterval(freshConnectInterval);
   freshConnectInterval = null;
   accessConnectMessage.textContent = "Take your time. Wi-Fi will connect when you tap Connect now.";
@@ -1198,8 +1201,7 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
   // still appears if the navigation hasn't happened after a few seconds.
   if (!alreadyOnline && state.hotspot?.login) {
     setConnectState(statusEl, formEl, "connecting", "Signing this device in...");
-    await rememberDeviceForEntitlement(username, password);
-    await saveAccessBeforeLeaving(username, password);
+    await Promise.all([rememberDeviceForEntitlement(username, password), saveAccessBeforeLeaving(username, password)]);
     if (holdBeforeConnect) {
       updateAccessCopy("Package ready");
       holdFreshGrantConnection(username, password);
@@ -1895,6 +1897,8 @@ extendPeriodBtn?.addEventListener("click", () => {
 });
 
 const failedPaymentFunnelEvents = new Set<string>();
+// Whether the failure modal's button resends the same prompt (see pollPayment).
+let resendFailedPayment = false;
 
 async function pollPayment() {
   if (!state.paymentId) return;
@@ -1916,9 +1920,11 @@ async function pollPayment() {
     }
     payButton.disabled = false;
     payButton.textContent = paymentActionLabel();
-    const failureMessage = payment.failureReason || "Payment didn't go through. Tap Pay Now to try again.";
+    const failureMessage = payment.failureReason || "No answer from M-PESA. Send the prompt again.";
+    resendFailedPayment = payment.failureResendable !== false;
     setConnectState(paymentStatus, null, "failed", failureMessage);
     showPaymentModal("bad", "Payment didn't go through", failureMessage);
+    if (resendFailedPayment) paymentModalRetryBtn.textContent = "Send again";
   }
 
   if (payment.entitlement) {
@@ -2122,7 +2128,15 @@ paymentModalCancelBtn.addEventListener("click", () => {
   }
 });
 paymentModalRetryBtn.addEventListener("click", () => {
+  const resend = resendFailedPayment;
+  resendFailedPayment = false;
   resetPaymentAttempt();
+  // A cancelled, ignored or mistyped prompt just needs sending again: same
+  // package, same number, one tap -- not a trip back to the package list.
+  if (resend && currentPlan()) {
+    paymentForm.dispatchEvent(new Event("submit", { cancelable: true }));
+    return;
+  }
   setStep("package");
 });
 manualConnectSubmitBtn.addEventListener("click", () => {

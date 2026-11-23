@@ -192,19 +192,41 @@ function toJsonSafe<T>(value: T): T {
 }
 
 const MPESA_FAILURE_MESSAGES: Record<number, string> = {
-  1: "M-PESA said the balance is insufficient for this payment.",
-  1032: "The M-PESA prompt was cancelled or ignored. Tap Pay Now to try again.",
-  2001: "Wrong M-PESA PIN. Tap Pay Now to try again.",
-  1037: "The M-PESA prompt could not reach your phone in time. Check your signal and dial *334# to clear any pending M-PESA session, then try again.",
-  9999: "M-PESA had a temporary error sending the prompt. Please try again in a moment."
+  1: "Not enough M-PESA balance. Top up or pick a cheaper package.",
+  17: "M-PESA is still busy with your last prompt. Wait a few seconds, then send it again.",
+  1025: "M-PESA couldn't send the prompt. Send it again.",
+  1032: "You cancelled the M-PESA prompt. Send it again when you're ready.",
+  1037: "The M-PESA prompt didn't reach your phone. Check your network signal, then send it again.",
+  1038: "No reply to the M-PESA prompt. Send it again and enter your PIN.",
+  2001: "Wrong M-PESA PIN. Send it again and re-enter your PIN.",
+  2035: "That number isn't registered for M-PESA. Use another number.",
+  4999: "M-PESA is still busy with your last prompt. Wait a few seconds, then send it again.",
+  9999: "M-PESA couldn't send the prompt. Send it again."
 };
 
-function mpesaFailureReason(rawPayload: unknown): string | null {
+// Failures where the same prompt to the same number can simply be resent;
+// the rest need a different package (balance) or a different number.
+const MPESA_RESENDABLE_FAILURES = new Set([17, 1025, 1032, 1037, 1038, 2001, 4999, 9999]);
+
+function mpesaFailureCode(rawPayload: unknown): number | null {
   if (!rawPayload || typeof rawPayload !== "object") return null;
-  const callback = (rawPayload as { Body?: { stkCallback?: { ResultCode?: number; ResultDesc?: string } } }).Body
-    ?.stkCallback;
-  if (!callback || callback.ResultCode === undefined || callback.ResultCode === 0) return null;
-  return MPESA_FAILURE_MESSAGES[callback.ResultCode] ?? callback.ResultDesc ?? "Payment did not complete.";
+  const callback = (rawPayload as { Body?: { stkCallback?: { ResultCode?: number } } }).Body?.stkCallback;
+  if (!callback || callback.ResultCode === undefined || callback.ResultCode === null) return null;
+  const code = Number(callback.ResultCode);
+  return Number.isFinite(code) && code !== 0 ? code : null;
+}
+
+function mpesaFailureReason(rawPayload: unknown): string | null {
+  const code = mpesaFailureCode(rawPayload);
+  if (code === null) return null;
+  const callback = (rawPayload as { Body?: { stkCallback?: { ResultDesc?: string } } }).Body?.stkCallback;
+  return MPESA_FAILURE_MESSAGES[code] ?? callback?.ResultDesc ?? "Payment did not complete.";
+}
+
+// A payment that timed out without any M-PESA result is resendable too.
+function mpesaFailureResendable(rawPayload: unknown): boolean {
+  const code = mpesaFailureCode(rawPayload);
+  return code === null || MPESA_RESENDABLE_FAILURES.has(code);
 }
 
 // Sums the frozen package time actually restored to this entitlement (see
@@ -1089,7 +1111,8 @@ publicRouter.get("/payments/:id", async (req, res, next) => {
             : null,
         pppoeExpired: Boolean(intent.pppoeSubscription && intent.pppoeSubscription.account.expiresAt <= new Date()),
         extended: intent.accessType !== "pppoe" && !intent.entitlement && Boolean(entitlement),
-        failureReason: intent.status === "failed" ? mpesaFailureReason(intent.rawPayload) : null
+        failureReason: intent.status === "failed" ? mpesaFailureReason(intent.rawPayload) : null,
+        failureResendable: intent.status === "failed" ? mpesaFailureResendable(intent.rawPayload) : null
       })
     });
   } catch (error) {

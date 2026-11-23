@@ -29,13 +29,25 @@ sed -i '/^session {$/,/^}$/ s/^#\tsql$/\tsql/' /etc/raddb/sites-available/defaul
 # stable for
 # Start, Interim-Update, and Stop packets, while distinguishing later sessions
 # that reuse the same RouterOS session id.
-if ! grep -q "captyn_session_identity" /etc/raddb/sites-available/default; then
+# Except it is not exactly stable: both values are whole seconds read at
+# slightly different moments, so the derived start wobbles by a second.
+# Hashing the wobble split one connection into two radacct rows; the copy
+# that stopped getting updates stayed open until the Stale-Session sweep and
+# counted against Simultaneous-Use, refusing the customer's own reconnect.
+# So reuse the row this connection already started within a few seconds,
+# and only hash a new identity when there is none.
+# The v1 block replaced the acct_unique line, so a restarted (not recreated)
+# container cannot be upgraded in place: rebuild/recreate to pick up v2.
+if grep -q "captyn_session_identity:" /etc/raddb/sites-available/default; then
+  echo "WARNING: old Captyn accounting identity policy found; recreate this container to apply v2" >&2
+elif ! grep -q "captyn_session_identity_v2" /etc/raddb/sites-available/default; then
   awk '
     /^preacct \{$/ { section = "preacct" }
     {
       if (section == "preacct" && $0 == "\tacct_unique") {
         found = 1
-        print "\t# captyn_session_identity: make reused RouterOS ids unique per connection"
+        q = "\047"
+        print "\t# captyn_session_identity_v2: make reused RouterOS ids unique per connection"
         print "\tif (!&Event-Timestamp) {"
         print "\t\tupdate request {"
         print "\t\t\t&Event-Timestamp := \"%{expr: %l - %{%{Acct-Delay-Time}:-0}}\""
@@ -44,8 +56,20 @@ if ! grep -q "captyn_session_identity" /etc/raddb/sites-available/default; then
         print "\tupdate request {"
         print "\t\t&Tmp-String-0 := \"%{expr: %{integer:Event-Timestamp} - %{%{Acct-Session-Time}:-0}}\""
         print "\t}"
-        print "\tupdate request {"
-        print "\t\t&Acct-Unique-Session-Id := \"%{md5:%{User-Name}|%{Acct-Session-Id}|%{NAS-IP-Address}|%{NAS-Port}|%{NAS-Port-Type}|%{Calling-Station-Id}|%{Called-Station-Id}|%{Tmp-String-0}}\""
+        print "\tif (&Acct-Session-Id && &User-Name) {"
+        print "\t\tupdate request {"
+        print "\t\t\t&Tmp-String-1 := \"%{sql:SELECT acctuniqueid FROM radacct WHERE acctstarttime BETWEEN to_timestamp(%{Tmp-String-0} - 5) AND to_timestamp(%{Tmp-String-0} + 5) AND username = " q "%{User-Name}" q " AND acctsessionid = " q "%{Acct-Session-Id}" q " AND nasipaddress = " q "%{NAS-IP-Address}" q " AND callingstationid = " q "%{Calling-Station-Id}" q " ORDER BY radacctid LIMIT 1}\""
+        print "\t\t}"
+        print "\t}"
+        print "\tif (&Tmp-String-1 && &Tmp-String-1 != \"\") {"
+        print "\t\tupdate request {"
+        print "\t\t\t&Acct-Unique-Session-Id := \"%{Tmp-String-1}\""
+        print "\t\t}"
+        print "\t}"
+        print "\telse {"
+        print "\t\tupdate request {"
+        print "\t\t\t&Acct-Unique-Session-Id := \"%{md5:%{User-Name}|%{Acct-Session-Id}|%{NAS-IP-Address}|%{NAS-Port}|%{NAS-Port-Type}|%{Calling-Station-Id}|%{Called-Station-Id}|%{Tmp-String-0}}\""
+        print "\t\t}"
         print "\t}"
         section = ""
         next
