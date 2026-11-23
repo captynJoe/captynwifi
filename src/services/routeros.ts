@@ -469,6 +469,63 @@ export async function kickPppoeUser(username: string): Promise<RouterSessionKick
 }
 
 
+export type HotspotDeviceIdentity = { hostName: string | null; dhcpClassId: string | null; dhcpClientId: string | null };
+
+export type HotspotSignInResult = {
+  signedIn: boolean;
+  alreadyOnline: boolean;
+  identity: HotspotDeviceIdentity | null;
+  skippedReason?: string;
+  error?: string;
+};
+
+// Signs a device into the hotspot from the router's side, exactly as if it
+// had submitted the login page: the router still authenticates the package's
+// own username/password over RADIUS, so device caps, Simultaneous-Use and
+// accounting are unchanged. The IP comes from the router's own host table,
+// so a caller can't point a package at an address the router doesn't see.
+export async function signInHotspotDevice(input: { username: string; password: string; deviceMac: string }): Promise<HotspotSignInResult> {
+  const skippedReason = missingRouterConfig();
+  if (skippedReason) return { signedIn: false, alreadyOnline: false, identity: null, skippedReason };
+
+  const mac = input.deviceMac.toUpperCase();
+  const client = new RouterOsApiClient();
+  try {
+    await client.connect();
+    await client.login();
+    const lease = sentencesToRows(await client.command([
+      "/ip/dhcp-server/lease/print",
+      "=.proplist=host-name,class-id,client-id",
+      `?mac-address=${mac}`
+    ]))[0];
+    const identity: HotspotDeviceIdentity = {
+      hostName: lease?.["host-name"] || null,
+      dhcpClassId: lease?.["class-id"] || null,
+      dhcpClientId: lease?.["client-id"] || null
+    };
+    const host = sentencesToRows(await client.command([
+      "/ip/hotspot/host/print",
+      "=.proplist=address,authorized,bypassed",
+      `?mac-address=${mac}`
+    ]))[0];
+    if (!host?.address) return { signedIn: false, alreadyOnline: false, identity, skippedReason: "Device is not on the hotspot" };
+    if (host.authorized === "true" || host.bypassed === "true") return { signedIn: false, alreadyOnline: true, identity };
+
+    await client.command([
+      "/ip/hotspot/active/login",
+      `=user=${input.username}`,
+      `=password=${input.password}`,
+      `=mac-address=${mac}`,
+      `=ip=${host.address}`
+    ]);
+    return { signedIn: true, alreadyOnline: false, identity };
+  } catch (error) {
+    return { signedIn: false, alreadyOnline: false, identity: null, error: error instanceof Error ? error.message : "RouterOS sign-in failed" };
+  } finally {
+    client.close();
+  }
+}
+
 /** Verify that the MikroTik currently sees this exact MAC/IP on a hotspot host. */
 export async function isCurrentHotspotHost(deviceMac: string, deviceIp: string): Promise<boolean> {
   if (missingRouterConfig() || !deviceIp.trim()) return false;

@@ -98,7 +98,10 @@ export const config = {
     port: readPositiveInt("CAPTYN_WIFI_ROUTEROS_PORT", 8728),
     username: process.env.CAPTYN_WIFI_ROUTEROS_USERNAME?.trim() || "",
     password: process.env.CAPTYN_WIFI_ROUTEROS_PASSWORD ?? "",
-    timeoutMs: readPositiveMs("CAPTYN_WIFI_ROUTEROS_TIMEOUT_MS", 5000)
+    timeoutMs: readPositiveMs("CAPTYN_WIFI_ROUTEROS_TIMEOUT_MS", 5000),
+    // Sign paid devices into the hotspot from the server (no router login
+    // page). Off until the owner turns it on.
+    serverSignIn: readBoolean("CAPTYN_WIFI_SERVER_SIGN_IN")
   },
   governor: {
     enabled: readBoolean("CAPTYN_WIFI_GOVERNOR_ENABLED"),

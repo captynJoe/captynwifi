@@ -256,6 +256,13 @@ model WifiEntitlementDevice {
   // Set by "Sign out this device"; the row stays so the device still counts
   // toward the package's switch cap (see captyn_device_over_cap).
   signedOutAt   DateTime?
+  // What the router's DHCP lease said about this device when CAPTYN signed
+  // it in. Automatic re-sign-in only trusts a MAC whose identity still
+  // matches, so copying a paying phone's MAC alone isn't enough.
+  hostName      String?
+  dhcpClassId   String?
+  dhcpClientId  String?
+  identitySeenAt DateTime?
   entitlement   WifiEntitlement @relation(fields: [entitlementId], references: [id], onDelete: Cascade)
 
   @@unique([entitlementId, deviceMac])

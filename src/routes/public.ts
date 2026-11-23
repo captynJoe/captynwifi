@@ -13,6 +13,7 @@ import { formatCreditDuration } from "../services/credits.js";
 import { bodyFieldKey, clientRateLimit, ipKey } from "../middleware/rateLimitGuard.js";
 import { ensureConnectCode, normalizeConnectCode } from "../services/connectCode.js";
 import { isCurrentHotspotHost, kickHotspotDevice } from "../services/routeros.js";
+import { signInEntitlementDevice } from "../services/deviceSignIn.js";
 import { deviceCap, payingDeviceNeedsSlot, publicDevice } from "../services/deviceLedger.js";
 import { MAX_DEVICES, addDeviceQuote, deviceOptions, devicePrice, maxDevicesFor } from "../services/devicePricing.js";
 import { LOYALTY_REASON, PURCHASABLE_PLAN_WHERE, climbGap, monthStandings, nairobiMonthStart, tierForRank } from "../services/loyalty.js";
@@ -67,6 +68,14 @@ const publicDeviceRemoveLimit = clientRateLimit({
 
 // Tight on purpose: a 6-character code is only safe against guessing while
 // each IP gets a handful of tries.
+const publicDeviceSignInLimit = clientRateLimit({
+  name: "wifi-public-device-sign-in",
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  key: ipKey,
+  message: "Too many requests. Try again shortly."
+});
+
 const publicConnectCodeLimit = clientRateLimit({
   name: "wifi-public-connect-code",
   windowMs: 15 * 60 * 1000,
@@ -1312,6 +1321,33 @@ publicRouter.post("/entitlements/connect-code/redeem", publicConnectCodeLimit, a
   }
 });
 
+const signInDeviceSchema = z.object({
+  username: z.string().trim().min(1),
+  password: z.string().min(1),
+  deviceMac: z.string().trim().min(1)
+});
+
+// The portal asks the server to put this device online instead of sending it
+// to the router's login page. 409 SERVER_SIGN_IN_UNAVAILABLE tells the portal
+// to fall back to the login page.
+publicRouter.post("/entitlements/sign-in-device", publicDeviceSignInLimit, async (req, res, next) => {
+  try {
+    const parsed = signInDeviceSchema.parse(req.body);
+    const mac = normalizeDeviceMac(parsed.deviceMac);
+    if (!mac) return res.status(400).json({ error: "Device MAC required" });
+    const entitlement = await authenticateEntitlementOwner(parsed.username, parsed.password);
+    if (!entitlement) return res.status(404).json({ error: "No matching active access record" });
+
+    const result = await signInEntitlementDevice(prisma, entitlement, mac);
+    if (!result.signedIn && !result.alreadyOnline) {
+      return res.status(409).json({ error: "SERVER_SIGN_IN_UNAVAILABLE", message: result.error || result.skippedReason || "Couldn't sign this device in." });
+    }
+    return res.json({ data: { signedIn: result.signedIn, alreadyOnline: result.alreadyOnline } });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 const signOutDeviceSchema = z.object({
   username: z.string().trim().min(1),
   password: z.string().min(1),
@@ -1725,7 +1761,16 @@ export async function activateConfirmedPaymentIntentById(paymentIntentId: string
   if (intent.status !== "confirmed" && intent.status !== "activated") {
     throw new Error(`Payment is not confirmed (status=${intent.status})`);
   }
-  return activatePaymentIntent(intent, new Date());
+  const result = await activatePaymentIntent(intent, new Date());
+  // Put the paying device online straight away, even if the customer closed
+  // the portal after paying. Never holds up activation or the M-PESA reply.
+  const entitlement = result?.entitlement;
+  if (intent.accessType === "hotspot" && intent.deviceMac && entitlement && "cleartextSecret" in entitlement) {
+    void signInEntitlementDevice(prisma, entitlement, intent.deviceMac).catch((error) =>
+      console.warn("[SignIn] paid device sign-in failed:", error instanceof Error ? error.message : error)
+    );
+  }
+  return result;
 }
 
 // Pays to raise a running package's device limit; activatePaymentIntent

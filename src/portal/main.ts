@@ -1191,15 +1191,41 @@ access.addEventListener("click", (event) => {
   accessConnectMessage.textContent = "Take your time. Wi-Fi will connect when you tap Connect now.";
 });
 
+async function signInFromServer(username: string, password: string, deviceMac: string): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch(api("/entitlements/sign-in-device"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password, deviceMac }),
+      signal: controller.signal
+    });
+    return response.ok;
+  } catch (_error) {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function attemptAutoConnect(username, password, statusEl, formEl, { freshGrant = false, holdBeforeConnect = freshGrant } = {}) {
   const alreadyOnline = freshGrant ? false : await checkInternetReachable(900);
+  // Preferred: the server signs this device in through the router, so the
+  // customer goes online without leaving this page (no countdown, no router
+  // login page). Anything short of a yes falls back to the router page.
+  let serverSignedIn = false;
+  if (!alreadyOnline && state.hotspot?.mac) {
+    setConnectState(statusEl, formEl, "connecting", "Signing this device in...");
+    serverSignedIn = await signInFromServer(username, password, state.hotspot.mac);
+  }
   // The router's login page is plain http and this portal is https, so a
   // hidden-iframe login is blocked as mixed content by browsers and
   // captive-portal webviews -- it never reached the router, and customers
   // only got online by finding "Tap to connect". Go to the router for real:
   // it signs the device in and redirects back to /wifi/. The fallback button
   // still appears if the navigation hasn't happened after a few seconds.
-  if (!alreadyOnline && state.hotspot?.login) {
+  if (!alreadyOnline && !serverSignedIn && state.hotspot?.login) {
     setConnectState(statusEl, formEl, "connecting", "Signing this device in...");
     await Promise.all([rememberDeviceForEntitlement(username, password), saveAccessBeforeLeaving(username, password)]);
     if (holdBeforeConnect) {
