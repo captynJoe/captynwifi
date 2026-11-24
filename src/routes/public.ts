@@ -622,9 +622,11 @@ async function activatePaymentIntent(intent: WifiPaymentIntent, confirmedAt = ne
             }
           });
 
+      // A top-up names the package it extended, so payment status and Trace
+      // link it directly instead of guessing by phone number.
       const updatedIntent = await tx.wifiPaymentIntent.update({
         where: { id: paymentIntent.id },
-        data: { status: "activated", confirmedAt: startsAt },
+        data: { status: "activated", confirmedAt: startsAt, targetEntitlementId: existingActive.id },
         include: { site: true, plan: true }
       });
 

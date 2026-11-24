@@ -643,6 +643,7 @@ img.brand-mark { background: none; border-radius: 10px; object-fit: contain; }
 .trace-form .field { flex: 1 1 360px; }
 .trace-status { margin: 0 16px 14px; color: var(--muted); font-size: 13px; }
 .trace-results { display: grid; gap: 14px; }
+.trace-alert-resolved td { color: var(--muted); }
 .trace-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px 16px; padding: 14px 16px; margin: 0; }
 .trace-facts dt { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
 .trace-facts dd { margin: 2px 0 0; font-weight: 600; overflow-wrap: anywhere; }

@@ -121,14 +121,14 @@ class RouterOsApiClient {
     this.buffer = this.buffer.slice(offset);
   }
 
-  async command(words: string[]) {
+  async command(words: string[], timeoutMs = config.routeros.timeoutMs) {
     const socket = this.socket;
     if (!socket) throw new Error("RouterOS API is not connected");
     const bucket: RouterSentence[] = [];
     this.pending.push(bucket);
     socket.write(encodeSentence(words));
 
-    const deadline = Date.now() + config.routeros.timeoutMs;
+    const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       if (bucket.some((sentence) => sentence.type === "!done" || sentence.type === "!fatal")) {
         const trap = bucket.find((sentence) => sentence.type === "!trap" || sentence.type === "!fatal");
@@ -710,6 +710,40 @@ export async function isCurrentHotspotHost(deviceMac: string, deviceIp: string):
     return rows.some((row) => row["mac-address"]?.toUpperCase() === deviceMac.toUpperCase() && row.address === deviceIp.trim());
   } catch {
     return false;
+  } finally {
+    client.close();
+  }
+}
+
+export type IspProbeReading = { customerMbps: number | null; bytes: number; seconds: number };
+
+// Downloads a fixed file through the router itself (nothing kept) and times
+// it, after reading the customer traffic already on the WAN. Together they
+// show what the ISP line can carry right now. Throws when it can't measure.
+export async function probeIspThroughput(url: string, timeoutMs = 60_000): Promise<IspProbeReading> {
+  const missing = missingRouterConfig();
+  if (missing) throw new Error(missing);
+  const client = new RouterOsApiClient();
+  try {
+    await client.connect();
+    await client.login();
+    let customerMbps: number | null = null;
+    try {
+      const traffic = sentencesToRows(await client.command(["/interface/monitor-traffic", "=interface=ether1", "=once="]))[0] || {};
+      const rx = Number(traffic["rx-bits-per-second"]);
+      customerMbps = Number.isFinite(rx) ? rx / 1_000_000 : null;
+    } catch {
+      // The download timing alone is still worth recording.
+    }
+    const started = Date.now();
+    const rows = sentencesToRows(await client.command(["/tool/fetch", `=url=${url}`, "=keep-result=no"], timeoutMs));
+    const seconds = (Date.now() - started) / 1000;
+    const last = rows[rows.length - 1] || {};
+    if (last.status && last.status !== "finished") throw new Error(`Download ${last.status}`);
+    // RouterOS reports "downloaded" in KiB.
+    const bytes = Math.round(Number(last.downloaded) * 1024);
+    if (!Number.isFinite(bytes) || bytes <= 0) throw new Error("Download returned no data");
+    return { customerMbps, bytes, seconds };
   } finally {
     client.close();
   }

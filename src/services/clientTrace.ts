@@ -141,6 +141,9 @@ export async function traceClient(prisma: PrismaClient, query: string) {
     sessions.forEach((s) => allUsernames.add(s.username));
     ledger.forEach((d) => allUsernames.add(d.entitlement.username));
 
+    // Repeat visits: separate days this device was seen (sessions or events).
+    const dayKey = (d: Date) => new Date(d.getTime() + 3 * 3600 * 1000).toISOString().slice(0, 10);
+    const daysSeen = new Set([...sessions.map((s) => dayKey(s.start)), ...timeline.map((e) => dayKey(e.at))]).size;
     const seconds = sessions.reduce((sum, s) => sum + Number(s.seconds ?? 0), 0);
     const bytes = sessions.reduce((sum, s) => sum + Number(s.bytes ?? 0), 0);
     const live = liveSessions?.find((s) => s.deviceMac === mac);
@@ -167,6 +170,7 @@ export async function traceClient(prisma: PrismaClient, query: string) {
         ...timeline.filter((e) => e.type === "ip_changed").flatMap((e) => [e.fromValue, e.toValue])
       ].filter(Boolean))],
       sessionCount: sessions.length,
+      daysSeen,
       totalHours: Math.round((seconds / 3600) * 10) / 10,
       totalGb: Math.round((bytes / 1e9) * 100) / 100,
       sessions: sessions.slice(0, MAX_SESSIONS).map((s) => ({
@@ -194,8 +198,16 @@ export async function traceClient(prisma: PrismaClient, query: string) {
     orderBy: { createdAt: "desc" }
   });
 
+  // Device changes: every device that used each package, from accounting.
+  const usage = entitlements.length === 0 ? [] : await prisma.$queryRaw<Array<{ username: string; mac: string; first: Date; last: Date; sessions: bigint }>>`
+    SELECT username, upper(callingstationid) AS mac, min(acctstarttime) AS first,
+           max(coalesce(acctstoptime, acctupdatetime, acctstarttime)) AS last, count(DISTINCT acctsessionid) AS sessions
+    FROM radacct WHERE username = ANY(${entitlements.map((e) => e.username)}) AND coalesce(callingstationid, '') <> ''
+    GROUP BY 1, 2 ORDER BY 3`;
+
   const payment = (intent: (typeof addOns)[number], devicesTraced: string[]) => {
     const isMpesa = intent.provider === "mpesa";
+    const isVoucher = intent.provider === "voucher";
     const paid = intent.status === "activated" || intent.status === "confirmed";
     return {
       id: intent.id,
@@ -205,10 +217,12 @@ export async function traceClient(prisma: PrismaClient, query: string) {
       amountKsh: intent.amountKsh,
       reference: intent.receiptNumber ?? (isMpesa ? intent.providerReference : null),
       at: intent.confirmedAt ?? intent.createdAt,
-      phoneMasked: isMpesa && paid ? maskPhone(intent.customerPhone) : null,
+      phoneMasked: (isMpesa && paid) || (isVoucher && intent.customerPhone) ? maskPhone(intent.customerPhone) : null,
       phoneLink: isMpesa && paid
         ? { status: "confirmed", source: "M-PESA payment confirmation" }
-        : { status: "unresolved", source: isMpesa ? "Payment not completed" : `No phone: ${intent.provider} access` },
+        : isVoucher && intent.customerPhone
+          ? { status: "unresolved", source: "Typed when the voucher was issued (not verified)" }
+          : { status: "unresolved", source: isMpesa ? "Payment not completed" : `No phone: ${intent.provider} access` },
       paidFromTracedDevice: Boolean(intent.deviceMac && devicesTraced.includes(intent.deviceMac.toUpperCase()))
     };
   };
@@ -229,9 +243,15 @@ export async function traceClient(prisma: PrismaClient, query: string) {
       payment: payment(e.paymentIntent, traced),
       paymentLink: { status: "confirmed", source: "Payment that created this package" },
       addOns: addOns.filter((a) => a.targetEntitlementId === e.id).map((a) => payment(a, traced)),
-      // Time-ups bought on the same phone extend this package in place but the
-      // record doesn't name the package, so they stay unattributed here.
-      topUpsNote: "Top-ups that extended this package aren't linked to it in records (unresolved)."
+      voucher: e.paymentIntent.provider === "voucher"
+        ? {
+            code: e.username,
+            issuedBy: ((e.paymentIntent.rawPayload as { issuedBy?: { name?: string | null } } | null)?.issuedBy?.name) ?? null
+          }
+        : null,
+      devicesUsed: usage.filter((u) => u.username === e.username).map((u) => ({ mac: u.mac, first: u.first, last: u.last, sessions: Number(u.sessions) })),
+      // Top-ups name their package from 2026-11-24; older ones didn't.
+      topUpsNote: "Top-ups before 24 Nov 2026 weren't linked to their package (unresolved)."
     }))
   };
 }

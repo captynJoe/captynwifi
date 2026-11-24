@@ -118,7 +118,9 @@ export const config = {
     // still matches. "off" | "dry-run" (log only) | "on".
     autoReconnect: readSweepMode("CAPTYN_WIFI_AUTO_RECONNECT"),
     // Client Intelligence device collector (router + Omada snapshots).
-    deviceCollector: readBoolean("CAPTYN_WIFI_DEVICE_COLLECTOR")
+    deviceCollector: readBoolean("CAPTYN_WIFI_DEVICE_COLLECTOR"),
+    // Evening ISP speed probe (see ispProbe.ts).
+    ispProbe: readBoolean("CAPTYN_WIFI_ISP_PROBE")
   },
   // Omada Open API, read-only, for the device collector. Reached through the
   // router's NAT to the controller on the owner's PC.

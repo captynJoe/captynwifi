@@ -17,6 +17,8 @@ function createVoucherCode(length = 8) {
 export interface IssueVoucherInput {
   customerPhone?: string;
   deviceMac?: string | null;
+  // Who issued it (admin or integration), kept on the voucher's payment record.
+  issuedBy?: { id: string; name: string | null };
 }
 
 export interface IssuedVoucher {
@@ -58,7 +60,8 @@ export async function issueVoucher(plan: WifiPlan, input: IssueVoucherInput): Pr
             amountKsh: 0,
             provider: "voucher",
             status: "activated",
-            confirmedAt: startsAt
+            confirmedAt: startsAt,
+            rawPayload: input.issuedBy ? { issuedBy: input.issuedBy } : undefined
           }
         });
 

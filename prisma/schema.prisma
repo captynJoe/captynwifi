@@ -453,6 +453,21 @@ model WifiDevice {
 
 // What changed for a device, when, and which source saw it. Evidence only:
 // raw observed values, never inferred identities.
+// Evening ISP line probe: a timed download through the router, plus the
+// customer traffic already on the WAN at that moment.
+model WifiIspProbe {
+  id           String   @id @default(uuid())
+  at           DateTime @default(now())
+  probeMbps    Float?
+  customerMbps Float?
+  totalMbps    Float?
+  bytes        Int?
+  seconds      Float?
+  error        String?
+
+  @@index([at])
+}
+
 model WifiDeviceEvent {
   id        String     @id @default(uuid())
   mac       String
@@ -625,4 +640,21 @@ model WifiLoyaltyReward {
 
   @@unique([roundId, customerPhone])
   @@index([customerPhone, status])
+}
+
+// Client Intelligence alerts. One row per open condition (key); resolved when
+// the condition is no longer seen, reopened as a new row if it comes back.
+model WifiIntelAlert {
+  id          String    @id @default(uuid())
+  key         String
+  rule        String
+  subject     String
+  title       String
+  detail      Json?
+  firstSeenAt DateTime
+  lastSeenAt  DateTime
+  resolvedAt  DateTime?
+
+  @@index([key, resolvedAt])
+  @@index([resolvedAt, lastSeenAt])
 }

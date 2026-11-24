@@ -9,6 +9,8 @@ import { kickHotspotUser, kickPppoeUser } from "../services/routeros.js";
 import { sweepExpiredSessions, sweepHotspotCookies } from "../services/cookieSweep.js";
 import { runAutoReconnect } from "../services/autoReconnect.js";
 import { collectDevices, pruneDeviceHistory } from "../services/deviceCollector.js";
+import { pruneIspProbes, runIspProbe } from "../services/ispProbe.js";
+import { runIntelAlerts } from "../services/intelAlerts.js";
 
 async function applyProjection(id: string) {
   await prisma.$transaction(async (tx) => {
@@ -341,6 +343,28 @@ async function main() {
   setInterval(() => {
     pruneDeviceHistory(prisma).catch((error) => console.error("Device history prune error:", error));
   }, 24 * 3600 * 1000);
+
+  // Evening ISP probe (see ispProbe.ts): checked every minute, runs on its
+  // half-hour slots only.
+  let probing = false;
+  setInterval(() => {
+    if (probing) return;
+    probing = true;
+    runIspProbe(prisma)
+      .then((probe) => { if (probe) console.log(`ISP probe: ${probe.error ? `failed (${probe.error})` : `${probe.probeMbps} Mbps download, ${probe.customerMbps} Mbps customer traffic`}`); })
+      .catch((error) => console.error("ISP probe error:", error))
+      .finally(() => { probing = false; });
+  }, 60 * 1000);
+  setInterval(() => {
+    pruneIspProbes(prisma).catch((error) => console.error("ISP probe prune error:", error));
+  }, 24 * 3600 * 1000);
+
+  // Client Intelligence alerts (see intelAlerts.ts), hourly.
+  setInterval(() => {
+    runIntelAlerts(prisma)
+      .then((result) => { if (result && (result.opened > 0 || result.resolved > 0)) console.log(`Intel alerts: ${result.opened} opened, ${result.resolved} resolved, ${result.stillOpen} still open`); })
+      .catch((error) => console.error("Intel alerts error:", error));
+  }, 60 * 60 * 1000);
 
   // Paid devices that dropped off the hotspot get signed back in (see
   // autoReconnect.ts). Its own 30s timer: a dropped customer shouldn't wait

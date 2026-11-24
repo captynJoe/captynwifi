@@ -273,6 +273,20 @@ adminRouter.get("/trace", async (req, res, next) => {
   }
 });
 
+// Client Intelligence alerts: open ones, plus anything resolved in the last day.
+adminRouter.get("/trace/alerts", async (_req, res, next) => {
+  try {
+    const alerts = await prisma.wifiIntelAlert.findMany({
+      where: { OR: [{ resolvedAt: null }, { resolvedAt: { gte: new Date(Date.now() - 24 * 3600 * 1000) } }] },
+      orderBy: [{ lastSeenAt: "desc" }],
+      take: 100
+    });
+    return sendData(res, alerts);
+  } catch (error) {
+    return next(error);
+  }
+});
+
 adminRouter.post("/trace/reveal", async (req, res, next) => {
   try {
     const paymentIntentId = typeof req.body?.paymentIntentId === "string" ? req.body.paymentIntentId : "";
@@ -471,6 +485,19 @@ adminRouter.get("/capacity-status", async (_req, res, next) => {
   }
 });
 
+// Evening ISP probes, newest first, for the last 7 days.
+adminRouter.get("/isp-probes", async (_req, res, next) => {
+  try {
+    const probes = await prisma.wifiIspProbe.findMany({
+      where: { at: { gte: new Date(Date.now() - 7 * 86400 * 1000) } },
+      orderBy: { at: "desc" },
+      take: 200
+    });
+    return sendData(res, { enabled: config.routeros.ispProbe, probes });
+  } catch (error) {
+    return next(error);
+  }
+});
 
 adminRouter.get("/capacity-history", async (req, res, next) => {
   try {
@@ -1354,7 +1381,8 @@ adminRouter.post("/vouchers", async (req, res, next) => {
 
     const issued = await issueVoucher(plan, {
       customerPhone: data.customerPhone ? normalizeKenyaPhone(data.customerPhone) : undefined,
-      deviceMac: data.deviceMac ?? null
+      deviceMac: data.deviceMac ?? null,
+      issuedBy: { id: req.wifiAdminSession?.sub ?? "admin", name: req.wifiAdminSession?.name ?? req.wifiAdminSession?.email ?? null }
     });
 
     return res.status(201).json({
@@ -1384,7 +1412,7 @@ adminRouter.post("/vouchers/bulk", async (req, res, next) => {
 
     for (const phone of uniquePhones) {
       try {
-        const issued = await issueVoucher(plan, { customerPhone: phone, deviceMac: data.deviceMac ?? null });
+        const issued = await issueVoucher(plan, { customerPhone: phone, deviceMac: data.deviceMac ?? null, issuedBy: { id: req.wifiAdminSession?.sub ?? "admin", name: req.wifiAdminSession?.name ?? req.wifiAdminSession?.email ?? null } });
         results.push({ phone, status: "created", code: issued.code, expiresAt: issued.expiresAt });
       } catch (error) {
         results.push({

@@ -1041,7 +1041,46 @@ function renderCapacityHistory() {
   </tr>`).join("");
 }
 
+function renderIspProbes() {
+  const data = state.cache.ispProbes;
+  const panel = document.getElementById("isp-probe-panel");
+  const body = document.getElementById("isp-probe-body");
+  const summary = document.getElementById("isp-probe-summary");
+  if (!panel || !body || !summary) return;
+  // Older API without probes: keep the panel out of the way.
+  panel.classList.toggle("hidden", !data || data.notAvailable);
+  if (!data || data.notAvailable) return;
+  if (data.error) {
+    summary.textContent = "";
+    body.innerHTML = `<tr><td colspan="4" class="empty-state">${escapeHtml(data.error)}</td></tr>`;
+    return;
+  }
+  const probes = data.probes || [];
+  const eatHour = (at) => (new Date(at).getUTCHours() + 3) % 24;
+  const avg = (rows) => rows.length ? Math.round(rows.reduce((sum, p) => sum + p.totalMbps, 0) / rows.length) : null;
+  const measured = probes.filter((p) => p.totalMbps != null);
+  const evening = avg(measured.filter((p) => eatHour(p.at) >= 19));
+  const night = avg(measured.filter((p) => eatHour(p.at) < 6));
+  summary.textContent = [evening != null ? `Evenings ${evening} Mbps` : "", night != null ? `3 am ${night} Mbps` : ""].filter(Boolean).join(" · ");
+  body.innerHTML = probes.length
+    ? probes.map((p) => p.error
+      ? `<tr class="capacity-slow"><td>${escapeHtml(fmtDate(p.at))}</td><td colspan="3">Test failed: ${escapeHtml(p.error)}</td></tr>`
+      : `<tr><td>${escapeHtml(fmtDate(p.at))}</td><td>${escapeHtml(p.probeMbps)} Mbps</td><td>${p.customerMbps == null ? "—" : `${escapeHtml(p.customerMbps)} Mbps`}</td><td><strong>${p.totalMbps == null ? "—" : `${escapeHtml(p.totalMbps)} Mbps`}</strong></td></tr>`).join("")
+    : `<tr><td colspan="4" class="empty-state">${data.enabled ? "The first test runs at 7 pm." : "Line tests are off. Set CAPTYN_WIFI_ISP_PROBE=true to start them."}</td></tr>`;
+}
+
+async function loadIspProbes() {
+  try {
+    state.cache.ispProbes = await api(adminApi("/isp-probes"));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Could not load line tests.";
+    state.cache.ispProbes = /not found|404/i.test(message) ? { notAvailable: true } : { error: message };
+  }
+  renderIspProbes();
+}
+
 async function loadCapacityHistory() {
+  void loadIspProbes();
   try {
     state.cache.capacityHistory = await api(adminApi(`/capacity-history?hours=${state.capacityHours}`));
   } catch (error) {
@@ -1611,6 +1650,7 @@ function setPage(page) {
   if (state.activePage === "analytics") void loadAnalytics();
   clearInterval(capacityRefreshTimer);
   clearInterval(capacityHistoryTimer);
+  if (state.activePage === "trace") void loadTraceAlerts();
   if (state.activePage === "capacity") {
     void loadCapacityStatus();
     void loadCapacityHistory();
@@ -2242,6 +2282,7 @@ function renderTrace(data) {
           <div><dt>Last seen</dt><dd>${escapeHtml(fmtDate(d.lastSeen))}</dd></div>
           <div><dt>IP addresses</dt><dd>${escapeHtml((d.ips || []).join(", ") || "-")}</dd></div>
           <div><dt>Sessions</dt><dd>${escapeHtml(d.sessionCount)} · ${escapeHtml(d.totalHours)} h · ${escapeHtml(d.totalGb)} GB</dd></div>
+          <div><dt>Visits</dt><dd>${escapeHtml(d.daysSeen)} day${d.daysSeen === 1 ? "" : "s"}${d.daysSeen > 1 ? " · repeat visitor" : " · first visit"}</dd></div>
           <div><dt>Failed payments</dt><dd>${escapeHtml(d.failedPayments.count)}${d.failedPayments.last ? ` · last ${escapeHtml(fmtDate(d.failedPayments.last))}` : ""}</dd></div>
           <div><dt>Access point</dt><dd>${d.radio ? `${escapeHtml(d.radio.apName)}${d.radio.band ? ` · ${escapeHtml(d.radio.band)} GHz` : ""}${d.radio.rssi != null ? ` · ${escapeHtml(d.radio.rssi)} dBm` : ""} <small>(${escapeHtml(d.radio.source)}, ${escapeHtml(fmtDate(d.radio.at))})</small>` : "UNRESOLVED (no Omada observation yet)"}</dd></div>
         </dl>
@@ -2258,7 +2299,9 @@ function renderTrace(data) {
           <li><span class="trace-step">Devices</span><span>${escapeHtml(p.registeredDevices)} registered of ${escapeHtml(p.deviceLimit)} allowed</span></li>
           ${tracePayment(p.payment, "Payment")}
           <li><span class="trace-step"></span><span>${traceLink(p.paymentLink)}</span></li>
-          ${(p.addOns || []).map((a) => tracePayment(a, a.purpose === "add_device" ? "Added device" : "Upgrade")).join("")}
+          ${p.voucher ? `<li><span class="trace-step">Voucher</span><span>${escapeHtml(p.voucher.code)} · issued by ${p.voucher.issuedBy ? escapeHtml(p.voucher.issuedBy) : 'UNRESOLVED <small>(not recorded before 24 Nov 2026)</small>'}</span></li>` : ""}
+          ${(p.addOns || []).map((a) => tracePayment(a, a.purpose === "add_device" ? "Added device" : a.purpose === "package_upgrade" ? "Upgrade" : "Top-up")).join("")}
+          ${(p.devicesUsed || []).map((u) => `<li><span class="trace-step">Used by</span><span>${escapeHtml(u.mac)} · ${escapeHtml(u.sessions)} session${u.sessions === 1 ? "" : "s"} · ${escapeHtml(fmtDate(u.first))} → ${escapeHtml(fmtDate(u.last))}</span></li>`).join("")}
           <li><span class="trace-step">Top-ups</span><span class="trace-link"><span class="status-chip unresolved">Unresolved</span>${escapeHtml(p.topUpsNote)}</span></li>
         </ul>
       </article>`).join("");
@@ -2290,6 +2333,42 @@ traceResultsEl?.addEventListener("click", async (event) => {
   } catch (error) {
     traceStatusEl.textContent = error instanceof Error ? error.message : "Couldn't reveal the number.";
   }
+});
+
+// Alerts: open conditions from the hourly check, plus ones resolved today.
+async function loadTraceAlerts() {
+  const panel = document.getElementById("trace-alerts-panel");
+  const body = document.getElementById("trace-alerts-body");
+  const count = document.getElementById("trace-alerts-count");
+  if (!panel || !body || !count) return;
+  let alerts;
+  try {
+    alerts = await api(adminApi("/trace/alerts"));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Couldn't load alerts.";
+    if (/404/.test(message)) return;
+    panel.classList.remove("hidden");
+    count.textContent = "";
+    body.innerHTML = `<tr><td colspan="4" class="empty-state">${escapeHtml(message)}</td></tr>`;
+    return;
+  }
+  panel.classList.remove("hidden");
+  const open = alerts.filter((a) => !a.resolvedAt).length;
+  count.textContent = open ? `${open} open` : "None open";
+  body.innerHTML = alerts.length
+    ? alerts.map((a) => `<tr class="${a.resolvedAt ? "trace-alert-resolved" : ""}">
+        <td>${escapeHtml(a.title)}${a.resolvedAt ? ` <span class="status-chip">Resolved ${escapeHtml(fmtDate(a.resolvedAt))}</span>` : ""}</td>
+        <td>${escapeHtml(fmtDate(a.firstSeenAt))}</td>
+        <td>${escapeHtml(fmtDate(a.lastSeenAt))}</td>
+        <td>${a.rule === "isp_cap" ? "" : `<button class="link-btn" type="button" data-trace-subject="${escapeHtml(a.subject)}">Trace</button>`}</td>
+      </tr>`).join("")
+    : `<tr><td colspan="4" class="empty-state">No alerts in the last day. Checked hourly.</td></tr>`;
+}
+document.getElementById("trace-alerts-body")?.addEventListener("click", (event) => {
+  const button = event.target instanceof Element ? event.target.closest("[data-trace-subject]") : null;
+  if (!button || !traceQueryInput || !traceForm) return;
+  traceQueryInput.value = button.getAttribute("data-trace-subject") || "";
+  traceForm.requestSubmit();
 });
 
 // Show Trace only where the API has it (a too-short query answers 400; an

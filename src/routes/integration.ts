@@ -462,7 +462,7 @@ integrationRouter.post("/housing/sites/:siteId/vouchers/bulk", async (req, res, 
 
     for (const phone of uniquePhones) {
       try {
-        const issued = await issueVoucher(plan, { customerPhone: phone, deviceMac: data.deviceMac ?? null });
+        const issued = await issueVoucher(plan, { customerPhone: phone, deviceMac: data.deviceMac ?? null, issuedBy: { id: "captyn-housing", name: "CAPTYN Housing" } });
         results.push({ phone, status: "created", code: issued.code, expiresAt: issued.expiresAt });
       } catch (error) {
         results.push({ phone, status: "failed", error: error instanceof Error ? error.message : "Voucher creation failed" });
