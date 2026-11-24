@@ -426,6 +426,20 @@ model WifiSignInTiming {
   @@index([createdAt])
 }
 
+// Sensitive admin actions, e.g. revealing a customer's phone number in Trace.
+model WifiAuditEvent {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  actorId   String
+  actorName String?
+  action    String
+  target    String
+  detail    Json?
+
+  @@index([createdAt])
+  @@index([target, createdAt])
+}
+
 model WifiServiceHeartbeat {
   service    String   @id
   lastSeenAt DateTime

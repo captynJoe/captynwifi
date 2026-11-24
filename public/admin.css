@@ -637,3 +637,20 @@ img.brand-mark { background: none; border-radius: 10px; object-fit: contain; }
 .capacity-history-controls span { margin-left: 5px; color: var(--muted); font-size: 11px; }
 [data-page-panel="capacity"] table { min-width: 760px; }
 @media (max-width: 640px) { .capacity-history-head { align-items: flex-start; flex-direction: column; } .capacity-history-controls { width: 100%; flex-wrap: wrap; } }
+
+/* Trace Any Client */
+.trace-form { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
+.trace-form .field { flex: 1 1 360px; }
+.trace-status { margin: 0 16px 14px; color: var(--muted); font-size: 13px; }
+.trace-results { display: grid; gap: 14px; }
+.trace-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px 16px; padding: 14px 16px; margin: 0; }
+.trace-facts dt { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.trace-facts dd { margin: 2px 0 0; font-weight: 600; overflow-wrap: anywhere; }
+.trace-chain { list-style: none; margin: 0; padding: 6px 16px 14px; display: grid; gap: 8px; }
+.trace-chain li { display: grid; grid-template-columns: 150px 1fr; gap: 10px; align-items: baseline; }
+.trace-chain .trace-step { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.trace-link { display: inline-flex; gap: 6px; align-items: center; margin-left: 8px; font-size: 12px; color: var(--muted); }
+.status-chip.confirmed { background: rgba(32, 160, 90, .14); color: #138a4b; }
+.status-chip.unresolved { background: rgba(214, 150, 20, .16); color: #a46a00; }
+.trace-reveal { margin-left: 8px; font-size: 12px; }
+@media (max-width: 720px) { .trace-chain li { grid-template-columns: 1fr; gap: 2px; } }

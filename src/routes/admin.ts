@@ -22,6 +22,7 @@ import { ensureConnectCode } from "../services/connectCode.js";
 import { deviceCap } from "../services/deviceLedger.js";
 import { CREDIT_REASONS, availableCreditSeconds, grantWifiCredit } from "../services/credits.js";
 import { activatePppoePayment, publicPppoeAccount } from "../services/pppoe.js";
+import { traceClient } from "../services/clientTrace.js";
 
 export const adminRouter = Router();
 
@@ -259,6 +260,38 @@ function projectMonth(now: Date, monthToDateKsh: number, last7DaysKsh: number): 
 }
 
 const BOOKED_PAYMENT_STATUSES = Prisma.sql`('confirmed', 'paid_pending_activation', 'activated')`;
+
+// Trace Any Client (see services/clientTrace.ts). Phone numbers come back
+// masked; revealing one is a separate, audited request.
+adminRouter.get("/trace", async (req, res, next) => {
+  try {
+    const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+    if (q.length < 3) return res.status(400).json({ error: "Enter a MAC, IP, username, voucher, receipt, phone or device name." });
+    return sendData(res, await traceClient(prisma, q));
+  } catch (error) {
+    return next(error);
+  }
+});
+
+adminRouter.post("/trace/reveal", async (req, res, next) => {
+  try {
+    const paymentIntentId = typeof req.body?.paymentIntentId === "string" ? req.body.paymentIntentId : "";
+    const intent = paymentIntentId
+      ? await prisma.wifiPaymentIntent.findUnique({ where: { id: paymentIntentId }, select: { id: true, customerPhone: true, provider: true, status: true } })
+      : null;
+    if (!intent) return res.status(404).json({ error: "Payment not found" });
+    if (intent.provider !== "mpesa" || !["activated", "confirmed"].includes(intent.status)) {
+      return res.status(400).json({ error: "Only completed M-PESA payments have a verified phone number." });
+    }
+    const actor = req.wifiAdminSession;
+    await prisma.wifiAuditEvent.create({
+      data: { actorId: actor?.sub ?? "unknown", actorName: actor?.name ?? actor?.email ?? null, action: "trace.phone.revealed", target: intent.id, detail: { reason: typeof req.body?.reason === "string" ? req.body.reason.slice(0, 200) : null } }
+    });
+    return sendData(res, { phone: intent.customerPhone });
+  } catch (error) {
+    return next(error);
+  }
+});
 
 adminRouter.get("/summary", async (_req, res, next) => {
   try {

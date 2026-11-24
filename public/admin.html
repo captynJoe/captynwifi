@@ -7,7 +7,7 @@
     <script src="theme.js?v=2026080402"></script>
     <link rel="icon" href="captyn-mark.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="theme.css?v=2026103102" />
-    <link rel="stylesheet" href="admin.css?v=2026110202" />
+    <link rel="stylesheet" href="admin.css?v=2026112401" />
   </head>
   <body>
     <header class="topbar">
@@ -91,6 +91,7 @@
               <button class="nav-item" type="button" data-page="vouchers">Vouchers</button>
               <button class="nav-item" type="button" data-page="payments">Payments</button>
               <button class="nav-item" type="button" data-page="access">Access</button>
+              <button class="nav-item hidden" type="button" data-page="trace">Trace</button>
               <button class="nav-item" type="button" data-page="pppoe">PPPoE</button>
               <button class="nav-item" type="button" data-page="capacity">Capacity</button>
               <button class="nav-item" type="button" data-page="radius">RADIUS</button>
@@ -400,6 +401,18 @@
           </article>
         </section>
 
+        <section class="page-grid hidden" data-page-panel="trace">
+          <article class="surface span-12">
+            <div class="panel-head"><h2>Trace Any Client</h2></div>
+            <form id="trace-form" class="setup-body trace-form">
+              <label class="field" for="trace-query"><span>MAC, IP, username, voucher, M-PESA receipt, phone or device name</span><input id="trace-query" type="search" autocomplete="off" required placeholder="CA:0A:D0:F1:6B:39" /></label>
+              <button class="primary" type="submit">Trace</button>
+            </form>
+            <p id="trace-status" class="trace-status"></p>
+          </article>
+          <div id="trace-results" class="span-12 trace-results"></div>
+        </section>
+
         <section class="page-grid hidden" data-page-panel="promo">
           <article class="surface span-12">
             <div class="panel-head"><h2>Weekly Free-Time Rewards</h2><span id="loyalty-status"></span></div>
@@ -448,6 +461,6 @@
       </section>
     </main>
 
-    <script src="admin.js?v=2026110902" defer data-cfasync="false"></script>
+    <script src="admin.js?v=2026112401" defer data-cfasync="false"></script>
   </body>
 </html>

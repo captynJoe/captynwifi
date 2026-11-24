@@ -2190,3 +2190,105 @@ document.addEventListener("click", (event) => {
   }
 });
 
+
+
+// ---------- Trace Any Client ----------
+// Rebuilds device -> sessions -> username -> package -> payment -> phone from
+// /api/admin/trace. Every link shows whether it's confirmed (and from what)
+// or unresolved; phones stay masked until revealed, which is audited.
+const traceForm = document.getElementById("trace-form");
+const traceQueryInput = document.getElementById("trace-query");
+const traceStatusEl = document.getElementById("trace-status");
+const traceResultsEl = document.getElementById("trace-results");
+
+function traceLink(link) {
+  if (!link) return "";
+  const label = link.status === "confirmed" ? "Confirmed" : "Unresolved";
+  return `<span class="trace-link"><span class="status-chip ${escapeHtml(link.status)}">${label}</span>${escapeHtml(link.source)}</span>`;
+}
+function tracePayment(payment, title) {
+  const amount = payment.provider === "mpesa" ? fmtMoney(payment.amountKsh) : escapeHtml(payment.provider);
+  const ref = payment.reference ? ` · ${escapeHtml(payment.reference)}` : "";
+  const status = payment.status === "activated" ? "" : ` · ${escapeHtml(payment.status)}`;
+  const phone = payment.phoneMasked
+    ? `<span data-trace-phone="${escapeHtml(payment.id)}">${escapeHtml(payment.phoneMasked)}</span><button class="link-btn trace-reveal" type="button" data-trace-reveal="${escapeHtml(payment.id)}">Reveal</button>`
+    : "UNRESOLVED";
+  return `
+    <li><span class="trace-step">${escapeHtml(title)}</span><span>${amount}${ref}${status} · ${escapeHtml(fmtDate(payment.at))}${payment.paidFromTracedDevice ? " · paid from this device" : ""}</span></li>
+    <li><span class="trace-step">Phone</span><span>${phone}${traceLink(payment.phoneLink)}</span></li>`;
+}
+function renderTrace(data) {
+  const devices = data.devices || [];
+  const packages = data.packages || [];
+  if (devices.length === 0 && packages.length === 0) {
+    traceResultsEl.innerHTML = `<article class="surface"><p class="trace-status">Nothing on record for ${escapeHtml(data.query.value)}. UNRESOLVED.</p></article>`;
+    return;
+  }
+  const deviceCards = devices.map((d) => {
+    const online = d.online === "unknown" ? "Unknown (router unreachable)" : d.online ? `Online now as ${d.online.as}` : "Offline";
+    const sessions = (d.sessions || []).map((s) => `<tr><td>${escapeHtml(fmtDate(s.start))}</td><td>${s.end ? escapeHtml(fmtDate(s.end)) : "Online"}</td><td>${escapeHtml(s.minutes)} min</td><td>${escapeHtml(s.mb)} MB</td><td>${escapeHtml(text(s.ip))}</td><td>${escapeHtml(s.username)}</td><td>${escapeHtml(text(s.endedBy))}</td></tr>`).join("");
+    const accounts = (d.accounts || []).map((a) => `<li><span class="trace-step">Account</span><span>${escapeHtml(a.username)}${traceLink(a.link)}</span></li>`).join("");
+    return `
+      <article class="surface">
+        <div class="panel-head"><h2>${escapeHtml(d.mac)}</h2><span class="status-chip">${escapeHtml(online)}</span></div>
+        <dl class="trace-facts">
+          <div><dt>Device name</dt><dd>${escapeHtml(text(d.hostName, "UNRESOLVED"))}</dd></div>
+          <div><dt>Device type</dt><dd>${escapeHtml(text(d.deviceClass, "UNRESOLVED"))}</dd></div>
+          <div><dt>First seen</dt><dd>${escapeHtml(fmtDate(d.firstSeen))}</dd></div>
+          <div><dt>Last seen</dt><dd>${escapeHtml(fmtDate(d.lastSeen))}</dd></div>
+          <div><dt>IP addresses</dt><dd>${escapeHtml((d.ips || []).join(", ") || "-")}</dd></div>
+          <div><dt>Sessions</dt><dd>${escapeHtml(d.sessionCount)} · ${escapeHtml(d.totalHours)} h · ${escapeHtml(d.totalGb)} GB</dd></div>
+          <div><dt>Failed payments</dt><dd>${escapeHtml(d.failedPayments.count)}${d.failedPayments.last ? ` · last ${escapeHtml(fmtDate(d.failedPayments.last))}` : ""}</dd></div>
+          <div><dt>Access point</dt><dd>UNRESOLVED (Omada history not collected yet)</dd></div>
+        </dl>
+        <ul class="trace-chain">${accounts || '<li><span class="trace-step">Account</span><span>UNRESOLVED</span></li>'}</ul>
+        ${sessions ? `<div class="table-wrap"><table><thead><tr><th>Start</th><th>End</th><th>Time</th><th>Data</th><th>IP</th><th>Account</th><th>Ended by</th></tr></thead><tbody>${sessions}</tbody></table></div>` : ""}
+      </article>`;
+  }).join("");
+  const packageCards = packages.map((p) => `
+      <article class="surface">
+        <div class="panel-head"><h2>${escapeHtml(p.plan)}</h2><span class="status-chip">${escapeHtml(p.status)} · expires ${escapeHtml(fmtDate(p.expiresAt))}</span></div>
+        <ul class="trace-chain">
+          <li><span class="trace-step">Username</span><span>${escapeHtml(p.username)}${traceLink(p.link)}</span></li>
+          <li><span class="trace-step">Devices</span><span>${escapeHtml(p.registeredDevices)} registered of ${escapeHtml(p.deviceLimit)} allowed</span></li>
+          ${tracePayment(p.payment, "Payment")}
+          <li><span class="trace-step"></span><span>${traceLink(p.paymentLink)}</span></li>
+          ${(p.addOns || []).map((a) => tracePayment(a, a.purpose === "add_device" ? "Added device" : "Upgrade")).join("")}
+          <li><span class="trace-step">Top-ups</span><span class="trace-link"><span class="status-chip unresolved">Unresolved</span>${escapeHtml(p.topUpsNote)}</span></li>
+        </ul>
+      </article>`).join("");
+  traceResultsEl.innerHTML = deviceCards + packageCards;
+}
+traceForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const q = traceQueryInput.value.trim();
+  if (!q) return;
+  traceStatusEl.textContent = "Tracing...";
+  traceResultsEl.innerHTML = "";
+  try {
+    const data = await api(adminApi(`/trace?q=${encodeURIComponent(q)}`));
+    traceStatusEl.textContent = `Searched as ${data.query.kind}: ${data.query.value}`;
+    renderTrace(data);
+  } catch (error) {
+    traceStatusEl.textContent = error instanceof Error ? error.message : "Trace failed.";
+  }
+});
+traceResultsEl?.addEventListener("click", async (event) => {
+  const button = event.target instanceof HTMLElement ? event.target.closest("[data-trace-reveal]") : null;
+  if (!button) return;
+  const id = button.getAttribute("data-trace-reveal");
+  if (!window.confirm("Reveal this customer's phone number? This is recorded with your name.")) return;
+  try {
+    const data = await writeApi(adminApi("/trace/reveal"), "POST", { paymentIntentId: id });
+    document.querySelectorAll(`[data-trace-phone="${CSS.escape(id)}"]`).forEach((el) => { el.textContent = data.phone; });
+    button.remove();
+  } catch (error) {
+    traceStatusEl.textContent = error instanceof Error ? error.message : "Couldn't reveal the number.";
+  }
+});
+
+// Show Trace only where the API has it (a too-short query answers 400; an
+// older server without the route answers 404).
+fetch(adminApi("/trace?q="), { headers: { "x-captyn-wifi-admin-session": state.sessionToken || "" } })
+  .then((response) => { if (response.status !== 404) document.querySelector('[data-page="trace"]')?.classList.remove("hidden"); })
+  .catch(() => {});
