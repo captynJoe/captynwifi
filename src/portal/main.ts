@@ -1022,7 +1022,7 @@ async function removeDevice(mac: string) {
     hideDeviceLimitNotice();
     renderDeviceList(entitlement);
     // Freed a slot -- make sure this device is recorded on the package.
-    await rememberDeviceForEntitlement(entitlement.username, entitlement.password);
+    await rememberDeviceForEntitlement(entitlement.username, entitlement.password, { rejoin: true });
   } catch (error) {
     showError(error instanceof Error ? error.message : "Couldn't sign that device out.");
   }
@@ -1096,16 +1096,22 @@ function setDeviceFeedback(message: string, tone: "ok" | "bad") {
 // device lookup recognises it next time. Devices are recorded on the
 // package by FreeRADIUS at sign-in regardless; a 409 here means the package
 // has used its allowance of different devices.
-async function rememberDeviceForEntitlement(username, password) {
+// rejoin: this is a deliberate "use this package here" (paying, entering
+// the device code, typing the package's login), which may bring back a
+// device that was signed out. A remembered package re-linking itself
+// passes false, so a sign-out sticks. Returns "signed_out" when the server
+// refused for that reason.
+async function rememberDeviceForEntitlement(username, password, { rejoin = false } = {}): Promise<"signed_out" | void> {
   const mac = state.hotspot?.mac;
   if (!mac) return;
   try {
     const response = await fetch(api("/entitlements/link-device"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password, deviceMac: mac })
+      body: JSON.stringify({ username, password, deviceMac: mac, rejoin })
     });
     const payload = await response.json().catch(() => ({}));
+    if (response.status === 409 && payload.error === "DEVICE_SIGNED_OUT") return "signed_out";
     if (response.status === 409) {
       showDeviceLimitNotice(
         payload.message || "This package has reached its device limit.",
@@ -1209,14 +1215,23 @@ async function signInFromServer(username: string, password: string, deviceMac: s
   }
 }
 
-async function attemptAutoConnect(username, password, statusEl, formEl, { freshGrant = false, holdBeforeConnect = freshGrant } = {}) {
+async function attemptAutoConnect(username, password, statusEl, formEl, { freshGrant = false, holdBeforeConnect = freshGrant, rejoin = freshGrant } = {}) {
   const alreadyOnline = freshGrant ? false : await checkInternetReachable(900);
+  if (!alreadyOnline && state.hotspot?.login) {
+    setConnectState(statusEl, formEl, "connecting", "Signing this device in...");
+    // Registered first, so a deliberate rejoin clears a past sign-out before
+    // anything asks the router to sign this device in.
+    const [linked] = await Promise.all([rememberDeviceForEntitlement(username, password, { rejoin }), saveAccessBeforeLeaving(username, password)]);
+    if (linked === "signed_out") {
+      setConnectState(statusEl, formEl, "failed", "This device was signed out of the package. Enter the device code to use it here again.");
+      return;
+    }
+  }
   // Preferred: the server signs this device in through the router, so the
   // customer goes online without leaving this page (no countdown, no router
   // login page). Anything short of a yes falls back to the router page.
   let serverSignedIn = false;
   if (!alreadyOnline && state.hotspot?.mac) {
-    setConnectState(statusEl, formEl, "connecting", "Signing this device in...");
     serverSignedIn = await signInFromServer(username, password, state.hotspot.mac);
   }
   // The router's login page is plain http and this portal is https, so a
@@ -1226,8 +1241,6 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
   // it signs the device in and redirects back to /wifi/. The fallback button
   // still appears if the navigation hasn't happened after a few seconds.
   if (!alreadyOnline && !serverSignedIn && state.hotspot?.login) {
-    setConnectState(statusEl, formEl, "connecting", "Signing this device in...");
-    await Promise.all([rememberDeviceForEntitlement(username, password), saveAccessBeforeLeaving(username, password)]);
     if (holdBeforeConnect) {
       updateAccessCopy("Package ready");
       holdFreshGrantConnection(username, password);
@@ -1248,7 +1261,7 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
   const ok = alreadyOnline || (await waitForConnection(8, 450, 900));
   if (ok) {
     hideManualConnectFallback();
-    await rememberDeviceForEntitlement(username, password);
+    await rememberDeviceForEntitlement(username, password, { rejoin });
     let expiresAt = null;
     let deviceLimit;
     let devices: EntitlementDevice[] = [];
@@ -2295,7 +2308,7 @@ voucherLoginForm?.addEventListener("submit", async (event) => {
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || !payload?.data?.username) throw new Error(payload.error || "That code isn't valid.");
-      await attemptAutoConnect(payload.data.username, payload.data.password, voucherLoginStatus, voucherLoginForm);
+      await attemptAutoConnect(payload.data.username, payload.data.password, voucherLoginStatus, voucherLoginForm, { rejoin: true });
     } catch (error) {
       setConnectState(voucherLoginStatus, voucherLoginForm, "failed", error instanceof Error ? error.message : "That code isn't valid.");
     }
@@ -2339,7 +2352,7 @@ existingLoginForm?.addEventListener("submit", async (event) => {
     setConnectState(existingLoginStatus, null, "failed", "Connect to this WiFi network first, then reopen this page to log in.");
     return;
   }
-  await attemptAutoConnect(username, password, existingLoginStatus, existingLoginForm);
+  await attemptAutoConnect(username, password, existingLoginStatus, existingLoginForm, { rejoin: true });
 });
 
 receiptLoginToggle?.addEventListener("click", () => {
@@ -2368,7 +2381,7 @@ receiptLoginForm?.addEventListener("submit", async (event) => {
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || "Couldn't find that M-PESA code.");
-    await attemptAutoConnect(payload.data.username, payload.data.password, receiptLoginStatus, receiptLoginForm);
+    await attemptAutoConnect(payload.data.username, payload.data.password, receiptLoginStatus, receiptLoginForm, { rejoin: true });
   } catch (error) {
     setConnectState(receiptLoginStatus, receiptLoginForm, "failed", error instanceof Error ? error.message : "Couldn't find that M-PESA code.");
   }

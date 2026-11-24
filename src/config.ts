@@ -27,6 +27,11 @@ function readBoolean(name: string, fallback = false): boolean {
   return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
 }
 
+function readCookieSweepMode(): "off" | "dry-run" | "on" {
+  const value = (process.env.CAPTYN_WIFI_COOKIE_SWEEP ?? "").trim().toLowerCase();
+  return value === "on" || value === "dry-run" ? value : "off";
+}
+
 const runtimeEnv = (process.env.NODE_ENV ?? "").trim().toLowerCase();
 const allowInsecureDevSecrets = runtimeEnv === "development" || runtimeEnv === "test";
 const KNOWN_UNSAFE_SECRET_MARKERS = ["change-me", "change-", "dev-captyn-wifi", "dev-"];
@@ -101,7 +106,11 @@ export const config = {
     timeoutMs: readPositiveMs("CAPTYN_WIFI_ROUTEROS_TIMEOUT_MS", 5000),
     // Sign paid devices into the hotspot from the server (no router login
     // page). Off until the owner turns it on.
-    serverSignIn: readBoolean("CAPTYN_WIFI_SERVER_SIGN_IN")
+    serverSignIn: readBoolean("CAPTYN_WIFI_SERVER_SIGN_IN"),
+    // Clears router mac-cookies that would sign a device into a package it no
+    // longer belongs to (expired, signed out, or now on another package).
+    // "off" | "dry-run" (log only) | "on".
+    cookieSweep: readCookieSweepMode()
   },
   governor: {
     enabled: readBoolean("CAPTYN_WIFI_GOVERNOR_ENABLED"),

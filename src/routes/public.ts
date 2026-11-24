@@ -12,7 +12,7 @@ import { claimPromoGrant, getLivePromo } from "../services/promo.js";
 import { formatCreditDuration } from "../services/credits.js";
 import { bodyFieldKey, clientRateLimit, ipKey } from "../middleware/rateLimitGuard.js";
 import { ensureConnectCode, normalizeConnectCode } from "../services/connectCode.js";
-import { isCurrentHotspotHost, kickHotspotDevice } from "../services/routeros.js";
+import { forgetHotspotDeviceForUser, isCurrentHotspotHost, kickHotspotDevice } from "../services/routeros.js";
 import { signInEntitlementDevice } from "../services/deviceSignIn.js";
 import { deviceCap, payingDeviceNeedsSlot, publicDevice } from "../services/deviceLedger.js";
 import { MAX_DEVICES, addDeviceQuote, deviceOptions, devicePrice, maxDevicesFor } from "../services/devicePricing.js";
@@ -1166,7 +1166,11 @@ publicRouter.get("/entitlements/by-device/:mac", publicDeviceLookupLimit, async 
 const linkDeviceSchema = z.object({
   username: z.string().trim().min(1),
   password: z.string().min(1),
-  deviceMac: z.string().trim().min(1)
+  deviceMac: z.string().trim().min(1),
+  // A deliberate "use this package here" (paying, entering the device code,
+  // typing the package's login). Only that brings back a device that was
+  // signed out; a remembered package re-linking itself must not.
+  rejoin: z.boolean().optional()
 });
 
 // Called after a successful manual login (existing username/password, voucher,
@@ -1209,6 +1213,7 @@ publicRouter.post("/entitlements/link-device", publicCredentialLinkLimit, async 
         where: { entitlementId_deviceMac: { entitlementId: entitlement.id, deviceMac: mac } }
       });
       if (existing) {
+        if (existing.signedOutAt && !parsed.rejoin) return "signed_out" as const;
         await tx.wifiEntitlementDevice.update({ where: { id: existing.id }, data: { lastSeenAt: new Date(), signedOutAt: null } });
         return "already_registered" as const;
       }
@@ -1222,6 +1227,13 @@ publicRouter.post("/entitlements/link-device", publicCredentialLinkLimit, async 
       await tx.wifiEntitlementDevice.create({ data: { entitlementId: entitlement.id, deviceMac: mac } });
       return "added" as const;
     });
+
+    if (result === "signed_out") {
+      return res.status(409).json({
+        error: "DEVICE_SIGNED_OUT",
+        message: "This device was signed out of the package. Enter the device code to use it here again."
+      });
+    }
 
     if (result === "at_limit") {
       const devices = await prisma.wifiEntitlementDevice.findMany({
@@ -1374,6 +1386,10 @@ publicRouter.post("/entitlements/sign-out-device", publicDeviceRemoveLimit, asyn
       await prisma.wifiEntitlement.update({ where: { id: entitlement.id }, data: { deviceMac: null } });
     }
 
+    // Forget the router's mac-cookie first, or the device signs itself
+    // straight back in on its next request and takes the slot again.
+    const forgot = await forgetHotspotDeviceForUser(mac, entitlement.username);
+    if (forgot.error) console.warn(`Sign-out cookie removal ${mac} did not complete: ${forgot.error}`);
     const kick = await kickHotspotDevice(mac);
     if (kick.error || kick.skippedReason) {
       console.warn(`Sign-out kick ${mac} did not complete: ${kick.error || kick.skippedReason}`);
@@ -1410,6 +1426,8 @@ publicRouter.post("/entitlements/remove-device", publicDeviceRemoveLimit, async 
     if (updated.count === 0) {
       return res.status(404).json({ error: "That device isn't registered on this account." });
     }
+    const forgot = await forgetHotspotDeviceForUser(mac, entitlement.username);
+    if (forgot.error) console.warn(`Remove-device cookie removal ${mac} did not complete: ${forgot.error}`);
     await kickHotspotDevice(mac);
 
     if (entitlement.deviceMac === mac) {

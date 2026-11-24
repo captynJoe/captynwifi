@@ -27,9 +27,20 @@ captyn_session_expiry {
 # of different devices. Devices already used on the package always get in.
 captyn_device_cap {
 	if (&User-Name && &Calling-Station-Id) {
-		if ("%{sql:SELECT captyn_device_over_cap('%{User-Name}', '%{Calling-Station-Id}')}" == "1") {
+		update control {
+			&Tmp-String-1 := "%{sql:SELECT captyn_device_over_cap('%{User-Name}', '%{Calling-Station-Id}')}"
+		}
+		if (&control:Tmp-String-1 == "1") {
 			update reply {
 				&Reply-Message := "This package has reached its device limit. Use a device you've signed in with before, or buy a new package."
+			}
+			reject
+		}
+		# Signed out of this package: only the device code brings it back,
+		# so it can't sign itself in again and bump another device.
+		if (&control:Tmp-String-1 == "2") {
+			update reply {
+				&Reply-Message := "This device was signed out of the package. Enter the device code to use it here again."
 			}
 			reject
 		}

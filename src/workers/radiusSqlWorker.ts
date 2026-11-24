@@ -6,6 +6,7 @@ import { applyRadiusProjectionRows, hasOtherActiveEntitlement } from "../service
 import { applyOutageCredit, evaluateAccountingOutage, resumePausedEntitlements, touchOutageHeartbeat } from "../services/outageCredit.js";
 import { activateDuePromos, endPromo, getActivePromo } from "../services/promo.js";
 import { kickHotspotUser, kickPppoeUser } from "../services/routeros.js";
+import { sweepHotspotCookies } from "../services/cookieSweep.js";
 
 async function applyProjection(id: string) {
   await prisma.$transaction(async (tx) => {
@@ -301,6 +302,20 @@ async function main() {
   if (startupCheck.paused) {
     console.log(`Paused ${startupCheck.pausedCount} active WiFi entitlement(s): worker was down for ${startupCheck.outageSeconds}s and a shared customer-path outage was inferred from the RADIUS session cohort`);
   }
+
+  // Router mac-cookie hygiene (see cookieSweep.ts), on its own timer so a
+  // slow RouterOS read never delays expiry or credential work in tick().
+  let sweeping = false;
+  setInterval(() => {
+    if (sweeping) return;
+    sweeping = true;
+    sweepHotspotCookies(prisma)
+      .then((result) => {
+        if (result && result.planned > 0) console.log(`Cookie sweep (${result.mode}): ${result.planned} of ${result.cookies} cookie(s) flagged, ${result.removed} removed`);
+      })
+      .catch((error) => console.error("Cookie sweep error:", error))
+      .finally(() => { sweeping = false; });
+  }, 3 * 60 * 1000);
 
   for (;;) {
     try {

@@ -526,6 +526,77 @@ export async function signInHotspotDevice(input: { username: string; password: s
   }
 }
 
+export type HotspotCookie = { id: string; user: string; deviceMac: string };
+
+// The router's own "remember this device" cookies (login-by mac-cookie):
+// while one exists, the device signs itself back in under that username on
+// its next request, whatever CAPTYN decided in the meantime.
+export async function listHotspotCookies(deviceMac?: string): Promise<HotspotCookie[] | null> {
+  if (missingRouterConfig()) return null;
+  const client = new RouterOsApiClient();
+  try {
+    await client.connect();
+    await client.login();
+    const words = ["/ip/hotspot/cookie/print", "=.proplist=.id,user,mac-address"];
+    if (deviceMac) words.push(`?mac-address=${deviceMac.toUpperCase()}`);
+    return sentencesToRows(await client.command(words))
+      .filter((row) => row[".id"] && row.user)
+      .map((row) => ({ id: row[".id"], user: row.user, deviceMac: (row["mac-address"] || "").toUpperCase() }));
+  } catch {
+    return null;
+  } finally {
+    client.close();
+  }
+}
+
+export async function removeHotspotCookies(ids: string[]): Promise<{ removed: number; error?: string }> {
+  if (ids.length === 0) return { removed: 0 };
+  const skippedReason = missingRouterConfig();
+  if (skippedReason) return { removed: 0, error: skippedReason };
+  const client = new RouterOsApiClient();
+  let removed = 0;
+  try {
+    await client.connect();
+    await client.login();
+    for (const id of ids) {
+      // A cookie can expire between listing and removing; that's fine.
+      try {
+        await client.command(["/ip/hotspot/cookie/remove", `=numbers=${id}`]);
+        removed += 1;
+      } catch { /* already gone */ }
+    }
+    return { removed };
+  } catch (error) {
+    return { removed, error: error instanceof Error ? error.message : "RouterOS cookie removal failed" };
+  } finally {
+    client.close();
+  }
+}
+
+// Forget a device on one package at the router, so a sign-out isn't undone
+// seconds later by the device's own mac-cookie re-login.
+export async function forgetHotspotDeviceForUser(deviceMac: string, username: string) {
+  const cookies = await listHotspotCookies(deviceMac);
+  if (!cookies) return { removed: 0, error: "Couldn't read router cookies" };
+  return removeHotspotCookies(cookies.filter((cookie) => cookie.user === username).map((cookie) => cookie.id));
+}
+
+export async function listActiveHotspotSessions(): Promise<Array<{ user: string; deviceMac: string }> | null> {
+  if (missingRouterConfig()) return null;
+  const client = new RouterOsApiClient();
+  try {
+    await client.connect();
+    await client.login();
+    return sentencesToRows(await client.command(["/ip/hotspot/active/print", "=.proplist=user,mac-address"]))
+      .filter((row) => row.user && row["mac-address"])
+      .map((row) => ({ user: row.user, deviceMac: row["mac-address"].toUpperCase() }));
+  } catch {
+    return null;
+  } finally {
+    client.close();
+  }
+}
+
 /** Verify that the MikroTik currently sees this exact MAC/IP on a hotspot host. */
 export async function isCurrentHotspotHost(deviceMac: string, deviceIp: string): Promise<boolean> {
   if (missingRouterConfig() || !deviceIp.trim()) return false;
