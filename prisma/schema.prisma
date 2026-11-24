@@ -411,6 +411,21 @@ model WifiFunnelEvent {
   @@index([planId, event, createdAt])
 }
 
+// One row per portal sign-in attempt, reported by the browser: which path
+// it took, how long each step took, and whether the device came online.
+model WifiSignInTiming {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  trigger   String
+  path      String
+  outcome   String
+  totalMs   Int
+  steps     Json?
+  userAgent String?
+
+  @@index([createdAt])
+}
+
 model WifiServiceHeartbeat {
   service    String   @id
   lastSeenAt DateTime

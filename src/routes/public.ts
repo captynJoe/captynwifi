@@ -2114,6 +2114,27 @@ publicRouter.post("/promo/claim", publicPromoClaimLimit, async (req, res, next) 
   }
 });
 
+// How each portal sign-in went (see reportSignInTiming in the portal), so
+// "it's slow" can be answered with numbers per path and per step.
+const publicSignInTimingLimit = clientRateLimit({ name: "public-sign-in-timing", windowMs: 60_000, max: 20, key: ipKey });
+const signInTimingSchema = z.object({
+  trigger: z.enum(["new_access", "manual", "returning"]),
+  path: z.enum(["server", "router", "already_online", "none"]),
+  outcome: z.enum(["connected", "redirected_to_router", "not_online", "signed_out"]),
+  totalMs: z.number().int().min(0).max(10 * 60 * 1000),
+  steps: z.record(z.string().max(40), z.number().int().min(0).max(10 * 60 * 1000)).optional()
+});
+publicRouter.post("/sign-in-timing", publicSignInTimingLimit, async (req, res) => {
+  const parsed = signInTimingSchema.safeParse(req.body ?? {});
+  if (parsed.success) {
+    const steps = parsed.data.steps && Object.keys(parsed.data.steps).length <= 12 ? parsed.data.steps : undefined;
+    await prisma.wifiSignInTiming.create({
+      data: { ...parsed.data, steps, userAgent: String(req.headers["user-agent"] || "").slice(0, 160) || null }
+    }).catch(() => {});
+  }
+  res.status(204).end();
+});
+
 // Errors the portal showed a customer (or threw), so a device that "can't
 // buy" leaves evidence in the API log instead of failing silently.
 const publicClientErrorLimit = clientRateLimit({ name: "public-client-error", windowMs: 60_000, max: 20, key: ipKey });

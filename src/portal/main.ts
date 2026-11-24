@@ -1215,14 +1215,39 @@ async function signInFromServer(username: string, password: string, deviceMac: s
   }
 }
 
+// How a sign-in went, step by step (see WifiSignInTiming). sendBeacon so the
+// report still goes out when the page is navigating to the router.
+type SignInTrigger = "new_access" | "manual" | "returning";
+function startSignInTiming(trigger: SignInTrigger) {
+  const started = performance.now();
+  const steps: Record<string, number> = {};
+  let sent = false;
+  return {
+    mark(step: string) { steps[step] = Math.round(performance.now() - started); },
+    report(path: "server" | "router" | "already_online" | "none", outcome: "connected" | "redirected_to_router" | "not_online" | "signed_out") {
+      if (sent) return;
+      sent = true;
+      const body = JSON.stringify({ trigger, path, outcome, totalMs: Math.round(performance.now() - started), steps });
+      try {
+        if (navigator.sendBeacon?.(api("/sign-in-timing"), new Blob([body], { type: "application/json" }))) return;
+      } catch (_error) {}
+      void fetch(api("/sign-in-timing"), { method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: true }).catch(() => {});
+    }
+  };
+}
+
 async function attemptAutoConnect(username, password, statusEl, formEl, { freshGrant = false, holdBeforeConnect = freshGrant, rejoin = freshGrant } = {}) {
+  const timing = startSignInTiming(freshGrant ? "new_access" : rejoin ? "manual" : "returning");
   const alreadyOnline = freshGrant ? false : await checkInternetReachable(900);
+  timing.mark("online_check");
   if (!alreadyOnline && state.hotspot?.login) {
     setConnectState(statusEl, formEl, "connecting", "Signing this device in...");
     // Registered first, so a deliberate rejoin clears a past sign-out before
     // anything asks the router to sign this device in.
     const [linked] = await Promise.all([rememberDeviceForEntitlement(username, password, { rejoin }), saveAccessBeforeLeaving(username, password)]);
+    timing.mark("registered");
     if (linked === "signed_out") {
+      timing.report("none", "signed_out");
       setConnectState(statusEl, formEl, "failed", "This device was signed out of the package. Enter the device code to use it here again.");
       return;
     }
@@ -1233,6 +1258,7 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
   let serverSignedIn = false;
   if (!alreadyOnline && state.hotspot?.mac) {
     serverSignedIn = await signInFromServer(username, password, state.hotspot.mac);
+    timing.mark(serverSignedIn ? "server_signed_in" : "server_sign_in_failed");
   }
   // The router's login page is plain http and this portal is https, so a
   // hidden-iframe login is blocked as mixed content by browsers and
@@ -1241,6 +1267,7 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
   // it signs the device in and redirects back to /wifi/. The fallback button
   // still appears if the navigation hasn't happened after a few seconds.
   if (!alreadyOnline && !serverSignedIn && state.hotspot?.login) {
+    timing.report("router", "redirected_to_router");
     if (holdBeforeConnect) {
       updateAccessCopy("Package ready");
       holdFreshGrantConnection(username, password);
@@ -1259,9 +1286,12 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
   }
 
   const ok = alreadyOnline || (await waitForConnection(8, 450, 900));
+  timing.mark("online_confirmed");
+  timing.report(serverSignedIn ? "server" : alreadyOnline ? "already_online" : "none", ok ? "connected" : "not_online");
   if (ok) {
     hideManualConnectFallback();
-    await rememberDeviceForEntitlement(username, password, { rejoin });
+    // Say so the moment it's true; the package details below fill in after.
+    setConnectState(statusEl, formEl, "connected", "You're connected.");
     let expiresAt = null;
     let deviceLimit;
     let devices: EntitlementDevice[] = [];
@@ -1269,8 +1299,9 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
     let deviceCap: number | undefined;
     let startsAt: string | undefined;
     try {
-      const [statusResponse, devicesResponse] = await Promise.all([
+      const [statusResponse, , devicesResponse] = await Promise.all([
         fetch(api(`/entitlements/${encodeURIComponent(username)}/status`)),
+        rememberDeviceForEntitlement(username, password, { rejoin }),
         fetch(api("/entitlements/devices/list"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
