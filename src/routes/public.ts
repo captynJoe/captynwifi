@@ -1351,6 +1351,11 @@ publicRouter.post("/entitlements/sign-in-device", publicDeviceSignInLimit, async
     if (!entitlement) return res.status(404).json({ error: "No matching active access record" });
 
     const result = await signInEntitlementDevice(prisma, entitlement, mac);
+    if (result.refusedReason) {
+      // RADIUS said no (package full, signed out, ended): the portal shows
+      // why instead of bouncing the device through the router's page.
+      return res.status(409).json({ error: "SIGN_IN_REFUSED", message: result.refusedReason });
+    }
     if (!result.signedIn && !result.alreadyOnline) {
       return res.status(409).json({ error: "SERVER_SIGN_IN_UNAVAILABLE", message: result.error || result.skippedReason || "Couldn't sign this device in." });
     }
@@ -2120,7 +2125,7 @@ const publicSignInTimingLimit = clientRateLimit({ name: "public-sign-in-timing",
 const signInTimingSchema = z.object({
   trigger: z.enum(["new_access", "manual", "returning"]),
   path: z.enum(["server", "router", "already_online", "none"]),
-  outcome: z.enum(["connected", "redirected_to_router", "not_online", "signed_out"]),
+  outcome: z.enum(["connected", "redirected_to_router", "not_online", "signed_out", "refused"]),
   totalMs: z.number().int().min(0).max(10 * 60 * 1000),
   steps: z.record(z.string().max(40), z.number().int().min(0).max(10 * 60 * 1000)).optional()
 });

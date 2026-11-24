@@ -477,6 +477,9 @@ export type HotspotSignInResult = {
   identity: HotspotDeviceIdentity | null;
   skippedReason?: string;
   error?: string;
+  // The router (RADIUS) turned the login down, with its reason -- as opposed
+  // to the router being unreachable, where the portal should fall back.
+  refusedReason?: string;
 };
 
 // Signs a device into the hotspot from the router's side, exactly as if it
@@ -511,13 +514,20 @@ export async function signInHotspotDevice(input: { username: string; password: s
     if (!host?.address) return { signedIn: false, alreadyOnline: false, identity, skippedReason: "Device is not on the hotspot" };
     if (host.authorized === "true" || host.bypassed === "true") return { signedIn: false, alreadyOnline: true, identity };
 
-    await client.command([
-      "/ip/hotspot/active/login",
-      `=user=${input.username}`,
-      `=password=${input.password}`,
-      `=mac-address=${mac}`,
-      `=ip=${host.address}`
-    ]);
+    try {
+      await client.command([
+        "/ip/hotspot/active/login",
+        `=user=${input.username}`,
+        `=password=${input.password}`,
+        `=mac-address=${mac}`,
+        `=ip=${host.address}`
+      ]);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "";
+      // A timeout is the router being slow, not a refusal.
+      if (reason && !/timed out/i.test(reason)) return { signedIn: false, alreadyOnline: false, identity, refusedReason: reason };
+      throw error;
+    }
     return { signedIn: true, alreadyOnline: false, identity };
   } catch (error) {
     return { signedIn: false, alreadyOnline: false, identity: null, error: error instanceof Error ? error.message : "RouterOS sign-in failed" };
