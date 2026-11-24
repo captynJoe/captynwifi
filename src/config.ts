@@ -27,8 +27,8 @@ function readBoolean(name: string, fallback = false): boolean {
   return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
 }
 
-function readCookieSweepMode(): "off" | "dry-run" | "on" {
-  const value = (process.env.CAPTYN_WIFI_COOKIE_SWEEP ?? "").trim().toLowerCase();
+function readSweepMode(name: string): "off" | "dry-run" | "on" {
+  const value = (process.env[name] ?? "").trim().toLowerCase();
   return value === "on" || value === "dry-run" ? value : "off";
 }
 
@@ -110,7 +110,10 @@ export const config = {
     // Clears router mac-cookies that would sign a device into a package it no
     // longer belongs to (expired, signed out, or now on another package).
     // "off" | "dry-run" (log only) | "on".
-    cookieSweep: readCookieSweepMode()
+    cookieSweep: readSweepMode("CAPTYN_WIFI_COOKIE_SWEEP"),
+    // Logs off router sessions whose package has ended, in case the one-off
+    // logoff at expiry failed. "off" | "dry-run" (log only) | "on".
+    sessionSweep: readSweepMode("CAPTYN_WIFI_SESSION_SWEEP")
   },
   governor: {
     enabled: readBoolean("CAPTYN_WIFI_GOVERNOR_ENABLED"),

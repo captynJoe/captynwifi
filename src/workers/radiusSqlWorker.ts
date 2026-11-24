@@ -6,7 +6,7 @@ import { applyRadiusProjectionRows, hasOtherActiveEntitlement } from "../service
 import { applyOutageCredit, evaluateAccountingOutage, resumePausedEntitlements, touchOutageHeartbeat } from "../services/outageCredit.js";
 import { activateDuePromos, endPromo, getActivePromo } from "../services/promo.js";
 import { kickHotspotUser, kickPppoeUser } from "../services/routeros.js";
-import { sweepHotspotCookies } from "../services/cookieSweep.js";
+import { sweepExpiredSessions, sweepHotspotCookies } from "../services/cookieSweep.js";
 
 async function applyProjection(id: string) {
   await prisma.$transaction(async (tx) => {
@@ -303,13 +303,21 @@ async function main() {
     console.log(`Paused ${startupCheck.pausedCount} active WiFi entitlement(s): worker was down for ${startupCheck.outageSeconds}s and a shared customer-path outage was inferred from the RADIUS session cohort`);
   }
 
-  // Router mac-cookie hygiene (see cookieSweep.ts), on its own timer so a
-  // slow RouterOS read never delays expiry or credential work in tick().
+  // Router hygiene (see cookieSweep.ts): ended packages still online, then
+  // mac-cookies. On its own timer so a slow RouterOS read never delays
+  // expiry or credential work in tick().
   let sweeping = false;
   setInterval(() => {
     if (sweeping) return;
     sweeping = true;
-    sweepHotspotCookies(prisma)
+    // Sessions first: logging an ended package off before its cookie goes
+    // means the device can't sign itself straight back in.
+    sweepExpiredSessions(prisma)
+      .then((result) => {
+        if (result && result.planned > 0) console.log(`Session sweep (${result.mode}): ${result.planned} ended package(s) still online, ${result.kicked} session(s) logged off`);
+      })
+      .catch((error) => console.error("Session sweep error:", error))
+      .then(() => sweepHotspotCookies(prisma))
       .then((result) => {
         if (result && result.planned > 0) console.log(`Cookie sweep (${result.mode}): ${result.planned} of ${result.cookies} cookie(s) flagged, ${result.removed} removed`);
       })

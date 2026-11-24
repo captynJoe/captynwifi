@@ -1,6 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { config } from "../config.js";
-import { listActiveHotspotSessions, listHotspotCookies, removeHotspotCookies, type HotspotCookie } from "./routeros.js";
+import { kickHotspotUser, listActiveHotspotSessions, listHotspotCookies, removeHotspotCookies, type HotspotCookie } from "./routeros.js";
 
 export type CookieSweepReason = "package_inactive" | "device_signed_out" | "device_on_other_package";
 
@@ -36,6 +36,56 @@ export function planCookieSweep(facts: CookieSweepFacts): Array<{ cookie: Hotspo
   return plan;
 }
 
+// Router sessions still running on a package that has ended. Expiry asks the
+// router to log a package off once; if that one call fails (RouterOS
+// unreachable for a moment) nothing retried, and the device stayed online
+// for free -- CG-CAPTYN-ALPHA-CUJY ran 10.5 hours past its end. Only
+// usernames CAPTYN issued are judged, and a username with any active or
+// paused package is left alone.
+export function planExpiredSessionSweep(
+  sessions: Array<{ user: string; deviceMac: string }>,
+  knownUsernames: Set<string>,
+  activeUsernames: Set<string>
+): string[] {
+  const users = new Set<string>();
+  for (const session of sessions) {
+    if (knownUsernames.has(session.user) && !activeUsernames.has(session.user)) users.add(session.user);
+  }
+  return [...users];
+}
+
+async function packageStatus(prisma: PrismaClient, usernames: string[]) {
+  const now = new Date();
+  const entitlements = usernames.length === 0 ? [] : await prisma.wifiEntitlement.findMany({
+    where: { username: { in: usernames } },
+    select: { id: true, username: true, status: true, expiresAt: true, outagePausedAt: true, promoPausedAt: true }
+  });
+  const active = entitlements.filter((e) => e.status === "active" && (e.expiresAt > now || e.outagePausedAt || e.promoPausedAt));
+  return { entitlements, active };
+}
+
+export async function sweepExpiredSessions(prisma: PrismaClient) {
+  const mode = config.routeros.sessionSweep;
+  if (mode === "off") return null;
+  const sessions = await listActiveHotspotSessions();
+  if (!sessions) return null;
+  const { entitlements, active } = await packageStatus(prisma, [...new Set(sessions.map((s) => s.user))]);
+  const users = planExpiredSessionSweep(
+    sessions,
+    new Set(entitlements.map((e) => e.username)),
+    new Set(active.map((e) => e.username))
+  );
+  let kicked = 0;
+  for (const user of users) {
+    console.log(`[SessionSweep]${mode === "dry-run" ? " (dry run)" : ""} package ended, still online: ${user}`);
+    if (mode !== "on") continue;
+    const result = await kickHotspotUser(user);
+    if (result.error) console.warn(`[SessionSweep] ${user}: ${result.error}`);
+    kicked += result.removed;
+  }
+  return { mode, sessions: sessions.length, planned: users.length, kicked };
+}
+
 export async function sweepHotspotCookies(prisma: PrismaClient) {
   const mode = config.routeros.cookieSweep;
   if (mode === "off") return null;
@@ -46,13 +96,7 @@ export async function sweepHotspotCookies(prisma: PrismaClient) {
   if (!cookies || !sessions) return null;
   if (cookies.length === 0) return { mode, cookies: 0, planned: 0, removed: 0 };
 
-  const usernames = [...new Set(cookies.map((cookie) => cookie.user))];
-  const now = new Date();
-  const entitlements = await prisma.wifiEntitlement.findMany({
-    where: { username: { in: usernames } },
-    select: { id: true, username: true, status: true, expiresAt: true, outagePausedAt: true, promoPausedAt: true }
-  });
-  const active = entitlements.filter((e) => e.status === "active" && (e.expiresAt > now || e.outagePausedAt || e.promoPausedAt));
+  const { entitlements, active } = await packageStatus(prisma, [...new Set(cookies.map((cookie) => cookie.user))]);
   const signedOut = active.length === 0 ? [] : await prisma.wifiEntitlementDevice.findMany({
     where: { entitlementId: { in: active.map((e) => e.id) }, signedOutAt: { not: null } },
     select: { entitlementId: true, deviceMac: true }

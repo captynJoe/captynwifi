@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { planCookieSweep, type CookieSweepFacts } from "../src/services/cookieSweep.js";
+import { planCookieSweep, planExpiredSessionSweep, type CookieSweepFacts } from "../src/services/cookieSweep.js";
 
 const MAC_A = "EA:DB:24:D1:C1:4A";
 const MAC_B = "B6:E7:F2:F6:0F:EB";
@@ -53,4 +53,22 @@ test("leaves cookies for usernames CAPTYN never issued", () => {
 test("does not remove a cookie just because the device is offline", () => {
   const plan = planCookieSweep(facts({ cookies: [{ id: "*7", user: "PKG-FRIEND", deviceMac: MAC_A }] }));
   assert.deepEqual(plan, []);
+});
+
+test("logs off a package that ended but is still online", () => {
+  const users = planExpiredSessionSweep(
+    [{ user: "PKG-OLD", deviceMac: MAC_A }, { user: "PKG-SHARED", deviceMac: MAC_B }],
+    new Set(["PKG-OLD", "PKG-SHARED"]),
+    new Set(["PKG-SHARED"])
+  );
+  assert.deepEqual(users, ["PKG-OLD"]);
+});
+
+test("never logs off a session CAPTYN didn't issue, or one with an active package", () => {
+  const users = planExpiredSessionSweep(
+    [{ user: "staff-laptop", deviceMac: MAC_A }, { user: "PKG-SHARED", deviceMac: MAC_B }, { user: "PKG-SHARED", deviceMac: MAC_A }],
+    new Set(["PKG-SHARED"]),
+    new Set(["PKG-SHARED"])
+  );
+  assert.deepEqual(users, []);
 });
