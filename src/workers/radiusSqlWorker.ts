@@ -8,6 +8,7 @@ import { activateDuePromos, endPromo, getActivePromo } from "../services/promo.j
 import { kickHotspotUser, kickPppoeUser } from "../services/routeros.js";
 import { sweepExpiredSessions, sweepHotspotCookies } from "../services/cookieSweep.js";
 import { runAutoReconnect } from "../services/autoReconnect.js";
+import { collectDevices, pruneDeviceHistory } from "../services/deviceCollector.js";
 
 async function applyProjection(id: string) {
   await prisma.$transaction(async (tx) => {
@@ -325,6 +326,21 @@ async function main() {
       .catch((error) => console.error("Cookie sweep error:", error))
       .finally(() => { sweeping = false; });
   }, 3 * 60 * 1000);
+
+  // Client Intelligence device collector (see deviceCollector.ts): every 2
+  // minutes, plus the 12-month history prune once a day.
+  let collecting = false;
+  setInterval(() => {
+    if (collecting) return;
+    collecting = true;
+    collectDevices(prisma)
+      .then((result) => { if (result && "eventsWritten" in result && (result.eventsWritten ?? 0) > 0) console.log(`Device collector: ${result.hosts} on network, Omada ${result.omada ?? "unavailable"}, ${result.eventsWritten} event(s)`); })
+      .catch((error) => console.error("Device collector error:", error))
+      .finally(() => { collecting = false; });
+  }, 2 * 60 * 1000);
+  setInterval(() => {
+    pruneDeviceHistory(prisma).catch((error) => console.error("Device history prune error:", error));
+  }, 24 * 3600 * 1000);
 
   // Paid devices that dropped off the hotspot get signed back in (see
   // autoReconnect.ts). Its own 30s timer: a dropped customer shouldn't wait

@@ -132,6 +132,9 @@ export async function traceClient(prisma: PrismaClient, query: string) {
       select: { hostName: true, dhcpClassId: true, identitySeenAt: true, addedAt: true, signedOutAt: true, entitlement: { select: { username: true } } },
       orderBy: { addedAt: "desc" }
     });
+    // Client Intelligence register: radio facts and change history (Phase 2).
+    const registry = await prisma.wifiDevice.findUnique({ where: { mac } });
+    const timeline = await prisma.wifiDeviceEvent.findMany({ where: { mac }, orderBy: { at: "desc" }, take: 100 });
     const failedPayments = await prisma.wifiPaymentIntent.findMany({
       where: { deviceMac: mac, status: "failed" }, select: { createdAt: true, amountKsh: true }, orderBy: { createdAt: "desc" }, take: 20
     });
@@ -142,16 +145,27 @@ export async function traceClient(prisma: PrismaClient, query: string) {
     const bytes = sessions.reduce((sum, s) => sum + Number(s.bytes ?? 0), 0);
     const live = liveSessions?.find((s) => s.deviceMac === mac);
     const identity = ledger.find((d) => d.hostName || d.dhcpClassId);
-    const firstSeen = sessions.at(-1)?.start ?? ledger.at(-1)?.addedAt ?? null;
-    const lastSeen = sessions[0] ? (sessions[0].stop ?? sessions[0].updated ?? sessions[0].start) : ledger[0]?.addedAt ?? null;
+    const earliest = (...dates: Array<Date | null | undefined>) => dates.filter((d): d is Date => Boolean(d)).sort((a, b) => a.getTime() - b.getTime())[0] ?? null;
+    const latest = (...dates: Array<Date | null | undefined>) => dates.filter((d): d is Date => Boolean(d)).sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
+    const firstSeen = earliest(sessions.at(-1)?.start, ledger.at(-1)?.addedAt, registry?.firstSeenAt);
+    const lastSeen = latest(sessions[0] ? (sessions[0].stop ?? sessions[0].updated ?? sessions[0].start) : null, ledger[0]?.addedAt, registry?.lastSeenAt);
     devices.push({
       mac,
-      hostName: identity?.hostName ?? null,
-      deviceClass: identity?.dhcpClassId ?? null,
+      hostName: identity?.hostName ?? registry?.hostName ?? null,
+      deviceClass: identity?.dhcpClassId ?? registry?.dhcpClassId ?? null,
+      // Last radio facts Omada reported, with when; null = never observed.
+      radio: registry?.apMac
+        ? { apName: registry.apName ?? registry.apMac, ssid: registry.ssid, band: registry.band, rssi: registry.rssi, at: registry.signalAt, source: "Omada" }
+        : null,
+      timeline: timeline.map((e) => ({ at: e.at, type: e.type, source: e.source, from: e.fromValue, to: e.toValue })),
       online: live ? { as: live.user } : liveSessions ? null : "unknown",
       firstSeen,
       lastSeen,
-      ips: [...new Set(sessions.map((s) => s.ip).filter(Boolean))],
+      ips: [...new Set([
+        ...sessions.map((s) => s.ip),
+        registry?.ip ?? null,
+        ...timeline.filter((e) => e.type === "ip_changed").flatMap((e) => [e.fromValue, e.toValue])
+      ].filter(Boolean))],
       sessionCount: sessions.length,
       totalHours: Math.round((seconds / 3600) * 10) / 10,
       totalGb: Math.round((bytes / 1e9) * 100) / 100,

@@ -116,7 +116,18 @@ export const config = {
     sessionSweep: readSweepMode("CAPTYN_WIFI_SESSION_SWEEP"),
     // Signs a paid device that dropped off back in when its recorded identity
     // still matches. "off" | "dry-run" (log only) | "on".
-    autoReconnect: readSweepMode("CAPTYN_WIFI_AUTO_RECONNECT")
+    autoReconnect: readSweepMode("CAPTYN_WIFI_AUTO_RECONNECT"),
+    // Client Intelligence device collector (router + Omada snapshots).
+    deviceCollector: readBoolean("CAPTYN_WIFI_DEVICE_COLLECTOR")
+  },
+  // Omada Open API, read-only, for the device collector. Reached through the
+  // router's NAT to the controller on the owner's PC.
+  omada: {
+    url: process.env.CAPTYN_WIFI_OMADA_URL?.trim() || "https://10.8.0.50:18043",
+    omadacId: process.env.CAPTYN_WIFI_OMADA_OMADAC_ID?.trim() || "",
+    siteId: process.env.CAPTYN_WIFI_OMADA_SITE_ID?.trim() || "",
+    clientId: process.env.CAPTYN_WIFI_OMADA_CLIENT_ID?.trim() || "",
+    clientSecret: process.env.CAPTYN_WIFI_OMADA_CLIENT_SECRET ?? ""
   },
   governor: {
     enabled: readBoolean("CAPTYN_WIFI_GOVERNOR_ENABLED"),

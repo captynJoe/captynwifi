@@ -426,6 +426,48 @@ model WifiSignInTiming {
   @@index([createdAt])
 }
 
+// Client Intelligence: one row per device ever seen on the network, with its
+// latest observed state. History lives in WifiDeviceEvent (written only when
+// something changes), kept 12 months.
+model WifiDevice {
+  mac          String    @id
+  firstSeenAt  DateTime
+  lastSeenAt   DateTime
+  online       Boolean   @default(false)
+  ip           String?
+  hostName     String?
+  dhcpClassId  String?
+  apMac        String?
+  apName       String?
+  ssid         String?
+  band         String?
+  rssi         Int?
+  signalAt     DateTime?
+  updatedAt    DateTime  @updatedAt
+  events       WifiDeviceEvent[]
+
+  @@index([lastSeenAt])
+  @@index([hostName])
+  @@index([ip])
+}
+
+// What changed for a device, when, and which source saw it. Evidence only:
+// raw observed values, never inferred identities.
+model WifiDeviceEvent {
+  id        String     @id @default(uuid())
+  mac       String
+  at        DateTime
+  type      String
+  source    String
+  fromValue String?
+  toValue   String?
+  detail    Json?
+  device    WifiDevice @relation(fields: [mac], references: [mac], onDelete: Cascade)
+
+  @@index([mac, at])
+  @@index([at])
+}
+
 // Sensitive admin actions, e.g. revealing a customer's phone number in Trace.
 model WifiAuditEvent {
   id        String   @id @default(uuid())

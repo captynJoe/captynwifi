@@ -653,6 +653,32 @@ export async function loginHotspotHost(input: { username: string; password: stri
   }
 }
 
+export type NetworkHost = { deviceMac: string; address: string | null; hostName: string | null; dhcpClassId: string | null };
+
+// Every device on the hotspot network (signed in or not) with its DHCP name,
+// in one router conversation. null = router unreachable this round.
+export async function listNetworkHosts(): Promise<NetworkHost[] | null> {
+  if (missingRouterConfig()) return null;
+  const client = new RouterOsApiClient();
+  try {
+    await client.connect();
+    await client.login();
+    const hosts = sentencesToRows(await client.command(["/ip/hotspot/host/print", "=.proplist=mac-address,address"]));
+    const leases = new Map(sentencesToRows(await client.command([
+      "/ip/dhcp-server/lease/print", "=.proplist=mac-address,host-name,class-id"
+    ])).map((row) => [(row["mac-address"] || "").toUpperCase(), row]));
+    return hosts.filter((row) => row["mac-address"]).map((row) => {
+      const deviceMac = row["mac-address"].toUpperCase();
+      const lease = leases.get(deviceMac);
+      return { deviceMac, address: row.address || null, hostName: lease?.["host-name"] || null, dhcpClassId: lease?.["class-id"] || null };
+    });
+  } catch {
+    return null;
+  } finally {
+    client.close();
+  }
+}
+
 export async function listActiveHotspotSessions(): Promise<Array<{ user: string; deviceMac: string }> | null> {
   if (missingRouterConfig()) return null;
   const client = new RouterOsApiClient();

@@ -2217,6 +2217,10 @@ function tracePayment(payment, title) {
     <li><span class="trace-step">${escapeHtml(title)}</span><span>${amount}${ref}${status} · ${escapeHtml(fmtDate(payment.at))}${payment.paidFromTracedDevice ? " · paid from this device" : ""}</span></li>
     <li><span class="trace-step">Phone</span><span>${phone}${traceLink(payment.phoneLink)}</span></li>`;
 }
+const TRACE_EVENT_LABELS = {
+  first_seen: "First seen", connected: "Connected", disconnected: "Disconnected", ip_changed: "New IP",
+  name_changed: "New device name", ap_connected: "On access point", roamed: "Roamed", band_changed: "Changed band"
+};
 function renderTrace(data) {
   const devices = data.devices || [];
   const packages = data.packages || [];
@@ -2239,9 +2243,10 @@ function renderTrace(data) {
           <div><dt>IP addresses</dt><dd>${escapeHtml((d.ips || []).join(", ") || "-")}</dd></div>
           <div><dt>Sessions</dt><dd>${escapeHtml(d.sessionCount)} · ${escapeHtml(d.totalHours)} h · ${escapeHtml(d.totalGb)} GB</dd></div>
           <div><dt>Failed payments</dt><dd>${escapeHtml(d.failedPayments.count)}${d.failedPayments.last ? ` · last ${escapeHtml(fmtDate(d.failedPayments.last))}` : ""}</dd></div>
-          <div><dt>Access point</dt><dd>UNRESOLVED (Omada history not collected yet)</dd></div>
+          <div><dt>Access point</dt><dd>${d.radio ? `${escapeHtml(d.radio.apName)}${d.radio.band ? ` · ${escapeHtml(d.radio.band)} GHz` : ""}${d.radio.rssi != null ? ` · ${escapeHtml(d.radio.rssi)} dBm` : ""} <small>(${escapeHtml(d.radio.source)}, ${escapeHtml(fmtDate(d.radio.at))})</small>` : "UNRESOLVED (no Omada observation yet)"}</dd></div>
         </dl>
         <ul class="trace-chain">${accounts || '<li><span class="trace-step">Account</span><span>UNRESOLVED</span></li>'}</ul>
+        ${(d.timeline || []).length ? `<div class="table-wrap"><table><thead><tr><th>When</th><th>Event</th><th>From</th><th>To</th><th>Seen by</th></tr></thead><tbody>${d.timeline.map((e) => `<tr><td>${escapeHtml(fmtDate(e.at))}</td><td>${escapeHtml(TRACE_EVENT_LABELS[e.type] || e.type)}</td><td>${escapeHtml(text(e.from))}</td><td>${escapeHtml(text(e.to))}</td><td>${escapeHtml(e.source)}</td></tr>`).join("")}</tbody></table></div>` : ""}
         ${sessions ? `<div class="table-wrap"><table><thead><tr><th>Start</th><th>End</th><th>Time</th><th>Data</th><th>IP</th><th>Account</th><th>Ended by</th></tr></thead><tbody>${sessions}</tbody></table></div>` : ""}
       </article>`;
   }).join("");
