@@ -6,9 +6,14 @@
     <title>CAPTYN WiFi</title>
     <script src="theme.js?v=2026080402"></script>
     <link rel="stylesheet" href="theme.css?v=2026103102" />
-    <link rel="stylesheet" href="portal.css?v=2026103101" />
+    <link rel="stylesheet" href="portal.css?v=2026112401" />
   </head>
   <body>
+    <div id="alert" class="portal-alert hidden" role="alert" aria-live="assertive">
+      <p id="error" class="portal-alert-text"></p>
+      <button id="alert-action" class="portal-alert-action hidden" type="button"></button>
+      <button id="alert-dismiss" class="portal-alert-dismiss" type="button" aria-label="Dismiss">&#x2715;</button>
+    </div>
     <main class="portal-app">
       <header class="topbar">
         <a class="brand" href="/wifi/" aria-label="CAPTYN WiFi">
@@ -187,7 +192,6 @@
 
       <footer class="portal-footer" aria-label="CAPTYN WiFi footer"><a class="powered" href="https://captyn.shop/" target="_blank" rel="noopener">Powered by <b>captyn.shop</b></a><a href="tel:+254711635755">+254711635755</a></footer>
 
-      <p id="error" class="error-text hidden"></p>
     </main>
 
     <div id="expiry-banner" class="expiry-banner hidden" role="status">
@@ -206,6 +210,6 @@
       </div>
     </div>
 
-    <script type="module" src="portal-build/main.js?v=2026112403" data-cfasync="false"></script>
+    <script type="module" src="portal-build/main.js?v=2026112404" data-cfasync="false"></script>
   </body>
 </html>

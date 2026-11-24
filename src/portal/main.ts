@@ -199,6 +199,9 @@ let freshConnectInterval: number | null = null;
 let pendingAddToPackage: { plan: any; phone: string } | null = null;
 let addingDevice = false;
 const errorText = requireElement<HTMLParagraphElement>("error");
+const alertBox = requireElement<HTMLElement>("alert");
+const alertAction = requireElement<HTMLButtonElement>("alert-action");
+const alertDismiss = requireElement<HTMLButtonElement>("alert-dismiss");
 const paymentModal = requireElement<HTMLDivElement>("payment-modal");
 const paymentModalIcon = requireElement<HTMLDivElement>("payment-modal-icon");
 const paymentModalTitle = requireElement<HTMLHeadingElement>("payment-modal-title");
@@ -687,11 +690,42 @@ function friendlyError(error: unknown, fallback: string): string {
   if (/failed to fetch|networkerror|load failed|network request failed/i.test(message)) return "Connection blip. Check you're on CAPTYN WiFi, then try again.";
   return message;
 }
-function showError(message) {
-  errorText.textContent = message || "";
-  errorText.classList.toggle("hidden", !message);
-  if (message) reportClientError(message, "shown");
+// One alert bar, fixed at the top: an error stays until its problem is
+// solved or the customer dismisses it. "router" errors (why the router
+// turned this device away) belong to sign-in and only a successful
+// connection clears them -- background steps like the returning-device check
+// used to blank them a moment after they appeared.
+type AlertScope = "general" | "router";
+let alertScope: AlertScope | null = null;
+let alertRun: (() => void) | null = null;
+function showError(message, { scope = "general" as AlertScope, action }: { scope?: AlertScope; action?: { label: string; run: () => void } } = {}) {
+  if (!message) {
+    clearError(scope);
+    return;
+  }
+  errorText.textContent = message;
+  alertScope = scope;
+  alertRun = action?.run ?? null;
+  alertAction.textContent = action?.label ?? "";
+  alertAction.classList.toggle("hidden", !action);
+  alertBox.classList.remove("hidden");
+  reportClientError(message, "shown");
 }
+// Clears the alert only if it belongs to `scope`; with no scope (the
+// problem is solved, e.g. the device is online) it clears whatever is shown.
+function clearError(scope?: AlertScope) {
+  if (scope && alertScope && alertScope !== scope) return;
+  alertBox.classList.add("hidden");
+  errorText.textContent = "";
+  alertScope = null;
+  alertRun = null;
+}
+alertDismiss.addEventListener("click", () => clearError());
+alertAction.addEventListener("click", () => {
+  const run = alertRun;
+  clearError();
+  run?.();
+});
 // Tells the API what went wrong on this device (see /client-errors).
 function reportClientError(message, kind) {
   try {
@@ -1312,6 +1346,7 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
   timing.report(serverSignedIn ? "server" : alreadyOnline ? "already_online" : "none", ok ? "connected" : "not_online");
   if (ok) {
     hideManualConnectFallback();
+    clearError();
     // Say so the moment it's true; the package details below fill in after.
     setConnectState(statusEl, formEl, "connected", "You're connected.");
     let expiresAt = null;
@@ -2307,14 +2342,21 @@ function hotspotRefusal(raw: string): HotspotRefusal {
   if (/already authorizing|retry later|not responding|timed out|timeout/i.test(raw)) return { message: "The WiFi router was busy. Try again in a few seconds.", action: "none" };
   return { message: raw, action: "none" };
 }
+function openDeviceCodeForm() {
+  voucherLoginForm.classList.remove("hidden");
+  voucherCodeInput.focus();
+}
+function showPackages() {
+  setStep("package");
+  plansEl.scrollIntoView({ behavior: "smooth", block: "start" });
+}
 function showHotspotRefusal(raw: string) {
   const refusal = hotspotRefusal(raw);
-  showError(refusal.message);
-  if (refusal.action === "buy") setStep("package");
-  if (refusal.action === "code") {
-    voucherLoginForm.classList.remove("hidden");
-    voucherCodeInput.focus();
-  }
+  const action = refusal.action === "buy" ? { label: "Choose a package", run: showPackages }
+    : refusal.action === "code" ? { label: "Enter device code", run: openDeviceCodeForm }
+    : undefined;
+  showError(refusal.message, { scope: "router", action });
+  if (refusal.action === "code") openDeviceCodeForm();
   return refusal;
 }
 // The router just turned this device away (the error param is only set on
@@ -2464,7 +2506,6 @@ async function attemptReturningDeviceAutoConnect() {
 
   const remembered = loadRememberedAccess();
   if (remembered) {
-    showError("");
     // Was hideCredentials: true -- but that left someone who'd genuinely
     // forgotten their password with no way to see it again short of the
     // M-PESA receipt lookup, even though they're looking right at their own
@@ -2492,7 +2533,6 @@ async function attemptReturningDeviceAutoConnect() {
     if (!response.ok) return false;
     const payload = await response.json();
     if (!payload?.data?.username) return false;
-    showError("");
     showConnectedPanel(payload.data, {
       heading: "Welcome back",
       message: "You already have WiFi access on this device — reconnecting you now."
