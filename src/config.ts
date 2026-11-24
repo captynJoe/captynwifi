@@ -122,6 +122,13 @@ export const config = {
     // Evening ISP speed probe (see ispProbe.ts).
     ispProbe: readBoolean("CAPTYN_WIFI_ISP_PROBE")
   },
+  // CAPTYN Housing, asked whether a tenant's house is in good standing before
+  // a tenants-only promo. Same shared token as Housing -> WiFi.
+  housing: {
+    apiUrl: (process.env.CAPTYN_WIFI_HOUSING_API_URL ?? "").replace(/\/+$/, ""),
+    promoBuildingId: process.env.CAPTYN_WIFI_HOUSING_PROMO_BUILDING_ID ?? "CAPTYN-BLDG-00002",
+    promoBuildingName: process.env.CAPTYN_WIFI_HOUSING_PROMO_BUILDING_NAME ?? "Village Inn"
+  },
   // Omada Open API, read-only, for the device collector. Reached through the
   // router's NAT to the controller on the owner's PC.
   omada: {

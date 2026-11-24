@@ -918,7 +918,7 @@ function renderPromo() {
     pill.className = isLive ? "pill ok" : "pill warn";
     pill.textContent = isLive ? "Live" : "Scheduled";
     summary.textContent = [
-      isLive ? `Free for everyone until ${fmtDate(promo.endsAt)}` : `Starts ${fmtDate(promo.startsAt)}, ends ${fmtDate(promo.endsAt)}`,
+      isLive ? `Free for ${promo.housingBuildingId ? "Village Inn tenants with nothing overdue" : "everyone"} until ${fmtDate(promo.endsAt)}` : `Starts ${fmtDate(promo.startsAt)}, ends ${fmtDate(promo.endsAt)}${promo.housingBuildingId ? " · Village Inn tenants with nothing overdue" : ""}`,
       promo.rateLimit || "package speed",
       `${promo.deviceLimit || 1} device${promo.deviceLimit === 1 ? "" : "s"}`,
       isLive && claims !== undefined ? `${claims} claimed` : null,
@@ -1990,6 +1990,16 @@ const promoFormStatus = document.getElementById("promo-form-status");
 const promoSubmit = document.getElementById("promo-submit");
 const promoEndBtn = document.getElementById("promo-end-btn");
 
+// Tenants-only promos never pause paid packages (everyone else keeps paying).
+function syncPromoTenantsOnly() {
+  const tenantsOnly = document.getElementById("promo-tenants-only");
+  const pause = document.getElementById("promo-pause-existing");
+  if (!tenantsOnly || !pause) return;
+  if (tenantsOnly.checked) pause.checked = false;
+  pause.disabled = tenantsOnly.checked;
+}
+document.getElementById("promo-tenants-only")?.addEventListener("change", syncPromoTenantsOnly);
+
 promoForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const siteId = (state.cache.sites || [])[0]?.id;
@@ -2024,12 +2034,14 @@ promoForm?.addEventListener("submit", async (event) => {
       endsAt: endsAt.toISOString(),
       rateLimit: document.getElementById("promo-rate-limit").value.trim() || undefined,
       deviceLimit: Number(document.getElementById("promo-device-limit").value) || 1,
-      pauseExisting: document.getElementById("promo-pause-existing").checked
+      pauseExisting: document.getElementById("promo-pause-existing").checked,
+      tenantsOnly: document.getElementById("promo-tenants-only").checked
     });
     setInlineStatus(promoFormStatus, startsAt <= new Date() ? "Live" : "Scheduled", "ok");
     promoForm.reset();
     document.getElementById("promo-device-limit").value = "1";
     document.getElementById("promo-pause-existing").checked = true;
+    syncPromoTenantsOnly();
     await loadDashboard();
     setPage("promo");
   } catch (error) {

@@ -289,6 +289,9 @@ model WifiPromo {
   rateLimit     String?
   deviceLimit   Int       @default(1)
   pauseExisting Boolean   @default(true)
+  // Set = only tenants of this CAPTYN Housing building with nothing overdue
+  // can claim (see housingStanding.ts). Null = everyone.
+  housingBuildingId String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   site          WifiSite  @relation(fields: [siteId], references: [id], onDelete: Cascade)

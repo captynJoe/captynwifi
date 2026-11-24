@@ -21,6 +21,7 @@ import { boostRateLimit, fasterRateLimit } from "../services/rateLimit.js";
 import { activatePppoePayment, publicPppoeAccount } from "../services/pppoe.js";
 import { createUniqueCaptynWifiUsername } from "../services/captynUsername.js";
 import { enqueuePaymentActivation } from "../services/paymentActivationQueue.js";
+import { confirmedPhoneForDevice, fetchHousingStanding, promoGateResult, type HousingStanding } from "../services/housingStanding.js";
 
 export const publicRouter = Router();
 
@@ -2099,7 +2100,9 @@ publicRouter.get("/promo", async (_req, res, next) => {
         heading: promo.heading,
         message: promo.message,
         startsAt: promo.startsAt,
-        endsAt: promo.endsAt
+        endsAt: promo.endsAt,
+        // Tenants-only: the portal keeps packages on sale for everyone else.
+        tenantsOnly: promo.housingBuildingId ? { buildingName: config.housing.promoBuildingName } : null
       })
     });
   } catch (error) {
@@ -2114,6 +2117,22 @@ publicRouter.post("/promo/claim", publicPromoClaimLimit, async (req, res, next) 
     const parsed = promoClaimSchema.parse(req.body);
     const promo = await getLivePromo(prisma);
     if (!promo) return res.status(404).json({ error: "This offer has ended." });
+    if (promo.housingBuildingId) {
+      const deviceMac = normalizeDeviceMac(parsed.deviceMac);
+      const phone = deviceMac ? await confirmedPhoneForDevice(prisma, deviceMac) : null;
+      let standing: HousingStanding | null = null;
+      let unavailable = false;
+      if (phone) {
+        try {
+          standing = await fetchHousingStanding(promo.housingBuildingId, phone);
+        } catch (error) {
+          unavailable = true;
+          console.warn("Promo housing check failed:", error instanceof Error ? error.message : error);
+        }
+      }
+      const gate = promoGateResult(config.housing.promoBuildingName, phone, standing, unavailable);
+      if (!gate.allowed) return res.status(gate.code === "housing_unavailable" ? 503 : 403).json({ error: gate.message, code: gate.code });
+    }
     const grant = await claimPromoGrant(prisma, promo, parsed.deviceMac);
     return res.json({ data: toJsonSafe(grant) });
   } catch (error) {

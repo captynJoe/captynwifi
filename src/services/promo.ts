@@ -15,6 +15,7 @@ export type StartPromoInput = {
   rateLimit?: string | null;
   deviceLimit?: number;
   pauseExisting?: boolean;
+  housingBuildingId?: string | null;
 };
 
 function promoUsername(deviceMac: string) {
@@ -69,7 +70,9 @@ export async function startPromo(prisma: PrismaClient, input: StartPromoInput): 
   const now = new Date();
   const startsAt = input.startsAt ?? now;
   const isLiveImmediately = startsAt.getTime() <= now.getTime();
-  const pauseExisting = input.pauseExisting ?? true;
+  // A tenants-only promo never pauses paid packages: everyone else still
+  // needs the access they paid for.
+  const pauseExisting = input.housingBuildingId ? false : input.pauseExisting ?? true;
 
   return prisma.$transaction(async (tx) => {
     const promo = await tx.wifiPromo.create({
@@ -83,7 +86,8 @@ export async function startPromo(prisma: PrismaClient, input: StartPromoInput): 
         endsAt: input.endsAt,
         rateLimit: input.rateLimit ?? null,
         deviceLimit: input.deviceLimit ?? 1,
-        pauseExisting
+        pauseExisting,
+        housingBuildingId: input.housingBuildingId ?? null
       }
     });
 

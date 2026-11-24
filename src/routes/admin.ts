@@ -16,6 +16,7 @@ import { getRouterCapacityStatus, kickHotspotUser, probeRouterOutageHealth } fro
 import { issueVoucher } from "../services/voucherIssuance.js";
 import { normalizeKenyaPhone } from "../lib/phone.js";
 import { PROMO_PLAN_SOURCE, endPromo, getActivePromo, startPromo } from "../services/promo.js";
+import { housingConfigured } from "../services/housingStanding.js";
 import { getLoyaltySetting, monthStandings, pickLoyaltyRound, releaseLoyaltyRound, tierForRank } from "../services/loyalty.js";
 import { DYNAMIC_PLAN_SOURCE, refreshMirrorForBaseline } from "../services/dynamicPlanEngine.js";
 import { ensureConnectCode } from "../services/connectCode.js";
@@ -2071,7 +2072,9 @@ const startPromoSchema = z.object({
   endsAt: z.coerce.date(),
   rateLimit: mikrotikRateLimit,
   deviceLimit: z.coerce.number().int().positive().max(10).optional(),
-  pauseExisting: z.boolean().optional()
+  pauseExisting: z.boolean().optional(),
+  // Only tenants of the Housing building with nothing overdue can claim.
+  tenantsOnly: z.boolean().optional()
 });
 
 adminRouter.post("/promo/start", async (req, res, next) => {
@@ -2082,7 +2085,11 @@ adminRouter.post("/promo/start", async (req, res, next) => {
     const startsAt = data.startsAt ?? new Date();
     if (data.endsAt.getTime() <= Date.now()) return res.status(400).json({ error: "endsAt must be in the future." });
     if (data.endsAt.getTime() <= startsAt.getTime()) return res.status(400).json({ error: "endsAt must be after startsAt." });
-    const promo = await startPromo(prisma, { ...data, startsAt });
+    if (data.tenantsOnly && !housingConfigured()) {
+      return res.status(400).json({ error: "The CAPTYN Housing link isn't set up (CAPTYN_WIFI_HOUSING_API_URL), so tenants can't be checked." });
+    }
+    const { tenantsOnly, ...input } = data;
+    const promo = await startPromo(prisma, { ...input, startsAt, housingBuildingId: tenantsOnly ? config.housing.promoBuildingId : null });
     return sendData(res, promo);
   } catch (error) {
     return next(error);

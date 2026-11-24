@@ -685,7 +685,7 @@ const servicePath = (path) => `${basePath}${path}`;
 // "Failed to fetch" and friends mean the request never got through -- say
 // that in plain words instead of showing the browser's error text.
 function friendlyError(error: unknown, fallback: string): string {
-  const message = friendlyError(error, "");
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
   if (!message) return fallback;
   if (/failed to fetch|networkerror|load failed|network request failed/i.test(message)) return "Connection blip. Check you're on CAPTYN WiFi, then try again.";
   return message;
@@ -2578,6 +2578,8 @@ async function checkPromo(): Promise<boolean> {
     return false;
   }
 
+  if (promo.tenantsOnly) return claimTenantsOnlyPromo(promo);
+
   if (workspaceEl) workspaceEl.classList.add("hidden");
   if (introRowEl) introRowEl.classList.add("hidden");
   access.classList.add("hidden");
@@ -2606,6 +2608,47 @@ async function checkPromo(): Promise<boolean> {
     // No device-code countdown here: the access panel that shows it (and its
     // Connect now button) is hidden during a promo, so the hold was a silent
     // 15-second wait on "Signing this device in...".
+    await attemptAutoConnect(payload.data.username, payload.data.password, promoStatus, null, { freshGrant: true, holdBeforeConnect: false });
+  } catch (error) {
+    promoStatus.textContent = friendlyError(error, "Couldn't activate free access.");
+  }
+  return true;
+}
+
+// Tenants-only promo: check first, quietly. A tenant in good standing gets
+// the free-access screen; everyone else keeps the normal packages, and a
+// tenant with something overdue is told why (it stays until dismissed).
+async function claimTenantsOnlyPromo(promo): Promise<boolean> {
+  const mac = state.hotspot?.mac;
+  if (!mac) return false;
+  let payload;
+  try {
+    const response = await fetch(api("/promo/claim"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deviceMac: mac })
+    });
+    payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (["rent_overdue", "utilities_overdue", "housing_unavailable"].includes(payload.code) && payload.error) showError(payload.error);
+      return false;
+    }
+  } catch (_error) {
+    return false;
+  }
+
+  const buildingName = promo.tenantsOnly.buildingName || "Village Inn";
+  if (workspaceEl) workspaceEl.classList.add("hidden");
+  if (introRowEl) introRowEl.classList.add("hidden");
+  access.classList.add("hidden");
+  promoHeading.textContent = promo.heading || `Thank you, ${buildingName}`;
+  promoMessage.textContent = promo.message || `Free access for ${buildingName} tenants with nothing overdue.`;
+  promoNote.textContent = "";
+  promoSection.classList.remove("hidden");
+  promoSection.scrollIntoView({ behavior: "smooth", block: "start" });
+  startPromoCountdown(promo.endsAt);
+  promoStatus.textContent = "Unlocking your free access...";
+  try {
     await attemptAutoConnect(payload.data.username, payload.data.password, promoStatus, null, { freshGrant: true, holdBeforeConnect: false });
   } catch (error) {
     promoStatus.textContent = friendlyError(error, "Couldn't activate free access.");
