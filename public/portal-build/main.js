@@ -83,6 +83,9 @@ let freshConnectInterval = null;
 let pendingAddToPackage = null;
 let addingDevice = false;
 const errorText = requireElement("error");
+const alertBox = requireElement("alert");
+const alertAction = requireElement("alert-action");
+const alertDismiss = requireElement("alert-dismiss");
 const paymentModal = requireElement("payment-modal");
 const paymentModalIcon = requireElement("payment-modal-icon");
 const paymentModalTitle = requireElement("payment-modal-title");
@@ -336,7 +339,7 @@ async function activateCredit(creditId) {
     catch (error) {
         activatingCreditId = "";
         renderNotifications();
-        showError(error instanceof Error ? error.message : "Unable to activate this credit.");
+        showError(friendlyError(error, "Unable to activate this credit."));
     }
 }
 // ---------- Weekly rewards ----------
@@ -478,7 +481,7 @@ rewardsEl?.addEventListener("click", async (event) => {
     }
     catch (error) {
         hidePaymentModal();
-        showError(error instanceof Error ? error.message : "Unable to use this reward.");
+        showError(friendlyError(error, "Unable to use this reward."));
     }
     finally {
         rewardBusy = false;
@@ -595,12 +598,47 @@ function trackPlanViews() {
     cards.forEach((card) => planViewObserver?.observe(card));
 }
 const servicePath = (path) => `${basePath}${path}`;
-function showError(message) {
-    errorText.textContent = message || "";
-    errorText.classList.toggle("hidden", !message);
-    if (message)
-        reportClientError(message, "shown");
+// "Failed to fetch" and friends mean the request never got through -- say
+// that in plain words instead of showing the browser's error text.
+function friendlyError(error, fallback) {
+    const message = friendlyError(error, "");
+    if (!message)
+        return fallback;
+    if (/failed to fetch|networkerror|load failed|network request failed/i.test(message))
+        return "Connection blip. Check you're on CAPTYN WiFi, then try again.";
+    return message;
 }
+let alertScope = null;
+let alertRun = null;
+function showError(message, { scope = "general", action } = {}) {
+    if (!message) {
+        clearError(scope);
+        return;
+    }
+    errorText.textContent = message;
+    alertScope = scope;
+    alertRun = action?.run ?? null;
+    alertAction.textContent = action?.label ?? "";
+    alertAction.classList.toggle("hidden", !action);
+    alertBox.classList.remove("hidden");
+    reportClientError(message, "shown");
+}
+// Clears the alert only if it belongs to `scope`; with no scope (the
+// problem is solved, e.g. the device is online) it clears whatever is shown.
+function clearError(scope) {
+    if (scope && alertScope && alertScope !== scope)
+        return;
+    alertBox.classList.add("hidden");
+    errorText.textContent = "";
+    alertScope = null;
+    alertRun = null;
+}
+alertDismiss.addEventListener("click", () => clearError());
+alertAction.addEventListener("click", () => {
+    const run = alertRun;
+    clearError();
+    run?.();
+});
 // Tells the API what went wrong on this device (see /client-errors).
 function reportClientError(message, kind) {
     try {
@@ -659,7 +697,10 @@ function speedColorStyle(plan) {
 }
 function normalizeMpesaPhoneInput(raw) {
     const cleaned = String(raw || "").replace(/[^\d+]/g, "").replace(/^\++/, "+");
-    const digits = cleaned.startsWith("+") ? cleaned.slice(1) : cleaned;
+    let digits = cleaned.startsWith("+") ? cleaned.slice(1) : cleaned;
+    // The field starts as "+254"; typing "254712..." after it doubles the code.
+    if (/^254254[17]\d{8}$/.test(digits))
+        digits = digits.slice(3);
     let normalized = "";
     if (/^254[17]\d{8}$/.test(digits))
         normalized = digits;
@@ -802,7 +843,7 @@ function showPaymentModal(kind, title, message) {
     if (kind === "bad")
         reportClientError(`${title}: ${message || ""}`, "payment");
     paymentModal.classList.remove("hidden");
-    const iconClass = kind === "connecting" ? "spin" : kind === "ok" ? "ok" : kind === "welcome-used" ? "laugh-cry" : kind === "add-device" ? "add-device" : "bad";
+    const iconClass = kind === "connecting" || kind === "paid" ? "spin" : kind === "ok" ? "ok" : kind === "welcome-used" ? "laugh-cry" : kind === "add-device" ? "add-device" : "bad";
     paymentModalIcon.className = `payment-modal-icon ${iconClass}`;
     paymentModalIcon.textContent = kind === "welcome-used" ? "\u{1F62D}" : kind === "add-device" ? "\u{1F4F1}" : "";
     paymentModalTitle.textContent = title;
@@ -974,7 +1015,7 @@ async function removeDevice(mac) {
         await rememberDeviceForEntitlement(entitlement.username, entitlement.password, { rejoin: true });
     }
     catch (error) {
-        showError(error instanceof Error ? error.message : "Couldn't sign that device out.");
+        showError(friendlyError(error, "Couldn't sign that device out."));
     }
 }
 document.addEventListener("click", (event) => {
@@ -1020,7 +1061,8 @@ function startExpiryWatch(expiresAt, startsAt) {
         return;
     if (state.expiryTimer)
         clearInterval(state.expiryTimer);
-    const WARN_MS = 2 * 60 * 1000;
+    // Topping up takes noticing plus ~20s of M-PESA; warn early enough.
+    const WARN_MS = 10 * 60 * 1000;
     function tick() {
         const remainingMs = target - Date.now();
         updateAccessTimeLeft(remainingMs, totalMs);
@@ -1160,6 +1202,8 @@ access.addEventListener("click", (event) => {
     freshConnectInterval = null;
     accessConnectMessage.textContent = "Take your time. Wi-Fi will connect when you tap Connect now.";
 });
+// ok: signed in. refused: RADIUS said no, with why -- show it here rather
+// than sending the device through the router page to hear the same thing.
 async function signInFromServer(username, password, deviceMac) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10000);
@@ -1170,23 +1214,50 @@ async function signInFromServer(username, password, deviceMac) {
             body: JSON.stringify({ username, password, deviceMac }),
             signal: controller.signal
         });
-        return response.ok;
+        if (response.ok)
+            return { ok: true };
+        const payload = await response.json().catch(() => ({}));
+        return { ok: false, refused: payload.error === "SIGN_IN_REFUSED" ? String(payload.message || "") : undefined };
     }
     catch (_error) {
-        return false;
+        return { ok: false };
     }
     finally {
         clearTimeout(timer);
     }
 }
+function startSignInTiming(trigger) {
+    const started = performance.now();
+    const steps = {};
+    let sent = false;
+    return {
+        mark(step) { steps[step] = Math.round(performance.now() - started); },
+        report(path, outcome) {
+            if (sent)
+                return;
+            sent = true;
+            const body = JSON.stringify({ trigger, path, outcome, totalMs: Math.round(performance.now() - started), steps });
+            try {
+                if (navigator.sendBeacon?.(api("/sign-in-timing"), new Blob([body], { type: "application/json" })))
+                    return;
+            }
+            catch (_error) { }
+            void fetch(api("/sign-in-timing"), { method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: true }).catch(() => { });
+        }
+    };
+}
 async function attemptAutoConnect(username, password, statusEl, formEl, { freshGrant = false, holdBeforeConnect = freshGrant, rejoin = freshGrant } = {}) {
+    const timing = startSignInTiming(freshGrant ? "new_access" : rejoin ? "manual" : "returning");
     const alreadyOnline = freshGrant ? false : await checkInternetReachable(900);
+    timing.mark("online_check");
     if (!alreadyOnline && state.hotspot?.login) {
         setConnectState(statusEl, formEl, "connecting", "Signing this device in...");
         // Registered first, so a deliberate rejoin clears a past sign-out before
         // anything asks the router to sign this device in.
         const [linked] = await Promise.all([rememberDeviceForEntitlement(username, password, { rejoin }), saveAccessBeforeLeaving(username, password)]);
+        timing.mark("registered");
         if (linked === "signed_out") {
+            timing.report("none", "signed_out");
             setConnectState(statusEl, formEl, "failed", "This device was signed out of the package. Enter the device code to use it here again.");
             return;
         }
@@ -1196,7 +1267,15 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
     // login page). Anything short of a yes falls back to the router page.
     let serverSignedIn = false;
     if (!alreadyOnline && state.hotspot?.mac) {
-        serverSignedIn = await signInFromServer(username, password, state.hotspot.mac);
+        const server = await signInFromServer(username, password, state.hotspot.mac);
+        serverSignedIn = server.ok;
+        timing.mark(serverSignedIn ? "server_signed_in" : "server_sign_in_failed");
+        if (server.refused) {
+            timing.report("server", "refused");
+            const refusal = showHotspotRefusal(server.refused);
+            setConnectState(statusEl, formEl, "failed", refusal.message);
+            return;
+        }
     }
     // The router's login page is plain http and this portal is https, so a
     // hidden-iframe login is blocked as mixed content by browsers and
@@ -1205,6 +1284,7 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
     // it signs the device in and redirects back to /wifi/. The fallback button
     // still appears if the navigation hasn't happened after a few seconds.
     if (!alreadyOnline && !serverSignedIn && state.hotspot?.login) {
+        timing.report("router", "redirected_to_router");
         if (holdBeforeConnect) {
             updateAccessCopy("Package ready");
             holdFreshGrantConnection(username, password);
@@ -1222,9 +1302,13 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
         return;
     }
     const ok = alreadyOnline || (await waitForConnection(8, 450, 900));
+    timing.mark("online_confirmed");
+    timing.report(serverSignedIn ? "server" : alreadyOnline ? "already_online" : "none", ok ? "connected" : "not_online");
     if (ok) {
         hideManualConnectFallback();
-        await rememberDeviceForEntitlement(username, password, { rejoin });
+        clearError();
+        // Say so the moment it's true; the package details below fill in after.
+        setConnectState(statusEl, formEl, "connected", "You're connected.");
         let expiresAt = null;
         let deviceLimit;
         let devices = [];
@@ -1232,8 +1316,9 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
         let deviceCap;
         let startsAt;
         try {
-            const [statusResponse, devicesResponse] = await Promise.all([
+            const [statusResponse, , devicesResponse] = await Promise.all([
                 fetch(api(`/entitlements/${encodeURIComponent(username)}/status`)),
+                rememberDeviceForEntitlement(username, password, { rejoin }),
                 fetch(api("/entitlements/devices/list"), {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -1758,9 +1843,11 @@ function waitingMessage() {
     const elapsedMs = state.paymentStartedAt ? Date.now() - state.paymentStartedAt : 0;
     if (elapsedMs < 12000)
         return "Enter your M-PESA PIN.";
-    if (elapsedMs < 30000)
-        return "Still waiting...";
-    return "No prompt? Dial *334#, then try again.";
+    // The prompt stays live for about a minute; a second one before then gets
+    // M-PESA's "busy" errors, so don't invite a retry yet.
+    if (elapsedMs < 60000)
+        return "Check your phone for the M-PESA prompt.";
+    return "Still waiting for M-PESA. No prompt? Dial *334# to clear old menus.";
 }
 // Remembers the last confirmed access on this device/browser so revisiting
 // the portal (reload, reopened tab, no hotspot-redirect context at all)
@@ -1966,6 +2053,11 @@ async function pollPayment() {
         setConnectState(paymentStatus, null, "connecting", message);
         showPaymentModal("connecting", "Check your phone", message);
     }
+    else if ((payment.status === "confirmed" || payment.status === "paid_pending_activation") && !payment.entitlement) {
+        // The money is in; never suggest paying again while access is set up.
+        setConnectState(paymentStatus, null, "connecting", "Payment received. Activating your access...");
+        showPaymentModal("paid", "Payment received", "Activating your access...");
+    }
     else if (payment.status === "payment_failed" || payment.status === "failed") {
         clearInterval(state.pollTimer);
         state.pollTimer = null;
@@ -2061,7 +2153,7 @@ paymentForm.addEventListener("submit", async (event) => {
             return;
         }
         catch (error) {
-            showError(error instanceof Error ? error.message : "Unable to start free access.");
+            showError(friendlyError(error, "Unable to start free access."));
             setConnectState(paymentStatus, null, "", "");
             payButton.disabled = false;
             payButton.textContent = Number(plan.priceKsh || 0) === 0 ? paymentActionLabel(plan) : `Pay ${money(plan.priceKsh)}`;
@@ -2071,7 +2163,7 @@ paymentForm.addEventListener("submit", async (event) => {
     }
     const normalizedPhone = normalizeMpesaPhoneInput(phoneInput.value);
     if (!normalizedPhone) {
-        showError("Enter a valid M-PESA number starting with +2547, +2541, 07, 01, 7, or 1.");
+        showError("Enter your M-PESA number, e.g. 0712 345 678.");
         payButton.disabled = false;
         payButton.textContent = Number(plan.priceKsh || 0) === 0 ? paymentActionLabel(plan) : `Pay ${money(devicePriceFor(plan, checkoutDevices(plan)))}`;
         phoneInput.focus();
@@ -2123,7 +2215,7 @@ async function requestStkPayment(plan, normalizedPhone, addToPackage = false) {
     }
     catch (error) {
         trackFunnel("payment_prompt_failed", plan.id);
-        showError(error instanceof Error ? error.message : "Unable to start payment.");
+        showError(friendlyError(error, "Unable to start payment."));
         setConnectState(paymentStatus, null, "", "");
         hidePaymentModal();
         payButton.disabled = false;
@@ -2257,13 +2349,36 @@ expiryRenewBtn?.addEventListener("click", () => {
     plansEl.scrollIntoView({ behavior: "smooth", block: "start" });
 });
 state.hotspot = readHotspotParams();
-// FreeRADIUS rejects a login past the plan's Simultaneous-Use limit with
-// "You are already logged in - access denied" -- reword it for customers.
-function friendlyHotspotError(raw) {
-    if (/already logged in|simultaneous/i.test(raw)) {
-        return "Your package is active on another device. To get online here, choose a package and use the same M-PESA number; we’ll show the cost to add this device before sending a payment prompt. To buy a separate package, use a different M-PESA number.";
-    }
-    return raw;
+function hotspotRefusal(raw) {
+    if (/already logged in|simultaneous/i.test(raw))
+        return { message: "This package is in use on its other devices. Sign one out there, or add this device.", action: "none" };
+    if (/signed out of the package/i.test(raw))
+        return { message: "This device was signed out of the package. Enter the device code to use it here.", action: "code" };
+    if (/device limit/i.test(raw))
+        return { message: "This package has reached its device limit. Use a device it's been on before, or choose a package.", action: "buy" };
+    if (/expired|paused|invalid username or password|invalid user/i.test(raw))
+        return { message: "This package isn't active right now. Choose a package to get back online.", action: "buy" };
+    if (/already authorizing|retry later|not responding|timed out|timeout/i.test(raw))
+        return { message: "The WiFi router was busy. Try again in a few seconds.", action: "none" };
+    return { message: raw, action: "none" };
+}
+function openDeviceCodeForm() {
+    voucherLoginForm.classList.remove("hidden");
+    voucherCodeInput.focus();
+}
+function showPackages() {
+    setStep("package");
+    plansEl.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+function showHotspotRefusal(raw) {
+    const refusal = hotspotRefusal(raw);
+    const action = refusal.action === "buy" ? { label: "Choose a package", run: showPackages }
+        : refusal.action === "code" ? { label: "Enter device code", run: openDeviceCodeForm }
+            : undefined;
+    showError(refusal.message, { scope: "router", action });
+    if (refusal.action === "code")
+        openDeviceCodeForm();
+    return refusal;
 }
 // The router just turned this device away (the error param is only set on
 // a failed sign-in). Auto-signing in again would bounce straight back here
@@ -2289,7 +2404,7 @@ function noteAutoSignIn() {
     catch (_error) { }
 }
 if (state.hotspot?.error)
-    showError(friendlyHotspotError(decodeURIComponent(state.hotspot.error)));
+    showHotspotRefusal(decodeURIComponent(state.hotspot.error));
 voucherLoginToggle?.addEventListener("click", () => {
     voucherLoginForm.classList.toggle("hidden");
     if (!voucherLoginForm.classList.contains("hidden"))
@@ -2340,7 +2455,7 @@ voucherLoginForm?.addEventListener("submit", async (event) => {
             await attemptAutoConnect(payload.data.username, payload.data.password, voucherLoginStatus, voucherLoginForm, { rejoin: true });
         }
         catch (error) {
-            setConnectState(voucherLoginStatus, voucherLoginForm, "failed", error instanceof Error ? error.message : "That code isn't valid.");
+            setConnectState(voucherLoginStatus, voucherLoginForm, "failed", friendlyError(error, "That code isn't valid."));
         }
         return;
     }
@@ -2363,7 +2478,7 @@ voucherLoginForm?.addEventListener("submit", async (event) => {
         });
     }
     catch (error) {
-        setConnectState(voucherLoginStatus, voucherLoginForm, "failed", error instanceof Error ? error.message : "Voucher could not be redeemed.");
+        setConnectState(voucherLoginStatus, voucherLoginForm, "failed", friendlyError(error, "Voucher could not be redeemed."));
     }
 });
 existingLoginToggle?.addEventListener("click", () => {
@@ -2415,7 +2530,7 @@ receiptLoginForm?.addEventListener("submit", async (event) => {
         await attemptAutoConnect(payload.data.username, payload.data.password, receiptLoginStatus, receiptLoginForm, { rejoin: true });
     }
     catch (error) {
-        setConnectState(receiptLoginStatus, receiptLoginForm, "failed", error instanceof Error ? error.message : "Couldn't find that M-PESA code.");
+        setConnectState(receiptLoginStatus, receiptLoginForm, "failed", friendlyError(error, "Couldn't find that M-PESA code."));
     }
 });
 async function attemptReturningDeviceAutoConnect() {
@@ -2423,7 +2538,6 @@ async function attemptReturningDeviceAutoConnect() {
         return false;
     const remembered = loadRememberedAccess();
     if (remembered) {
-        showError("");
         // Was hideCredentials: true -- but that left someone who'd genuinely
         // forgotten their password with no way to see it again short of the
         // M-PESA receipt lookup, even though they're looking right at their own
@@ -2454,7 +2568,6 @@ async function attemptReturningDeviceAutoConnect() {
         const payload = await response.json();
         if (!payload?.data?.username)
             return false;
-        showError("");
         showConnectedPanel(payload.data, {
             heading: "Welcome back",
             message: "You already have WiFi access on this device — reconnecting you now."
@@ -2536,7 +2649,7 @@ async function checkPromo() {
         await attemptAutoConnect(payload.data.username, payload.data.password, promoStatus, null, { freshGrant: true, holdBeforeConnect: false });
     }
     catch (error) {
-        promoStatus.textContent = error instanceof Error ? error.message : "Couldn't activate free access.";
+        promoStatus.textContent = friendlyError(error, "Couldn't activate free access.");
     }
     return true;
 }
@@ -2565,7 +2678,7 @@ async function finishRouterSignOut() {
 }
 async function bootstrap() {
     await finishRouterSignOut();
-    const loadPlansPromise = loadPlans().catch((error) => showError(error instanceof Error ? error.message : "Unable to load packages."));
+    const loadPlansPromise = loadPlans().catch((error) => showError(friendlyError(error, "Unable to load packages.")));
     const promoActive = await checkPromo();
     if (promoActive) {
         await loadPlansPromise;
@@ -2625,7 +2738,7 @@ signOutDeviceBtn.addEventListener("click", async () => {
     catch (error) {
         signOutDeviceBtn.disabled = false;
         signOutDeviceBtn.textContent = "Sign out this device";
-        showError(error instanceof Error ? error.message : "Couldn't sign this device out.");
+        showError(friendlyError(error, "Couldn't sign this device out."));
     }
 });
 if (new URLSearchParams(window.location.search).has("signedOut")) {
@@ -2724,7 +2837,7 @@ packageUpgradePay.addEventListener("click", async () => {
         setTimeout(poll, 3000);
     }
     catch (error) {
-        packageUpgradeStatus.textContent = error instanceof Error ? error.message : "Couldn't send the M-PESA prompt.";
+        packageUpgradeStatus.textContent = friendlyError(error, "Couldn't send the M-PESA prompt.");
         packageUpgradePay.disabled = false;
     }
 });
@@ -2827,7 +2940,7 @@ addDevicePay.addEventListener("click", async () => {
         setTimeout(poll, 3000);
     }
     catch (error) {
-        addDeviceStatus.textContent = error instanceof Error ? error.message : "Couldn't send the M-PESA prompt.";
+        addDeviceStatus.textContent = friendlyError(error, "Couldn't send the M-PESA prompt.");
         addDevicePay.disabled = false;
     }
 });
