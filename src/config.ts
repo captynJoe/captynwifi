@@ -113,7 +113,10 @@ export const config = {
     cookieSweep: readSweepMode("CAPTYN_WIFI_COOKIE_SWEEP"),
     // Logs off router sessions whose package has ended, in case the one-off
     // logoff at expiry failed. "off" | "dry-run" (log only) | "on".
-    sessionSweep: readSweepMode("CAPTYN_WIFI_SESSION_SWEEP")
+    sessionSweep: readSweepMode("CAPTYN_WIFI_SESSION_SWEEP"),
+    // Signs a paid device that dropped off back in when its recorded identity
+    // still matches. "off" | "dry-run" (log only) | "on".
+    autoReconnect: readSweepMode("CAPTYN_WIFI_AUTO_RECONNECT")
   },
   governor: {
     enabled: readBoolean("CAPTYN_WIFI_GOVERNOR_ENABLED"),

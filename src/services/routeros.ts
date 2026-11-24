@@ -581,6 +581,68 @@ export async function forgetHotspotDeviceForUser(deviceMac: string, username: st
   return removeHotspotCookies(cookies.filter((cookie) => cookie.user === username).map((cookie) => cookie.id));
 }
 
+export type WaitingHotspotHost = { deviceMac: string; address: string; identity: HotspotDeviceIdentity };
+
+// Devices on the hotspot network that aren't signed in, with what their DHCP
+// lease says about them -- one router conversation for the whole list.
+export async function listWaitingHotspotHosts(): Promise<WaitingHotspotHost[] | null> {
+  if (missingRouterConfig()) return null;
+  const client = new RouterOsApiClient();
+  try {
+    await client.connect();
+    await client.login();
+    const hosts = sentencesToRows(await client.command([
+      "/ip/hotspot/host/print",
+      "=.proplist=mac-address,address,authorized,bypassed",
+      "?authorized=false"
+    ])).filter((row) => row["mac-address"] && row.address && row.bypassed !== "true");
+    if (hosts.length === 0) return [];
+    const leases = new Map(sentencesToRows(await client.command([
+      "/ip/dhcp-server/lease/print",
+      "=.proplist=mac-address,host-name,class-id,client-id"
+    ])).map((row) => [(row["mac-address"] || "").toUpperCase(), row]));
+    return hosts.map((row) => {
+      const deviceMac = row["mac-address"].toUpperCase();
+      const lease = leases.get(deviceMac);
+      return {
+        deviceMac,
+        address: row.address,
+        identity: {
+          hostName: lease?.["host-name"] || null,
+          dhcpClassId: lease?.["class-id"] || null,
+          dhcpClientId: lease?.["client-id"] || null
+        }
+      };
+    });
+  } catch {
+    return null;
+  } finally {
+    client.close();
+  }
+}
+
+export async function loginHotspotHost(input: { username: string; password: string; deviceMac: string; address: string }): Promise<{ ok: boolean; error?: string }> {
+  const skippedReason = missingRouterConfig();
+  if (skippedReason) return { ok: false, error: skippedReason };
+  const client = new RouterOsApiClient();
+  try {
+    await client.connect();
+    await client.login();
+    await client.command([
+      "/ip/hotspot/active/login",
+      `=user=${input.username}`,
+      `=password=${input.password}`,
+      `=mac-address=${input.deviceMac}`,
+      `=ip=${input.address}`
+    ]);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "RouterOS login failed" };
+  } finally {
+    client.close();
+  }
+}
+
 export async function listActiveHotspotSessions(): Promise<Array<{ user: string; deviceMac: string }> | null> {
   if (missingRouterConfig()) return null;
   const client = new RouterOsApiClient();

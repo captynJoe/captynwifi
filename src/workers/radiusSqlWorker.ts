@@ -7,6 +7,7 @@ import { applyOutageCredit, evaluateAccountingOutage, resumePausedEntitlements, 
 import { activateDuePromos, endPromo, getActivePromo } from "../services/promo.js";
 import { kickHotspotUser, kickPppoeUser } from "../services/routeros.js";
 import { sweepExpiredSessions, sweepHotspotCookies } from "../services/cookieSweep.js";
+import { runAutoReconnect } from "../services/autoReconnect.js";
 
 async function applyProjection(id: string) {
   await prisma.$transaction(async (tx) => {
@@ -324,6 +325,21 @@ async function main() {
       .catch((error) => console.error("Cookie sweep error:", error))
       .finally(() => { sweeping = false; });
   }, 3 * 60 * 1000);
+
+  // Paid devices that dropped off the hotspot get signed back in (see
+  // autoReconnect.ts). Its own 30s timer: a dropped customer shouldn't wait
+  // for the 3-minute sweep.
+  let reconnecting = false;
+  setInterval(() => {
+    if (reconnecting) return;
+    reconnecting = true;
+    runAutoReconnect(prisma)
+      .then((result) => {
+        if (result && (result.planned ?? 0) > 0) console.log(`Auto-reconnect (${result.mode}): ${result.planned} of ${result.waiting} waiting device(s), ${result.signedIn} signed in, ${result.failed} failed`);
+      })
+      .catch((error) => console.error("Auto-reconnect error:", error))
+      .finally(() => { reconnecting = false; });
+  }, 30 * 1000);
 
   for (;;) {
     try {
