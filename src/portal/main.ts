@@ -990,6 +990,9 @@ function renderOutageNote(entitlement: Entitlement) {
 function renderDeviceList(entitlement: Entitlement) {
   const devices = entitlement.devices || [];
   const limit = Number(entitlement.deviceLimit || 1);
+  // A full package: signing a device out doesn't free its slot (every device
+  // used counts), so no Sign out buttons -- the notice offers what works.
+  const atLimit = accessDevices.classList.contains("at-limit");
   accessDevices.classList.remove("hidden");
   accessDevicesFeedback.classList.add("hidden");
   // A 1-device package shows just its device: a count and a code for
@@ -1013,7 +1016,7 @@ function renderDeviceList(entitlement: Entitlement) {
             ${isThisDevice ? '<span class="device-tag">This device</span>' : ""}
             ${device.signedOut
               ? '<span class="device-tag signed-out">Signed out</span>'
-              : isThisDevice
+              : isThisDevice || atLimit
                 ? ""
                 : `<button class="link-btn" type="button" data-remove-device-mac="${esc(device.deviceMac)}">Sign out</button>`}
           </div>`;
@@ -1027,24 +1030,44 @@ function hideDeviceLimitNotice() {
   accessDevicesNotice.classList.add("hidden");
   accessDevicesNotice.textContent = "";
   accessDevices.classList.remove("at-limit");
+  document.getElementById("access-devices-limit-actions")?.classList.add("hidden");
 }
 // state.currentEntitlement is normally set by showConnectedPanel, but
 // rememberDeviceForEntitlement can also fire from flows that haven't shown
 // that panel yet (manual login, receipt code, promo claim) -- synthesize a
 // minimal placeholder in that case so the device list still has
 // username/password to act on (e.g. for the Remove button).
-function showDeviceLimitNotice(message: string, devices: EntitlementDevice[], deviceLimit: number | undefined, username: string, password: string) {
+function showDeviceLimitNotice(message: string, devices: EntitlementDevice[], deviceLimit: number | undefined, username: string, password: string, deviceCap?: number) {
   if (!state.currentEntitlement) {
     state.currentEntitlement = { username, password, expiresAt: "" };
   }
   state.currentEntitlement.devices = devices;
   if (deviceLimit) state.currentEntitlement.deviceLimit = deviceLimit;
+  if (deviceCap) state.currentEntitlement.deviceCap = deviceCap;
   accessDevices.classList.remove("hidden");
   accessDevices.classList.add("at-limit");
-  accessDevicesNotice.textContent = message;
+  const active = devices.filter((device) => !device.signedOut).length;
+  accessDevicesNotice.textContent = devices.length && deviceCap
+    ? `Full: in use on ${active} device${active === 1 ? "" : "s"}, ${deviceCap} used in total. Or open it on one of these.`
+    : message;
   accessDevicesNotice.classList.remove("hidden");
+  const actions = document.getElementById("access-devices-limit-actions");
+  if (actions) {
+    actions.classList.remove("hidden");
+    // Hide the duplicate upgrade link below; "Add this device" is the upgrade.
+    packageUpgradeBtn.classList.add("hidden");
+  }
   renderDeviceList(state.currentEntitlement);
+  if (actions) packageUpgradeBtn.classList.add("hidden");
 }
+document.getElementById("limit-add-device-btn")?.addEventListener("click", () => {
+  packageUpgradeBtn.click();
+  packageUpgradePanel.scrollIntoView({ behavior: "smooth", block: "center" });
+});
+document.getElementById("limit-buy-btn")?.addEventListener("click", () => {
+  hideDeviceLimitNotice();
+  showPackages();
+});
 async function removeDevice(mac: string) {
   const entitlement = state.currentEntitlement;
   if (!entitlement) return;
@@ -1163,7 +1186,8 @@ async function rememberDeviceForEntitlement(username, password, { rejoin = false
         payload.data?.devices || [],
         payload.data?.deviceLimit,
         username,
-        password
+        password,
+        payload.data?.deviceCap
       );
       return;
     }
