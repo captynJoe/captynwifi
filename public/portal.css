@@ -525,3 +525,6 @@ button.extend-period-btn:hover, button#pay-button:hover { filter: brightness(1.0
 .portal-alert-dismiss { grid-column: 3; grid-row: 1; width: 32px; height: 32px; border: 1px solid var(--line-strong, rgba(127, 127, 127, .35)); border-radius: 9px; background: transparent; color: var(--text); font: inherit; cursor: pointer; }
 .portal-alert-action { grid-column: 2 / span 2; justify-self: start; padding: 9px 14px; border: 0; border-radius: 9px; background: var(--red); color: #fff; font: inherit; font-weight: 800; cursor: pointer; }
 .portal-alert-action.hidden { display: none; }
+/* The pre-alert-bar portal script toggles #error directly: keep its messages
+   visible inside the bar until the new script is deployed. */
+.portal-alert.hidden:has(#error:not(.hidden):not(:empty)) { display: grid !important; }
