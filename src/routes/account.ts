@@ -13,6 +13,7 @@ import {
 } from "../services/account.js";
 import { maskPhone } from "../services/clientTrace.js";
 import { rewardHousingLink } from "../services/linkReward.js";
+import { smsConfigured } from "../services/sms.js";
 
 // Customer accounts ("My WiFi"). Limits are per phone, not per IP: every
 // customer reaches us through the site's one public IP.
@@ -49,6 +50,12 @@ async function requireAccount(req: Request, res: Response) {
   }
   return session;
 }
+
+// Whether phone sign-in can work right now (SMS configured), so the page
+// never offers a code that can't be sent.
+accountRouter.get("/status", siteLimit, (_req, res) => {
+  return res.json({ data: { sms: smsConfigured() } });
+});
 
 accountRouter.post("/phone/start", siteLimit, phoneLimit("wifi-account-sms", 6), async (req, res, next) => {
   try {

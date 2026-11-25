@@ -441,8 +441,15 @@ loginToggle.addEventListener("click", () => {
   loginSection.classList.toggle("hidden");
 });
 
-// This script supports phone sign-in: show it, tuck the package login away.
-loginToggle.classList.remove("hidden");
-loginSection.classList.add("hidden");
-phoneForm.classList.remove("hidden");
+// Phone sign-in shows only when SMS codes can be sent; until then the
+// package login stays the way in.
+void fetch(api("/account/status"))
+  .then((response) => (response.ok ? response.json() : null))
+  .then((payload) => {
+    if (!payload?.data?.sms) return;
+    loginToggle.classList.remove("hidden");
+    loginSection.classList.add("hidden");
+    phoneForm.classList.remove("hidden");
+  })
+  .catch(() => {});
 if (readToken()) void loadAccount();
