@@ -2668,7 +2668,19 @@ async function claimTenantsOnlyPromo(promo): Promise<boolean> {
     });
     payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      if (["rent_overdue", "utilities_overdue", "housing_unavailable"].includes(payload.code) && payload.error) showError(payload.error);
+      // Paying what's overdue unlocks it straight away: Check again asks
+      // Housing afresh, no reload needed.
+      if (["rent_overdue", "utilities_overdue", "housing_unavailable"].includes(payload.code) && payload.error) {
+        showError(payload.error, {
+          action: {
+            label: "Check again",
+            run: () => {
+              clearError();
+              void claimTenantsOnlyPromo(promo);
+            }
+          }
+        });
+      }
       return false;
     }
   } catch (_error) {

@@ -4,6 +4,10 @@ import { applyRadiusProjectionRows, hasOtherActiveEntitlement } from "./radiusSq
 import { kickHotspotUser } from "./routeros.js";
 
 export const PROMO_PLAN_SOURCE = "captyn_wifi_promo";
+
+// A claim refused for a reason the customer should read (offer not started,
+// starting, ended) -- not a server fault.
+export class PromoClaimError extends Error {}
 const PROMO_PLAN_EXTERNAL_ID = "free-surfing-promo";
 
 export type StartPromoInput = {
@@ -241,12 +245,12 @@ async function ensurePromoPlan(tx: Prisma.TransactionClient, siteId: string, pro
 // offer's one-time-ever-per-device block.
 export async function claimPromoGrant(prisma: PrismaClient, promo: WifiPromo, deviceMacRaw: string) {
   const deviceMac = normalizeDeviceMac(deviceMacRaw);
-  if (!deviceMac) throw new Error("Device MAC required");
+  if (!deviceMac) throw new PromoClaimError("Connect to the CAPTYN WiFi network, then reopen this page.");
 
   const now = new Date();
-  if (now < promo.startsAt) throw new Error("This offer has not started yet");
-  if (!promo.activatedAt) throw new Error("This offer is starting. Try again in a moment.");
-  if (now >= promo.endsAt) throw new Error("This offer has ended");
+  if (now < promo.startsAt) throw new PromoClaimError("This offer hasn't started yet.");
+  if (!promo.activatedAt) throw new PromoClaimError("This offer is starting. Try again in a moment.");
+  if (now >= promo.endsAt) throw new PromoClaimError("This offer has ended.");
 
   const username = promoUsername(deviceMac);
   const durationSeconds = Math.max(60, Math.floor((promo.endsAt.getTime() - now.getTime()) / 1000));

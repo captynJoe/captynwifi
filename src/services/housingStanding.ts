@@ -10,7 +10,7 @@ export type HousingStandingReason = "good_standing" | "rent_overdue" | "utilitie
 export type HousingStanding = { eligible: boolean; reason: HousingStandingReason; houseNumber?: string };
 
 const PHONE_LOOKBACK_DAYS = 60;
-const CACHE_MS = 5 * 60 * 1000;
+const CACHE_MS = 2 * 60 * 1000;
 const cache = new Map<string, { at: number; standing: HousingStanding }>();
 
 export function housingConfigured() {
@@ -44,7 +44,10 @@ export async function fetchHousingStanding(buildingId: string, phone: string): P
   });
   const payload = await response.json().catch(() => ({})) as { data?: HousingStanding; error?: string };
   if (!response.ok || !payload.data) throw new Error(`CAPTYN Housing ${response.status}: ${payload.error ?? "no answer"}`);
-  cache.set(key, { at: Date.now(), standing: payload.data });
+  // Only a yes is remembered: a tenant who has just paid what was overdue
+  // must be let in on the very next try, not after the cache runs out.
+  if (payload.data.eligible) cache.set(key, { at: Date.now(), standing: payload.data });
+  else cache.delete(key);
   return payload.data;
 }
 

@@ -8,7 +8,7 @@ import { prisma } from "../prisma.js";
 import { formatDarajaMsisdn, getMpesaStatus, initiateWifiStkPush, isSuccessfulStkQuery, queryWifiStkPush } from "../services/mpesa.js";
 import { buildRadiusProjection, createRadiusSecret, normalizeDeviceMac, normalizeWifiUsername } from "../services/radiusProjection.js";
 import { applyRadiusProjectionRows } from "../services/radiusSqlApply.js";
-import { claimPromoGrant, getLivePromo } from "../services/promo.js";
+import { PromoClaimError, claimPromoGrant, getLivePromo } from "../services/promo.js";
 import { formatCreditDuration } from "../services/credits.js";
 import { bodyFieldKey, clientRateLimit, ipKey } from "../middleware/rateLimitGuard.js";
 import { ensureConnectCode, normalizeConnectCode } from "../services/connectCode.js";
@@ -2136,6 +2136,7 @@ publicRouter.post("/promo/claim", publicPromoClaimLimit, async (req, res, next) 
     const grant = await claimPromoGrant(prisma, promo, parsed.deviceMac);
     return res.json({ data: toJsonSafe(grant) });
   } catch (error) {
+    if (error instanceof PromoClaimError) return res.status(409).json({ error: error.message });
     return next(error);
   }
 });
