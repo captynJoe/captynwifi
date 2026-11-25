@@ -89,6 +89,8 @@ interface ConnectedPanelOptions {
   heading?: string;
   message?: string;
   skipAutoConnect?: boolean;
+  // The device was just confirmed online; no connect button needed.
+  confirmedOnline?: boolean;
   freshGrant?: boolean;
   recoveryReference?: string;
   hideCredentials?: boolean;
@@ -1401,7 +1403,7 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
     if (expiresAt) {
       showConnectedPanel(
         { username, password, expiresAt, startsAt, deviceLimit, devices, connectCode, deviceCap },
-        { heading: "You're connected", message: "You're all set. You can browse now.", skipAutoConnect: true }
+        { heading: "You're connected", message: "You're all set. You can browse now.", skipAutoConnect: true, confirmedOnline: true }
       );
     } else {
       hideManualConnectFallback();
@@ -1994,7 +1996,7 @@ async function loadConnectCode(entitlement: Entitlement) {
     renderDeviceList(entitlement);
   } catch (_error) {}
 }
-function showConnectedPanel(entitlement: Entitlement, { heading, skipAutoConnect, freshGrant, recoveryReference, hideCredentials }: ConnectedPanelOptions = {}) {
+function showConnectedPanel(entitlement: Entitlement, { heading, skipAutoConnect, confirmedOnline, freshGrant, recoveryReference, hideCredentials }: ConnectedPanelOptions = {}) {
   if (workspaceEl) workspaceEl.classList.add("hidden");
   hideManualConnectFallback();
   updateAccessCopy(heading || "Access active");
@@ -2025,7 +2027,19 @@ function showConnectedPanel(entitlement: Entitlement, { heading, skipAutoConnect
   startExpiryWatch(entitlement.expiresAt, entitlement.startsAt);
   saveRememberedAccess(entitlement);
   signOutDeviceBtn.classList.toggle("hidden", !currentDeviceMac());
-  if (skipAutoConnect) return;
+  if (skipAutoConnect) {
+    // No automatic sign-in this time (e.g. one was tried moments ago), but a
+    // device on the sign-in page that isn't online must still have a way on:
+    // without this the panel showed the package and nothing to tap.
+    if (!confirmedOnline && state.hotspot?.login) {
+      showManualConnectFallback(entitlement.username, entitlement.password, {
+        placement: manualConnectPlacement(),
+        message: "Your package is active.",
+        buttonLabel: "Connect now"
+      });
+    }
+    return;
+  }
   if (state.hotspot?.login) {
     // attemptAutoConnect navigates to the router's login page (a hidden
     // iframe login is blocked as mixed content -- see there).
