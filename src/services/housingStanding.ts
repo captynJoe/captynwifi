@@ -7,7 +7,7 @@ import { config } from "../config.js";
 // yes/no, the house number and a reason, never amounts.
 
 export type HousingStandingReason = "good_standing" | "rent_overdue" | "utilities_overdue" | "not_a_tenant";
-export type HousingStanding = { eligible: boolean; reason: HousingStandingReason; houseNumber?: string };
+export type HousingStanding = { eligible: boolean; reason: HousingStandingReason; houseNumber?: string; tenancyId?: string };
 
 const PHONE_LOOKBACK_DAYS = 60;
 const CACHE_MS = 2 * 60 * 1000;

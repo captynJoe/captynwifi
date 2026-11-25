@@ -715,3 +715,17 @@ model WifiPromoHouseGrant {
   @@unique([promoId, buildingId, houseNumber])
   @@index([promoId, deviceMac])
 }
+
+// Once-per-tenancy reward for confirming a Village Inn tenant's phone in My
+// WiFi: 12 hours as a credit if nothing was overdue at that first link.
+model WifiLinkReward {
+  id          String   @id @default(uuid())
+  tenancyId   String   @unique
+  buildingId  String
+  houseNumber String
+  phone       String
+  // "granted" | "declined_overdue"
+  outcome     String
+  creditId    String?
+  createdAt   DateTime @default(now())
+}

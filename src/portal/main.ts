@@ -400,6 +400,27 @@ async function loadRedeemableCredits(username = notifUsername) {
   }
 }
 
+// Credits on a phone confirmed in My WiFi (the house-link reward, say) show
+// even on a device with no package yet.
+function accountToken(): string | null {
+  try { return localStorage.getItem("captyn-wifi-account"); } catch (_error) { return null; }
+}
+async function loadAccountCredits() {
+  const token = accountToken();
+  if (!token) return;
+  try {
+    const mac = state.hotspot?.mac;
+    const response = await fetch(api(`/credits/account${mac ? `?deviceMac=${encodeURIComponent(mac)}` : ""}`), { headers: { "x-captyn-wifi-account": token } });
+    if (!response.ok) return;
+    const payload = await response.json();
+    const items = payload?.data?.notifications || [];
+    if (!items.length) return;
+    mergeNotificationItems(items);
+    notifControl?.classList.remove("hidden");
+    renderNotifications();
+  } catch (_error) {}
+}
+
 async function loadNotifications(username: string, password?: string) {
   notifUsername = username;
   const access = state.currentEntitlement || loadRememberedAccess();
@@ -434,9 +455,10 @@ async function activateCredit(creditId: string) {
   showError("");
   renderNotifications();
   try {
+    const token = accountToken();
     const response = await fetch(api(`/credits/${encodeURIComponent(creditId)}/activate`), {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(token ? { "x-captyn-wifi-account": token } : {}) },
       body: JSON.stringify({ username: notifUsername || undefined, password: (state.currentEntitlement || loadRememberedAccess())?.password, deviceMac: state.hotspot.mac })
     });
     const payload = await response.json().catch(() => ({}));
@@ -2680,12 +2702,11 @@ async function claimTenantsOnlyPromo(promo, { move = false } = {}): Promise<bool
   const mac = state.hotspot?.mac;
   if (!mac) return false;
   let payload;
-  let accountToken: string | null = null;
-  try { accountToken = localStorage.getItem("captyn-wifi-account"); } catch (_error) {}
+  const token = accountToken();
   try {
     const response = await fetch(api("/promo/claim"), {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...(accountToken ? { "x-captyn-wifi-account": accountToken } : {}) },
+      headers: { "Content-Type": "application/json", ...(token ? { "x-captyn-wifi-account": token } : {}) },
       body: JSON.stringify({ deviceMac: mac, move })
     });
     payload = await response.json().catch(() => ({}));
@@ -2701,7 +2722,7 @@ async function claimTenantsOnlyPromo(promo, { move = false } = {}): Promise<bool
       }
       // No confirmed phone links this device to a house yet.
       if (payload.code === "no_phone" && payload.error) {
-        showError(payload.error, { action: { label: "Confirm my number", run: () => { window.location.href = `${basePath}/devices.html`; } } });
+        showError(payload.error, { action: { label: "Confirm my number", run: () => { window.location.href = `${basePath}/devices.html${window.location.search}`; } } });
         return false;
       }
       if (["rent_overdue", "utilities_overdue", "housing_unavailable"].includes(payload.code) && payload.error) {
@@ -2760,6 +2781,11 @@ async function finishRouterSignOut() {
     });
   } catch (_error) {}
 }
+// My WiFi keeps the router's sign-in details (the URL this page was opened
+// with), so coming back from it still knows which device this is.
+document.querySelectorAll<HTMLAnchorElement>('a[href="devices.html"]').forEach((link) => {
+  link.href = `devices.html${window.location.search}`;
+});
 async function bootstrap() {
   await finishRouterSignOut();
   const loadPlansPromise = loadPlans().catch((error) => showError(friendlyError(error, "Unable to load packages.")));
@@ -2771,6 +2797,14 @@ async function bootstrap() {
   }
 
   void loadRedeemableCredits(null);
+  // My WiFi's "Use on this device" comes back here with the credit to start.
+  const creditToActivate = new URLSearchParams(window.location.search).get("activateCredit");
+  if (creditToActivate) {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("activateCredit");
+    try { window.history.replaceState(null, "", url.toString()); } catch (_error) {}
+  }
+  void loadAccountCredits().then(() => { if (creditToActivate && state.hotspot?.mac) void activateCredit(creditToActivate); });
   void loadRewards();
 
   // Recognizes a returning device two ways, in order: this browser's own

@@ -7,7 +7,8 @@ export const CREDIT_REASONS = [
   "PROMO_COMPENSATION",
   "MANUAL_ADJUSTMENT",
   "SERVICE_RECOVERY",
-  "LOYALTY_REWARD"
+  "LOYALTY_REWARD",
+  "HOUSING_LINK_REWARD"
 ] as const;
 
 export type GrantCreditInput = {
@@ -37,6 +38,7 @@ export function formatCreditDuration(totalSeconds: number): string {
 function creditNotificationBody(durationSeconds: number, reason: string, expiresAt?: Date | null): string {
   const readable = formatCreditDuration(durationSeconds);
   if (reason === "LOYALTY_REWARD") return `Thanks for being a regular: ${readable} of free WiFi. Tap Activate when you want it to start.`;
+  if (reason === "HOUSING_LINK_REWARD") return `Thanks for linking your house: ${readable} of free WiFi. Tap Activate on the device you want it on.`;
   const cause =
     reason === "OUTAGE_COMPENSATION" || reason === "PROMO_COMPENSATION" || reason === "SERVICE_RECOVERY"
       ? "a service interruption"
@@ -73,7 +75,7 @@ export async function grantWifiCredit(prisma: PrismaClient, input: GrantCreditIn
       data: {
         customerPhone: input.customerPhone,
         type: "credit_granted",
-        title: input.reason === "LOYALTY_REWARD" ? "Free WiFi, on us" : "We've credited your account",
+        title: input.reason === "LOYALTY_REWARD" || input.reason === "HOUSING_LINK_REWARD" ? "Free WiFi, on us" : "We've credited your account",
         body: creditNotificationBody(input.durationSeconds, input.reason, input.expiresAt),
         data: {
           creditId: credit.id,

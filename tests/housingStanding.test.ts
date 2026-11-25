@@ -25,3 +25,10 @@ test("Housing unreachable is said plainly, not treated as a refusal or a pass", 
   const gate = promoGateResult(VI, "254712345678", null, true);
   assert.equal(gate.allowed === false && gate.code, "housing_unavailable");
 });
+
+test("the house-link reward is given only when nothing is overdue at the first link", async () => {
+  const { linkRewardOutcome, LINK_REWARD_SECONDS } = await import("../src/services/linkReward.js");
+  assert.equal(linkRewardOutcome({ eligible: true }), "granted");
+  assert.equal(linkRewardOutcome({ eligible: false }), "declined_overdue");
+  assert.equal(LINK_REWARD_SECONDS, 12 * 3600);
+});

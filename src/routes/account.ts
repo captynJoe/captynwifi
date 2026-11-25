@@ -12,6 +12,7 @@ import {
   startPhoneVerification, verifyPhoneCode
 } from "../services/account.js";
 import { maskPhone } from "../services/clientTrace.js";
+import { rewardHousingLink } from "../services/linkReward.js";
 
 // Customer accounts ("My WiFi"). Limits are per phone, not per IP: every
 // customer reaches us through the site's one public IP.
@@ -66,7 +67,11 @@ accountRouter.post("/phone/verify", siteLimit, phoneLimit("wifi-account-verify",
     const code = z.string().trim().regex(/^\d{6}$/).parse(req.body?.code);
     const deviceMac = normalizeDeviceMac(typeof req.body?.deviceMac === "string" ? req.body.deviceMac : null);
     const { token, expiresAt } = await verifyPhoneCode(prisma, phone, code, deviceMac);
-    return res.json({ data: { token, expiresAt, phone: maskPhone(phone) } });
+    const linkReward = await rewardHousingLink(prisma, phone).catch((error) => {
+      console.error("Link reward failed:", error);
+      return null;
+    });
+    return res.json({ data: { token, expiresAt, phone: maskPhone(phone), linkReward } });
   } catch (error) {
     return sendAccountError(error, res, next);
   }
@@ -136,7 +141,14 @@ accountRouter.get("/me", siteLimit, async (req, res, next) => {
         login: { username: e.username, password: e.cleartextSecret }
       };
     }));
-    return res.json({ data: { phone: maskPhone(session.phone), packages } });
+    const credits = await prisma.wifiCredit.findMany({
+      where: { customerPhone: session.phone, consumedAt: null, OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
+      orderBy: { createdAt: "desc" },
+      take: 10,
+      select: { id: true, durationSeconds: true, reason: true, expiresAt: true }
+    });
+    const link = await prisma.wifiLinkReward.findFirst({ where: { phone: session.phone }, orderBy: { createdAt: "desc" }, select: { houseNumber: true } });
+    return res.json({ data: { phone: maskPhone(session.phone), house: link?.houseNumber ?? null, packages, credits } });
   } catch (error) {
     return sendAccountError(error, res, next);
   }

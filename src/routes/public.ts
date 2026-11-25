@@ -328,7 +328,7 @@ function publicCreditNotification(credit: WifiCredit, now = new Date()) {
   return {
     id: `credit-${credit.id}`,
     type: "credit_available",
-    title: credit.reason === "LOYALTY_REWARD" ? "Free WiFi, on us" : "Free internet waiting",
+    title: credit.reason === "LOYALTY_REWARD" || credit.reason === "HOUSING_LINK_REWARD" ? "Free WiFi, on us" : "Free internet waiting",
     body: creditActivationBody(credit),
     readAt: null,
     createdAt: credit.createdAt,
@@ -806,7 +806,7 @@ async function resolveCreditPlan(tx: Prisma.TransactionClient, credit: WifiCredi
   throw new PublicRouteError(500, "No WiFi package template is available for this credit.");
 }
 
-async function activateWifiCredit(creditId: string, input: z.infer<typeof creditActivationSchema>) {
+async function activateWifiCredit(creditId: string, input: z.infer<typeof creditActivationSchema>, accountPhone: string | null = null) {
   const requestedUsername = input.username?.trim() || null;
   const requestedPassword = input.password || null;
   const requestedDeviceMac = normalizeDeviceMac(input.deviceMac);
@@ -826,7 +826,8 @@ async function activateWifiCredit(creditId: string, input: z.infer<typeof credit
           orderBy: { createdAt: "desc" }
         })
       : null;
-    const accountMatches = Boolean(owner && owner.cleartextSecret === requestedPassword);
+    // A phone confirmed by SMS in My WiFi also proves ownership.
+    const accountMatches = Boolean(owner && owner.cleartextSecret === requestedPassword) || accountPhone === credit.customerPhone;
     const deviceMatches = requestedDeviceMac !== null && credit.deviceMac !== null && requestedDeviceMac === credit.deviceMac;
     if (credit.deviceMac) {
       if (!deviceMatches) throw new PublicRouteError(403, "This credit was issued for another device. Reopen CAPTYN WiFi from the credited device.");
@@ -2365,10 +2366,28 @@ publicRouter.post("/credits/redeemable", publicCreditActivationLimit, async (req
   } catch (error) { return next(error); }
 });
 
+// Credits waiting on a phone confirmed in My WiFi (e.g. the house-link reward),
+// for a device that has no package login yet.
+publicRouter.get("/credits/account", publicCreditActivationLimit, async (req, res, next) => {
+  try {
+    const account = await accountFromToken(prisma, req.header("x-captyn-wifi-account") || undefined);
+    if (!account) return res.status(401).json({ error: "Confirm your phone number in My WiFi." });
+    const now = new Date();
+    const deviceMac = normalizeDeviceMac(typeof req.query.deviceMac === "string" ? req.query.deviceMac : null);
+    const credits = await prisma.wifiCredit.findMany({
+      where: { AND: [activeCreditWhere(now), { customerPhone: account.phone }, { OR: [{ deviceMac: null }, ...(deviceMac ? [{ deviceMac }] : [])] }] },
+      orderBy: { createdAt: "desc" }, take: 20
+    });
+    const notifications = credits.map((credit) => publicCreditNotification(credit, now));
+    return res.json({ data: toJsonSafe({ notifications, unreadCount: notifications.length }) });
+  } catch (error) { return next(error); }
+});
+
 publicRouter.post("/credits/:id/activate", publicCreditActivationLimit, async (req, res, next) => {
   try {
     const parsed = creditActivationSchema.parse(req.body);
-    const activated = await activateWifiCredit(req.params.id, parsed);
+    const account = await accountFromToken(prisma, req.header("x-captyn-wifi-account") || undefined);
+    const activated = await activateWifiCredit(req.params.id, parsed, account?.phone ?? null);
     return res.status(201).json({
       data: toJsonSafe({
         id: activated.intent.id,

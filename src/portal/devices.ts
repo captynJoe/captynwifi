@@ -290,6 +290,35 @@ function deviceStatus(device: AccountDevice) {
   return '<span class="device-tag offline">Offline</span>';
 }
 
+// Back to the WiFi page with the router's sign-in details it came with.
+function portalHref(extra: Record<string, string> = {}) {
+  const params = new URLSearchParams(window.location.search);
+  for (const [key, value] of Object.entries(extra)) params.set(key, value);
+  const query = params.toString();
+  return `${basePath}/${query ? `?${query}` : ""}`;
+}
+document.querySelectorAll<HTMLAnchorElement>("a.account-back").forEach((link) => { link.href = portalHref(); });
+
+// Free time waiting on this number. It's activated from the WiFi page on
+// the device that should get it, so that device is the one signed in.
+function renderCredits(credits: Array<{ id: string; durationSeconds: number; reason: string; expiresAt: string | null }>) {
+  let el = document.getElementById("account-credits");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "account-credits";
+    el.className = "account-packages";
+    homePackages.before(el);
+  }
+  el.innerHTML = credits.map((credit) => {
+    const hours = Math.round(credit.durationSeconds / 3600);
+    const label = hours >= 1 ? `${hours} hour${hours === 1 ? "" : "s"}` : `${Math.round(credit.durationSeconds / 60)} minutes`;
+    return `<article class="account-package account-credit">
+      <div class="account-package-head"><strong>${esc(label)} free</strong>${credit.expiresAt ? `<span>Use by ${esc(new Date(credit.expiresAt).toLocaleDateString())}</span>` : ""}</div>
+      <a class="primary account-back" href="${esc(portalHref({ activateCredit: credit.id }))}">Use on this device</a>
+    </article>`;
+  }).join("");
+}
+
 function renderPackages(packages: AccountPackage[]) {
   homePackages.innerHTML = packages.length
     ? packages.map((pkg) => `<article class="account-package">
@@ -318,7 +347,8 @@ async function loadAccount() {
     manageSection.classList.add("hidden");
     homeSection.classList.remove("hidden");
     signOutBtn.classList.remove("hidden");
-    homePhone.textContent = data.phone || "";
+    homePhone.textContent = data.house ? `${data.phone} · House ${data.house}` : data.phone || "";
+    renderCredits(data.credits || []);
     renderPackages(data.packages || []);
     homeStatus.textContent = "";
   } catch (error) {
@@ -362,6 +392,10 @@ codeForm.addEventListener("submit", async (event) => {
     writeToken(data.token);
     phoneStatus.textContent = "";
     await loadAccount();
+    const reward = data.linkReward;
+    if (reward?.status === "granted") homeStatus.textContent = `House ${reward.houseNumber} linked. ${reward.hours} hours of free WiFi is waiting below.`;
+    else if (reward?.status === "declined_overdue") homeStatus.textContent = `House ${reward.houseNumber} linked. It has something overdue, so the linking reward wasn't given. Offers unlock once it's clear.`;
+    else if (reward?.houseNumber) homeStatus.textContent = `House ${reward.houseNumber} linked.`;
   } catch (error) {
     phoneStatus.textContent = error instanceof Error ? error.message : "Couldn't check the code.";
   } finally {
