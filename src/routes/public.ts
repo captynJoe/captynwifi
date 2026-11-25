@@ -8,7 +8,8 @@ import { prisma } from "../prisma.js";
 import { formatDarajaMsisdn, getMpesaStatus, initiateWifiStkPush, isSuccessfulStkQuery, queryWifiStkPush } from "../services/mpesa.js";
 import { buildRadiusProjection, createRadiusSecret, normalizeDeviceMac, normalizeWifiUsername } from "../services/radiusProjection.js";
 import { applyRadiusProjectionRows } from "../services/radiusSqlApply.js";
-import { PromoClaimError, claimPromoGrant, getLivePromo } from "../services/promo.js";
+import { PromoClaimError, assignHouseGrant, claimPromoGrant, getLivePromo, releaseMovedGrant } from "../services/promo.js";
+import { accountFromToken } from "../services/account.js";
 import { formatCreditDuration } from "../services/credits.js";
 import { bodyFieldKey, clientRateLimit, ipKey } from "../middleware/rateLimitGuard.js";
 import { ensureConnectCode, normalizeConnectCode } from "../services/connectCode.js";
@@ -2110,7 +2111,7 @@ publicRouter.get("/promo", async (_req, res, next) => {
   }
 });
 
-const promoClaimSchema = z.object({ deviceMac: z.string().trim().min(1) });
+const promoClaimSchema = z.object({ deviceMac: z.string().trim().min(1), move: z.boolean().optional() });
 
 publicRouter.post("/promo/claim", publicPromoClaimLimit, async (req, res, next) => {
   try {
@@ -2119,7 +2120,10 @@ publicRouter.post("/promo/claim", publicPromoClaimLimit, async (req, res, next) 
     if (!promo) return res.status(404).json({ error: "This offer has ended." });
     if (promo.housingBuildingId) {
       const deviceMac = normalizeDeviceMac(parsed.deviceMac);
-      const phone = deviceMac ? await confirmedPhoneForDevice(prisma, deviceMac) : null;
+      // A phone confirmed by SMS (My WiFi) first; else the number that paid
+      // by M-PESA from this device. Never a typed, unconfirmed number.
+      const account = await accountFromToken(prisma, req.header("x-captyn-wifi-account") || undefined);
+      const phone = account?.phone ?? (deviceMac ? await confirmedPhoneForDevice(prisma, deviceMac) : null);
       let standing: HousingStanding | null = null;
       let unavailable = false;
       if (phone) {
@@ -2132,6 +2136,21 @@ publicRouter.post("/promo/claim", publicPromoClaimLimit, async (req, res, next) 
       }
       const gate = promoGateResult(config.housing.promoBuildingName, phone, standing, unavailable);
       if (!gate.allowed) return res.status(gate.code === "housing_unavailable" ? 503 : 403).json({ error: gate.message, code: gate.code });
+      // One device per house, the tenant's choice.
+      if (deviceMac && phone && gate.houseNumber) {
+        const assigned = await assignHouseGrant(prisma, {
+          promoId: promo.id, buildingId: promo.housingBuildingId, houseNumber: gate.houseNumber, phone, deviceMac, move: Boolean(parsed.move)
+        });
+        if (assigned.status === "other_device") {
+          const other = await prisma.wifiDevice.findUnique({ where: { mac: assigned.deviceMac }, select: { hostName: true } });
+          return res.status(409).json({
+            error: `House ${gate.houseNumber}'s free access is on another device${other?.hostName ? ` (${other.hostName})` : ""}.`,
+            code: "promo_on_other_device",
+            data: { houseNumber: gate.houseNumber, deviceName: other?.hostName ?? null }
+          });
+        }
+        if (assigned.movedFrom) void releaseMovedGrant(assigned.movedFrom);
+      }
     }
     const grant = await claimPromoGrant(prisma, promo, parsed.deviceMac);
     return res.json({ data: toJsonSafe(grant) });

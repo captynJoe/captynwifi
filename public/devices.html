@@ -3,10 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Manage your CAPTYN WiFi devices</title>
+    <title>My WiFi · CAPTYN</title>
     <script src="theme.js?v=2026080402"></script>
     <link rel="stylesheet" href="theme.css?v=2026103102" />
-    <link rel="stylesheet" href="portal.css?v=2026103101" />
+    <link rel="stylesheet" href="portal.css?v=2026112502" />
   </head>
   <body>
     <main class="portal-app">
@@ -19,23 +19,47 @@
             <button id="settings-toggle-btn" class="settings-toggle" type="button" aria-label="Open settings" aria-controls="settings-menu" aria-expanded="false">⚙</button>
             <div id="settings-menu" class="settings-menu hidden" role="menu" aria-label="Settings">
               <button id="theme-toggle-btn" class="theme-toggle settings-menu-item" type="button" role="menuitem">Theme</button>
+              <button id="account-sign-out-btn" class="settings-menu-item hidden" type="button" role="menuitem">Sign out of My WiFi</button>
             </div>
           </div>
         </div>
       </header>
 
-      <section id="devices-login" class="checkout-panel">
-        <div class="section-head">
-          <h2>Manage your devices</h2>
-        </div>
-        <p class="status-text">This works from any browser, anytime — you don't need to be connected to CAPTYN WiFi right now. Enter the username and password you got when you bought your plan.</p>
+      <section id="account-phone" class="checkout-panel">
+        <div class="section-head"><h2>My WiFi</h2></div>
+        <!-- Phone sign-in stays hidden until the My WiFi script runs; the
+             package login below works with the older script meanwhile. -->
+        <form id="account-phone-form" class="payment-form hidden">
+          <label class="field" for="account-phone-input"><span>Phone number</span><input id="account-phone-input" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="0712 345 678" required /></label>
+          <button id="account-phone-submit" class="primary" type="submit">Send code</button>
+        </form>
+        <form id="account-code-form" class="payment-form hidden">
+          <label class="field" for="account-code-input"><span id="account-code-label">Code from SMS</span><input id="account-code-input" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="\d{6}" required /></label>
+          <button id="account-code-submit" class="primary" type="submit">Confirm</button>
+          <button id="account-code-back" class="ghost existing-login-toggle" type="button">Use a different number</button>
+        </form>
+        <p id="account-phone-status" class="status-text" role="status"></p>
+
+        <button id="devices-login-toggle" class="ghost existing-login-toggle hidden" type="button">Use the package login instead</button>
+        <div id="devices-login">
         <form id="devices-login-form" class="payment-form">
-          <label class="field" for="devices-username"><span>Username</span><input id="devices-username" name="username" type="text" inputmode="tel" autocomplete="username" required /></label>
+          <label class="field" for="devices-username"><span>Username</span><input id="devices-username" name="username" type="text" autocomplete="username" required /></label>
           <label class="field" for="devices-password"><span>Password</span><input id="devices-password" name="password" type="text" autocomplete="current-password" required /></label>
-          <button id="devices-login-submit" class="primary" type="submit">View my devices</button>
+          <button id="devices-login-submit" class="secondary" type="submit">View my devices</button>
         </form>
         <p id="devices-login-status" class="status-text"></p>
+        </div>
         <a class="sponsor-link checkout-sponsor" href="https://captyn.shop/" target="_blank" rel="noopener">Powered by captyn.shop</a>
+      </section>
+
+      <section id="account-home" class="access-panel hidden">
+        <div class="section-head">
+          <h2>My WiFi</h2>
+          <span class="pill ok" id="account-phone-label"></span>
+        </div>
+        <div id="account-packages" class="account-packages"></div>
+        <p id="account-status" class="status-text" role="status"></p>
+        <a class="primary account-back" href="/wifi/">Back to WiFi</a>
       </section>
 
       <section id="devices-manage" class="access-panel hidden">
@@ -45,12 +69,10 @@
         </div>
         <div id="devices-manage-list" class="access-devices-list"></div>
         <button id="devices-manage-code" type="button" class="credential access-connect-code hidden"><span>Code for another device</span><strong id="devices-manage-code-value" class="mono"></strong><em>Copy</em></button>
-        <p class="access-connect-code-hint">On the new device, join the WiFi, open the login page and enter this code.</p>
         <p id="devices-manage-status" class="status-text"></p>
-        <button id="devices-manage-switch" class="ghost existing-login-toggle" type="button">Check a different account</button>
-        <a class="sponsor-link checkout-sponsor" href="https://captyn.shop/" target="_blank" rel="noopener">Powered by captyn.shop</a>
+        <button id="devices-manage-switch" class="ghost existing-login-toggle" type="button">Back</button>
       </section>
     </main>
-    <script type="module" src="portal-build/devices.js?v=2026100703" data-cfasync="false"></script>
+    <script type="module" src="portal-build/devices.js?v=2026112501" data-cfasync="false"></script>
   </body>
 </html>

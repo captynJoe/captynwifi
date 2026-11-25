@@ -2504,6 +2504,26 @@ existingLoginForm?.addEventListener("submit", async (event) => {
     setConnectState(existingLoginStatus, null, "failed", "Connect to this WiFi network first, then reopen this page to log in.");
     return;
   }
+  // Phone + device code is the everyday login; a generated package login
+  // typed into the same boxes still works.
+  const phone = normalizeMpesaPhoneInput(username);
+  const deviceCode = password.replace(/[\s-]/g, "").toUpperCase();
+  if (phone && /^[A-Z0-9]{6}$/.test(deviceCode)) {
+    setConnectState(existingLoginStatus, existingLoginForm, "connecting", "Checking...");
+    try {
+      const response = await fetch(api("/account/code-sign-in"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone, code: deviceCode, deviceMac: state.hotspot?.mac || null })
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.data?.username) throw new Error(payload.error || "That number and device code don't match an active package.");
+      await attemptAutoConnect(payload.data.username, payload.data.password, existingLoginStatus, existingLoginForm, { rejoin: true });
+    } catch (error) {
+      setConnectState(existingLoginStatus, existingLoginForm, "failed", friendlyError(error, "That number and device code don't match an active package."));
+    }
+    return;
+  }
   await attemptAutoConnect(username, password, existingLoginStatus, existingLoginForm, { rejoin: true });
 });
 
@@ -2656,20 +2676,34 @@ async function checkPromo(): Promise<boolean> {
 // Tenants-only promo: check first, quietly. A tenant in good standing gets
 // the free-access screen; everyone else keeps the normal packages, and a
 // tenant with something overdue is told why (it stays until dismissed).
-async function claimTenantsOnlyPromo(promo): Promise<boolean> {
+async function claimTenantsOnlyPromo(promo, { move = false } = {}): Promise<boolean> {
   const mac = state.hotspot?.mac;
   if (!mac) return false;
   let payload;
+  let accountToken: string | null = null;
+  try { accountToken = localStorage.getItem("captyn-wifi-account"); } catch (_error) {}
   try {
     const response = await fetch(api("/promo/claim"), {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ deviceMac: mac })
+      headers: { "Content-Type": "application/json", ...(accountToken ? { "x-captyn-wifi-account": accountToken } : {}) },
+      body: JSON.stringify({ deviceMac: mac, move })
     });
     payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       // Paying what's overdue unlocks it straight away: Check again asks
       // Housing afresh, no reload needed.
+      // The house's one free device is elsewhere: offer to move it here.
+      if (payload.code === "promo_on_other_device" && payload.error) {
+        showError(payload.error, {
+          action: { label: "Move it here", run: () => { clearError(); void claimTenantsOnlyPromo(promo, { move: true }); } }
+        });
+        return false;
+      }
+      // No confirmed phone links this device to a house yet.
+      if (payload.code === "no_phone" && payload.error) {
+        showError(payload.error, { action: { label: "Confirm my number", run: () => { window.location.href = `${basePath}/devices.html`; } } });
+        return false;
+      }
       if (["rent_overdue", "utilities_overdue", "housing_unavailable"].includes(payload.code) && payload.error) {
         showError(payload.error, {
           action: {

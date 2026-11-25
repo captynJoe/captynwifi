@@ -700,3 +700,18 @@ model WifiAccountSignInAttempt {
 
   @@index([phone, at])
 }
+
+// Tenants-only promos: one device per house, chosen by the tenant.
+model WifiPromoHouseGrant {
+  id          String   @id @default(uuid())
+  promoId     String
+  buildingId  String
+  houseNumber String
+  phone       String
+  deviceMac   String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([promoId, buildingId, houseNumber])
+  @@index([promoId, deviceMac])
+}

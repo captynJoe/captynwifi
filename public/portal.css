@@ -530,3 +530,12 @@ button.extend-period-btn:hover, button#pay-button:hover { filter: brightness(1.0
 /* The pre-alert-bar portal script toggles #error directly: keep its messages
    visible inside the bar until the new script is deployed. */
 .portal-alert.hidden:has(#error:not(.hidden):not(:empty)) { display: grid !important; }
+
+/* My WiFi */
+.account-packages { display: grid; gap: 14px; }
+.account-package { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.account-package-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.account-package-head span { font-size: 13px; font-weight: 800; color: var(--muted); }
+.device-tag.online { background: var(--green-soft, var(--brand-blue-soft)); color: var(--green, var(--brand-blue)); }
+.device-tag.offline { background: var(--surface-soft); color: var(--muted); }
+.account-back { text-align: center; text-decoration: none; }

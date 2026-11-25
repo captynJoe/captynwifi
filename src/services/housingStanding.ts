@@ -58,7 +58,7 @@ export type PromoGate =
 // What the customer is told when a tenants-only promo turns them away.
 export function promoGateResult(buildingName: string, phone: string | null, standing: HousingStanding | null, unavailable = false): PromoGate {
   if (!phone) {
-    return { allowed: false, code: "no_phone", message: `This offer is for ${buildingName} tenants. Pay for any package once with the M-PESA number you gave ${buildingName}, then come back to claim it.` };
+    return { allowed: false, code: "no_phone", message: `This offer is for ${buildingName} tenants. Confirm the phone number you gave ${buildingName} to claim it.` };
   }
   if (unavailable || !standing) {
     return { allowed: false, code: "housing_unavailable", message: `We couldn't check your ${buildingName} account just now. Try again in a minute.` };

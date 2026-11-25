@@ -1,7 +1,7 @@
 import type { Prisma, PrismaClient, WifiPromo } from "@prisma/client";
 import { buildRadiusProjection, createRadiusSecret, normalizeDeviceMac } from "./radiusProjection.js";
 import { applyRadiusProjectionRows, hasOtherActiveEntitlement } from "./radiusSqlApply.js";
-import { kickHotspotUser } from "./routeros.js";
+import { forgetHotspotDeviceForUser, kickHotspotUser } from "./routeros.js";
 
 export const PROMO_PLAN_SOURCE = "captyn_wifi_promo";
 
@@ -341,4 +341,43 @@ export async function claimPromoGrant(prisma: PrismaClient, promo: WifiPromo, de
 
     return { username, password: cleartextSecret, expiresAt };
   });
+}
+
+export type HouseGrantResult =
+  | { status: "assigned"; movedFrom: string | null }
+  | { status: "other_device"; deviceMac: string };
+
+// Tenants-only promos give one device per house. The first claim takes it;
+// a claim from another device is told where it is, and moves it only when
+// the tenant asks (move). Moving ends the old device's free access now.
+export async function assignHouseGrant(
+  prisma: PrismaClient,
+  input: { promoId: string; buildingId: string; houseNumber: string; phone: string; deviceMac: string; move: boolean }
+): Promise<HouseGrantResult> {
+  const key = { promoId_buildingId_houseNumber: { promoId: input.promoId, buildingId: input.buildingId, houseNumber: input.houseNumber } };
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.wifiPromoHouseGrant.findUnique({ where: key });
+    if (!existing) {
+      await tx.wifiPromoHouseGrant.create({ data: { promoId: input.promoId, buildingId: input.buildingId, houseNumber: input.houseNumber, phone: input.phone, deviceMac: input.deviceMac } });
+      return { status: "assigned" as const, movedFrom: null };
+    }
+    if (existing.deviceMac === input.deviceMac) return { status: "assigned" as const, movedFrom: null };
+    if (!input.move) return { status: "other_device" as const, deviceMac: existing.deviceMac };
+    await tx.wifiPromoHouseGrant.update({ where: key, data: { deviceMac: input.deviceMac, phone: input.phone } });
+    const now = new Date();
+    await tx.wifiEntitlement.updateMany({
+      where: { username: promoUsername(existing.deviceMac), status: "active", expiresAt: { gt: now } },
+      data: { expiresAt: now }
+    });
+    return { status: "assigned" as const, movedFrom: existing.deviceMac };
+  });
+}
+
+// After a move: drop the old device off the router and forget its cookie.
+export async function releaseMovedGrant(deviceMac: string) {
+  const username = promoUsername(deviceMac);
+  const kick = await kickHotspotUser(username);
+  if (kick.error) console.warn(`[Promo] kick ${username} after move failed: ${kick.error}`);
+  const forgot = await forgetHotspotDeviceForUser(deviceMac, username);
+  if (forgot.error) console.warn(`[Promo] cookie removal ${deviceMac} after move failed: ${forgot.error}`);
 }
