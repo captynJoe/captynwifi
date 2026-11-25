@@ -129,6 +129,13 @@ export const config = {
     promoBuildingId: process.env.CAPTYN_WIFI_HOUSING_PROMO_BUILDING_ID ?? "CAPTYN-BLDG-00002",
     promoBuildingName: process.env.CAPTYN_WIFI_HOUSING_PROMO_BUILDING_NAME ?? "Village Inn"
   },
+  // Customer SMS (sign-in codes), via TalkSasa -- the same provider account
+  // CAPTYN Housing uses, but WiFi's own sender.
+  sms: {
+    talksasaApiToken: process.env.CAPTYN_WIFI_TALKSASA_API_TOKEN ?? "",
+    senderId: process.env.CAPTYN_WIFI_SMS_SENDER_ID ?? "",
+    talksasaBaseUrl: (process.env.CAPTYN_WIFI_TALKSASA_BASE_URL ?? "https://bulksms.talksasa.com/api/v3").replace(/\/+$/, "")
+  },
   // Omada Open API, read-only, for the device collector. Reached through the
   // router's NAT to the controller on the owner's PC.
   omada: {

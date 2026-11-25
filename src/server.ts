@@ -10,6 +10,7 @@ import { integrationRouter } from "./routes/integration.js";
 import { adminRouter } from "./routes/admin.js";
 import { adminAuthRouter } from "./routes/adminAuth.js";
 import { publicRouter, reconcilePendingMpesaPayments } from "./routes/public.js";
+import { accountRouter } from "./routes/account.js";
 import { runLoyaltyCycle } from "./services/loyalty.js";
 import { captureNetworkCapacitySample } from "./services/networkCapacityMonitor.js";
 import { prisma } from "./prisma.js";
@@ -46,6 +47,7 @@ app.get(/^\/portal\/portal(\/.*)?$/, (req, res) => {
   res.redirect(302, `/wifi/${query}`);
 });
 app.use("/portal", express.static(publicDir));
+app.use("/api/public/account", accountRouter);
 app.use("/api/public", publicRouter);
 app.use("/api/admin-auth", adminAuthRouter);
 app.use("/api/integrations", requireIntegrationToken, integrationRouter);

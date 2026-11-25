@@ -661,3 +661,42 @@ model WifiIntelAlert {
   @@index([key, resolvedAt])
   @@index([resolvedAt, lastSeenAt])
 }
+
+// Customer accounts: a phone confirmed by an SMS code. The phone is the
+// customer's identity; RADIUS logins stay generated and hidden.
+model WifiPhoneVerification {
+  id         String    @id @default(uuid())
+  phone      String
+  codeHash   String
+  deviceMac  String?
+  attempts   Int       @default(0)
+  createdAt  DateTime  @default(now())
+  expiresAt  DateTime
+  consumedAt DateTime?
+
+  @@index([phone, createdAt])
+}
+
+model WifiAccountSession {
+  id         String    @id @default(uuid())
+  phone      String
+  tokenHash  String    @unique
+  deviceMac  String?
+  createdAt  DateTime  @default(now())
+  expiresAt  DateTime
+  lastUsedAt DateTime  @default(now())
+  revokedAt  DateTime?
+
+  @@index([phone])
+}
+
+// Phone + device code sign-in attempts, for the per-phone lockout.
+model WifiAccountSignInAttempt {
+  id        String   @id @default(uuid())
+  phone     String
+  ok        Boolean
+  deviceMac String?
+  at        DateTime @default(now())
+
+  @@index([phone, at])
+}
