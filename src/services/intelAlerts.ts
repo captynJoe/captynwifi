@@ -66,17 +66,21 @@ export async function collectAlertCandidates(prisma: PrismaClient, now = new Dat
     });
   }
 
-  // One device on three or more packages in the last 24 hours.
-  const hopping = await prisma.$queryRaw<Array<{ mac: string; usernames: string[] }>>`
-    SELECT upper(callingstationid) AS mac, array_agg(DISTINCT username) AS usernames
-    FROM radacct
-    WHERE coalesce(acctstoptime, acctupdatetime, acctstarttime) >= ${since} AND coalesce(callingstationid, '') <> ''
-    GROUP BY 1 HAVING count(DISTINCT username) >= 3`;
-  for (const row of hopping) {
+  // One device on packages belonging to two or more different numbers in
+  // the last 24 hours (a shared login or someone else's device code). One
+  // customer buying short packages back to back is normal and not flagged;
+  // free promo grants don't count.
+  const shared = await prisma.$queryRaw<Array<{ mac: string; usernames: string[]; phones: number }>>`
+    SELECT upper(r.callingstationid) AS mac, array_agg(DISTINCT r.username) AS usernames, count(DISTINCT e."customerPhone")::int AS phones
+    FROM radacct r JOIN "WifiEntitlement" e ON e.username = r.username
+    WHERE coalesce(r.acctstoptime, r.acctupdatetime, r.acctstarttime) >= ${since} AND coalesce(r.callingstationid, '') <> ''
+      AND e."customerPhone" ~ '^\+?254[17][0-9]{8}$'
+    GROUP BY 1 HAVING count(DISTINCT e."customerPhone") >= 2`;
+  for (const row of shared) {
     candidates.push({
-      key: `device_many_packages:${row.mac}`, rule: "device_many_packages", subject: row.mac,
-      title: `Device ${row.mac} used ${row.usernames.length} packages in 24 h`,
-      detail: { usernames: row.usernames }
+      key: `device_shared_packages:${row.mac}`, rule: "device_shared_packages", subject: row.mac,
+      title: `Device ${row.mac} used packages of ${row.phones} different numbers in 24 h`,
+      detail: { usernames: row.usernames, phones: row.phones }
     });
   }
 
