@@ -36,8 +36,17 @@ test("fair-share ceiling is 90% of the measured line, within sane bounds", async
   const { fairShareLimitMbps } = await import("../src/services/ispProbe.js");
   assert.equal(fairShareLimitMbps(22), 20);
   assert.equal(fairShareLimitMbps(70), 63);
-  assert.equal(fairShareLimitMbps(3), 8);
-  assert.equal(fairShareLimitMbps(200), 90);
+  assert.equal(fairShareLimitMbps(3), 15, "never below 15");
+  assert.equal(fairShareLimitMbps(200), 180, "two ISPs together aren't capped at 90 any more");
+});
+
+test("the limit rises at once but only falls after two low tests in a row", async () => {
+  const { decideFairShareLimit } = await import("../src/services/ispProbe.js");
+  assert.equal(decideFairShareLimit(26, 59, null), 59, "rises immediately");
+  assert.equal(decideFairShareLimit(59, 20, null), 59, "one low reading is held");
+  assert.equal(decideFairShareLimit(59, 20, 59), 59, "previous test disagreed: held");
+  assert.equal(decideFairShareLimit(59, 20, 22), 22, "two low readings: lowers, to the higher of the two");
+  assert.equal(decideFairShareLimit(null, 30, null), 30);
 });
 
 test("an evening slot runs once, and the first probe runs straight away", () => {

@@ -1,13 +1,26 @@
 import type { PrismaClient } from "@prisma/client";
 import { config } from "../config.js";
-import { probeIspThroughput, setFairShareLimit } from "./routeros.js";
+import { fairShareHeartbeat, probeIspThroughput, setFairShareLimit } from "./routeros.js";
 
 // Pure: the fair queue's ceiling for a measured line speed. 90% keeps the
 // queue at the router (not the ISP), so the router decides who gets what.
-export const FAIR_SHARE_OPEN_MBPS = 90;
+// "Open" is far above any line we have, so a test is never capped by it.
+export const FAIR_SHARE_OPEN_MBPS = 1000;
 const FAIR_SHARE_OPEN_SETTLE_MS = 4000;
+const FAIR_SHARE_FLOOR_MBPS = 15;
 export function fairShareLimitMbps(lineMbps: number) {
-  return Math.min(90, Math.max(8, Math.round(lineMbps * 0.9)));
+  return Math.min(FAIR_SHARE_OPEN_MBPS, Math.max(FAIR_SHARE_FLOOR_MBPS, Math.round(lineMbps * 0.9)));
+}
+
+// Pure: what to set, given the limit before this test, this test's limit
+// and the previous test's (if recent). Too high is harmless (the queue just
+// doesn't engage); too low throttles everyone for half an hour. So: rise at
+// once, but only lower when two tests in a row say so -- and then to the
+// higher of the two. One unlucky reading can't hold the network down.
+export function decideFairShareLimit(previousMbps: number | null, candidateMbps: number, lastCandidateMbps: number | null): number {
+  if (previousMbps === null || candidateMbps >= previousMbps) return candidateMbps;
+  if (lastCandidateMbps !== null && lastCandidateMbps < previousMbps) return Math.max(candidateMbps, lastCandidateMbps);
+  return previousMbps;
 }
 
 // Evening ISP probe. On 24 Nov 2026 the WAN sat flat at ~20-23 Mbps from 8 to
@@ -36,8 +49,9 @@ export function mbps(bytes: number, seconds: number) {
 // the schedule (the route limits how often).
 export async function runIspProbe(prisma: PrismaClient, now = new Date(), { force = false } = {}) {
   if (!config.routeros.ispProbe && !force) return null;
-  const last = await prisma.wifiIspProbe.findFirst({ orderBy: { at: "desc" }, select: { at: true } });
+  const last = await prisma.wifiIspProbe.findFirst({ orderBy: { at: "desc" }, select: { at: true, totalMbps: true } });
   if (!force && !ispProbeDue(now, last?.at ?? null)) return null;
+  let limitBefore: number | null = null;
   try {
     // Measure the LINE, not our own queue: while the fair queue is limiting
     // customers, "customers + one test download" only ever reads about the
@@ -45,7 +59,9 @@ export async function runIspProbe(prisma: PrismaClient, now = new Date(), { forc
     // 20-26 Mbps on a line giving 65). Open it for the test, let customers'
     // traffic grow into the room, then measure.
     if (config.routeros.fairShare) {
-      await setFairShareLimit(FAIR_SHARE_OPEN_MBPS);
+      const opened = await setFairShareLimit(FAIR_SHARE_OPEN_MBPS);
+      const before = Number(opened?.previous);
+      limitBefore = Number.isFinite(before) && before > 0 ? Math.round(before / 1_000_000) : null;
       await new Promise((resolve) => setTimeout(resolve, FAIR_SHARE_OPEN_SETTLE_MS));
     }
     const reading = await probeIspThroughput(PROBE_URL);
@@ -56,9 +72,13 @@ export async function runIspProbe(prisma: PrismaClient, now = new Date(), { forc
       data: { probeMbps, customerMbps, totalMbps, bytes: reading.bytes, seconds: reading.seconds }
     });
     if (config.routeros.fairShare && totalMbps !== null) {
-      const set = await setFairShareLimit(fairShareLimitMbps(totalMbps));
-      if (set) console.log(`Fair share: line ${totalMbps} Mbps, queue ${set.previous} -> ${set.next}`);
-      else console.warn("Fair share: queue captyn-fair-down not found or router unavailable");
+      const recentPrevious = last?.totalMbps != null && now.getTime() - last.at.getTime() <= 45 * 60 * 1000 ? fairShareLimitMbps(last.totalMbps) : null;
+      const target = decideFairShareLimit(limitBefore, fairShareLimitMbps(totalMbps), recentPrevious);
+      const set = await setFairShareLimit(target);
+      if (set) {
+        await fairShareHeartbeat();
+        console.log(`Fair share: line ${totalMbps} Mbps, queue ${limitBefore ?? "?"}M -> ${set.next}${target === limitBefore && fairShareLimitMbps(totalMbps) < target ? " (held: lowers need two tests in a row)" : ""}`);
+      } else console.warn("Fair share: queue captyn-fair-down not found or router unavailable");
     }
     return probe;
   } catch (error) {
