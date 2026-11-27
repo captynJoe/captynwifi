@@ -25,10 +25,11 @@ test("ISP cap alert needs three slow evening readings against the 3 am baseline"
   assert.equal(ispCapAlert([baseline, ...slow.map((p) => ({ ...p, totalMbps: 40 }))], now), null);
 });
 
-test("probe also runs hourly in the day, so fair share follows the daytime line", () => {
-  assert.equal(ispProbeDue(eat("2026-11-25", "10:05"), eat("2026-11-25", "09:02")), true);
-  assert.equal(ispProbeDue(eat("2026-11-25", "10:40"), eat("2026-11-25", "10:05")), false);
-  assert.equal(ispProbeDue(eat("2026-11-25", "05:10"), eat("2026-11-25", "03:05")), false, "quiet before 6 am");
+test("probe runs every 30 minutes, day and night, once per slot", () => {
+  assert.equal(ispProbeDue(eat("2026-11-25", "00:31"), eat("2026-11-25", "00:02")), true, "after midnight, when the cap lifts");
+  assert.equal(ispProbeDue(eat("2026-11-25", "00:50"), eat("2026-11-25", "00:31")), false);
+  assert.equal(ispProbeDue(eat("2026-11-25", "10:05"), eat("2026-11-25", "09:31")), true);
+  assert.equal(ispProbeDue(eat("2026-11-25", "10:20"), eat("2026-11-25", "10:05")), false);
 });
 
 test("fair-share ceiling is 90% of the measured line, within sane bounds", async () => {
@@ -39,15 +40,10 @@ test("fair-share ceiling is 90% of the measured line, within sane bounds", async
   assert.equal(fairShareLimitMbps(200), 90);
 });
 
-test("probe runs once per evening half-hour slot and once at 3 am", () => {
-  assert.equal(ispProbeDue(eat("2026-11-24", "18:59"), eat("2026-11-24", "18:01")), false, "the 6 pm hourly probe already ran");
+test("an evening slot runs once, and the first probe runs straight away", () => {
   assert.equal(ispProbeDue(eat("2026-11-24", "19:00"), null), true);
   assert.equal(ispProbeDue(eat("2026-11-24", "19:20"), eat("2026-11-24", "19:01")), false);
   assert.equal(ispProbeDue(eat("2026-11-24", "19:31"), eat("2026-11-24", "19:01")), true);
-  assert.equal(ispProbeDue(eat("2026-11-24", "23:45"), eat("2026-11-24", "23:01")), true);
-  assert.equal(ispProbeDue(eat("2026-11-25", "03:10"), eat("2026-11-24", "23:31")), true);
-  assert.equal(ispProbeDue(eat("2026-11-25", "03:20"), eat("2026-11-25", "03:10")), false);
-  assert.equal(ispProbeDue(eat("2026-11-25", "02:00"), null), false);
 });
 
 test("10 MB in 4 seconds is 20 Mbps", () => {

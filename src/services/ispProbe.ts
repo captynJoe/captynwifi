@@ -4,6 +4,7 @@ import { probeIspThroughput, setFairShareLimit } from "./routeros.js";
 
 // Pure: the fair queue's ceiling for a measured line speed. 90% keeps the
 // queue at the router (not the ISP), so the router decides who gets what.
+export const FAIR_SHARE_OPEN_MBPS = 90;
 export function fairShareLimitMbps(lineMbps: number) {
   return Math.min(90, Math.max(8, Math.round(lineMbps * 0.9)));
 }
@@ -15,15 +16,13 @@ export function fairShareLimitMbps(lineMbps: number) {
 const PROBE_URL = "https://speed.cloudflare.com/__down?bytes=10000000";
 const RETENTION_DAYS = 180;
 
-// Due every 30 minutes from 19:00 to 23:30 EAT, hourly 06:00-18:00 (so the
-// fair-share limit follows the daytime line too), plus one 03:00 baseline.
+// Due every 30 minutes, day and night, so the fair-share limit follows the
+// line within half an hour of it changing (e.g. back to ~70 Mbps after the
+// evening cap lifts). A 10 MB test each time.
 export function ispProbeDue(now: Date, last: Date | null) {
   const eat = new Date(now.getTime() + 3 * 3600 * 1000);
   const minutes = eat.getUTCHours() * 60 + eat.getUTCMinutes();
-  const slot = minutes >= 19 * 60 ? Math.floor(minutes / 30) * 30
-    : minutes >= 6 * 60 ? Math.floor(minutes / 60) * 60
-    : minutes >= 3 * 60 && minutes < 3 * 60 + 30 ? 3 * 60 : null;
-  if (slot === null) return false;
+  const slot = Math.floor(minutes / 30) * 30;
   const slotStart = now.getTime() - (minutes - slot) * 60 * 1000 - eat.getUTCSeconds() * 1000 - eat.getUTCMilliseconds();
   return !last || last.getTime() < slotStart;
 }
@@ -51,6 +50,12 @@ export async function runIspProbe(prisma: PrismaClient, now = new Date()) {
     }
     return probe;
   } catch (error) {
+    // Can't measure the line: open the fair queue rather than keep a stale,
+    // possibly low limit. When unsure, never throttle.
+    if (config.routeros.fairShare) {
+      const set = await setFairShareLimit(FAIR_SHARE_OPEN_MBPS);
+      if (set) console.warn(`Fair share: probe failed, queue opened ${set.previous} -> ${set.next}`);
+    }
     return prisma.wifiIspProbe.create({ data: { error: error instanceof Error ? error.message : String(error) } });
   }
 }
