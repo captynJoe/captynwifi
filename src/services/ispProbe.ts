@@ -1,6 +1,12 @@
 import type { PrismaClient } from "@prisma/client";
 import { config } from "../config.js";
-import { probeIspThroughput } from "./routeros.js";
+import { probeIspThroughput, setFairShareLimit } from "./routeros.js";
+
+// Pure: the fair queue's ceiling for a measured line speed. 90% keeps the
+// queue at the router (not the ISP), so the router decides who gets what.
+export function fairShareLimitMbps(lineMbps: number) {
+  return Math.min(90, Math.max(8, Math.round(lineMbps * 0.9)));
+}
 
 // Evening ISP probe. On 24 Nov 2026 the WAN sat flat at ~20-23 Mbps from 8 to
 // 11 pm, then carried ~70 Mbps after midnight with the router idle, so the
@@ -9,11 +15,14 @@ import { probeIspThroughput } from "./routeros.js";
 const PROBE_URL = "https://speed.cloudflare.com/__down?bytes=10000000";
 const RETENTION_DAYS = 180;
 
-// Due every 30 minutes from 19:00 to 23:30 EAT, plus one 03:00 baseline.
+// Due every 30 minutes from 19:00 to 23:30 EAT, hourly 06:00-18:00 (so the
+// fair-share limit follows the daytime line too), plus one 03:00 baseline.
 export function ispProbeDue(now: Date, last: Date | null) {
   const eat = new Date(now.getTime() + 3 * 3600 * 1000);
   const minutes = eat.getUTCHours() * 60 + eat.getUTCMinutes();
-  const slot = minutes >= 19 * 60 ? Math.floor(minutes / 30) * 30 : minutes >= 3 * 60 && minutes < 3 * 60 + 30 ? 3 * 60 : null;
+  const slot = minutes >= 19 * 60 ? Math.floor(minutes / 30) * 30
+    : minutes >= 6 * 60 ? Math.floor(minutes / 60) * 60
+    : minutes >= 3 * 60 && minutes < 3 * 60 + 30 ? 3 * 60 : null;
   if (slot === null) return false;
   const slotStart = now.getTime() - (minutes - slot) * 60 * 1000 - eat.getUTCSeconds() * 1000 - eat.getUTCMilliseconds();
   return !last || last.getTime() < slotStart;
@@ -31,13 +40,16 @@ export async function runIspProbe(prisma: PrismaClient, now = new Date()) {
     const reading = await probeIspThroughput(PROBE_URL);
     const probeMbps = mbps(reading.bytes, reading.seconds);
     const customerMbps = reading.customerMbps === null ? null : Math.round(reading.customerMbps * 10) / 10;
-    return await prisma.wifiIspProbe.create({
-      data: {
-        probeMbps, customerMbps,
-        totalMbps: probeMbps !== null && customerMbps !== null ? Math.round((probeMbps + customerMbps) * 10) / 10 : null,
-        bytes: reading.bytes, seconds: reading.seconds
-      }
+    const totalMbps = probeMbps !== null && customerMbps !== null ? Math.round((probeMbps + customerMbps) * 10) / 10 : null;
+    const probe = await prisma.wifiIspProbe.create({
+      data: { probeMbps, customerMbps, totalMbps, bytes: reading.bytes, seconds: reading.seconds }
     });
+    if (config.routeros.fairShare && totalMbps !== null) {
+      const set = await setFairShareLimit(fairShareLimitMbps(totalMbps));
+      if (set) console.log(`Fair share: line ${totalMbps} Mbps, queue ${set.previous} -> ${set.next}`);
+      else console.warn("Fair share: queue captyn-fair-down not found or router unavailable");
+    }
+    return probe;
   } catch (error) {
     return prisma.wifiIspProbe.create({ data: { error: error instanceof Error ? error.message : String(error) } });
   }

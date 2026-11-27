@@ -120,7 +120,11 @@ export const config = {
     // Client Intelligence device collector (router + Omada snapshots).
     deviceCollector: readBoolean("CAPTYN_WIFI_DEVICE_COLLECTOR"),
     // Evening ISP speed probe (see ispProbe.ts).
-    ispProbe: readBoolean("CAPTYN_WIFI_ISP_PROBE")
+    ispProbe: readBoolean("CAPTYN_WIFI_ISP_PROBE"),
+    // Fair share: after each probe, set the router's shared fair queue
+    // (queue tree "captyn-fair-down") to 90% of the measured line speed.
+    // Off until that queue exists on the router (docs/fair-share.rsc).
+    fairShare: readBoolean("CAPTYN_WIFI_FAIR_SHARE")
   },
   // CAPTYN Housing, asked whether a tenant's house is in good standing before
   // a tenants-only promo. Same shared token as Housing -> WiFi.

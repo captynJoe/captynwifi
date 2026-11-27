@@ -804,3 +804,27 @@ export async function probeIspThroughput(url: string, timeoutMs = 60_000): Promi
     client.close();
   }
 }
+
+export const FAIR_SHARE_QUEUE = "captyn-fair-down";
+
+// Sets the shared fair queue's ceiling (see docs/fair-share.rsc). Live change,
+// nobody is disconnected. Returns the previous limit, or null when the queue
+// doesn't exist / the router didn't answer.
+export async function setFairShareLimit(mbps: number): Promise<{ previous: string; next: string } | null> {
+  if (missingRouterConfig()) return null;
+  const client = new RouterOsApiClient();
+  try {
+    await client.connect();
+    await client.login();
+    const rows = sentencesToRows(await client.command(["/queue/tree/print", "=.proplist=.id,name,max-limit", `?name=${FAIR_SHARE_QUEUE}`]));
+    const queue = rows[0];
+    if (!queue?.[".id"]) return null;
+    const next = `${Math.round(mbps)}M`;
+    await client.command(["/queue/tree/set", `=.id=${queue[".id"]}`, `=max-limit=${next}`]);
+    return { previous: queue["max-limit"] ?? "", next };
+  } catch {
+    return null;
+  } finally {
+    client.close();
+  }
+}
