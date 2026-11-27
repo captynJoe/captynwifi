@@ -17,6 +17,8 @@ import { issueVoucher } from "../services/voucherIssuance.js";
 import { normalizeKenyaPhone } from "../lib/phone.js";
 import { PROMO_PLAN_SOURCE, endPromo, getActivePromo, startPromo } from "../services/promo.js";
 import { housingConfigured } from "../services/housingStanding.js";
+import { runIspProbe } from "../services/ispProbe.js";
+import { getFairShareLimit } from "../services/routeros.js";
 import { closeUnappliedPayment, creditUnappliedPayment, listUnappliedPayments } from "../services/unappliedPayments.js";
 import { getLoyaltySetting, monthStandings, pickLoyaltyRound, releaseLoyaltyRound, tierForRank } from "../services/loyalty.js";
 import { DYNAMIC_PLAN_SOURCE, refreshMirrorForBaseline } from "../services/dynamicPlanEngine.js";
@@ -533,7 +535,24 @@ adminRouter.get("/isp-probes", async (_req, res, next) => {
       orderBy: { at: "desc" },
       take: 200
     });
-    return sendData(res, { enabled: config.routeros.ispProbe, probes });
+    const fairShareLimit = config.routeros.fairShare ? await getFairShareLimit() : null;
+    return sendData(res, { enabled: config.routeros.ispProbe, probes, fairShare: { enabled: config.routeros.fairShare, limit: fairShareLimit } });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// Capacity → ISP line speed → Test now: measure the line now and move the
+// fair queue to match, without waiting for the 30-minute schedule.
+adminRouter.post("/isp-probes/run", async (_req, res, next) => {
+  try {
+    const last = await prisma.wifiIspProbe.findFirst({ orderBy: { at: "desc" }, select: { at: true } });
+    if (last && Date.now() - last.at.getTime() < 2 * 60 * 1000) {
+      return res.status(429).json({ error: "The line was tested less than 2 minutes ago. Try again shortly." });
+    }
+    const probe = await runIspProbe(prisma, new Date(), { force: true });
+    const fairShareLimit = config.routeros.fairShare ? await getFairShareLimit() : null;
+    return sendData(res, { probe, fairShareLimit });
   } catch (error) {
     return next(error);
   }

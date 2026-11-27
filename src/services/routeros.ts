@@ -828,3 +828,20 @@ export async function setFairShareLimit(mbps: number): Promise<{ previous: strin
     client.close();
   }
 }
+
+// The fair queue's current ceiling, e.g. "25M"; null = no queue / no answer.
+export async function getFairShareLimit(): Promise<string | null> {
+  if (missingRouterConfig()) return null;
+  const client = new RouterOsApiClient();
+  try {
+    await client.connect();
+    await client.login();
+    const rows = sentencesToRows(await client.command(["/queue/tree/print", "=.proplist=name,max-limit", `?name=${FAIR_SHARE_QUEUE}`]));
+    const limit = Number(rows[0]?.["max-limit"]);
+    return Number.isFinite(limit) && limit > 0 ? `${Math.round(limit / 1_000_000)} Mbps` : null;
+  } catch {
+    return null;
+  } finally {
+    client.close();
+  }
+}

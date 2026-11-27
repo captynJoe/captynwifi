@@ -31,10 +31,12 @@ export function mbps(bytes: number, seconds: number) {
   return seconds > 0 ? Math.round(((bytes * 8) / seconds / 1_000_000) * 10) / 10 : null;
 }
 
-export async function runIspProbe(prisma: PrismaClient, now = new Date()) {
-  if (!config.routeros.ispProbe) return null;
+// force: an admin pressed "Test now" (Capacity page) -- run regardless of
+// the schedule (the route limits how often).
+export async function runIspProbe(prisma: PrismaClient, now = new Date(), { force = false } = {}) {
+  if (!config.routeros.ispProbe && !force) return null;
   const last = await prisma.wifiIspProbe.findFirst({ orderBy: { at: "desc" }, select: { at: true } });
-  if (!ispProbeDue(now, last?.at ?? null)) return null;
+  if (!force && !ispProbeDue(now, last?.at ?? null)) return null;
   try {
     const reading = await probeIspThroughput(PROBE_URL);
     const probeMbps = mbps(reading.bytes, reading.seconds);

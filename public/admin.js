@@ -1062,7 +1062,11 @@ function renderIspProbes() {
   const measured = probes.filter((p) => p.totalMbps != null);
   const evening = avg(measured.filter((p) => eatHour(p.at) >= 19));
   const night = avg(measured.filter((p) => eatHour(p.at) < 6));
-  summary.textContent = [evening != null ? `Evenings ${evening} Mbps` : "", night != null ? `3 am ${night} Mbps` : ""].filter(Boolean).join(" · ");
+  summary.textContent = [
+    data.fairShare?.limit ? `Fair queue ${data.fairShare.limit}` : "",
+    evening != null ? `Evenings ${evening} Mbps` : "",
+    night != null ? `Night ${night} Mbps` : ""
+  ].filter(Boolean).join(" · ");
   body.innerHTML = probes.length
     ? probes.map((p) => p.error
       ? `<tr class="capacity-slow"><td>${escapeHtml(fmtDate(p.at))}</td><td colspan="3">Test failed: ${escapeHtml(p.error)}</td></tr>`
@@ -2506,6 +2510,27 @@ document.getElementById("give-time-form")?.addEventListener("submit", async (eve
     document.getElementById("give-time-phone").value = "";
   } catch (error) {
     setInlineStatus(status, error instanceof Error ? error.message : "Failed", "bad");
+  } finally {
+    button.disabled = false;
+  }
+});
+
+
+// Capacity → ISP line speed → Test now.
+document.getElementById("isp-probe-run")?.addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const status = document.getElementById("isp-probe-status");
+  button.disabled = true;
+  setInlineStatus(status, "Testing the line (about 10 s)");
+  try {
+    const result = await writeApi(adminApi("/isp-probes/run"), "POST", {});
+    const probe = result?.probe;
+    setInlineStatus(status, probe?.error
+      ? `Test failed: ${probe.error}`
+      : `Line ${probe?.totalMbps ?? "?"} Mbps${result?.fairShareLimit ? ` · fair queue now ${result.fairShareLimit}` : ""}`, probe?.error ? "bad" : "ok");
+    await loadIspProbes();
+  } catch (error) {
+    setInlineStatus(status, error instanceof Error ? error.message : "Test failed", "bad");
   } finally {
     button.disabled = false;
   }
