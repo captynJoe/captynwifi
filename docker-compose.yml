@@ -26,7 +26,9 @@ services:
       - default
       - dataproxy_net
     working_dir: /app
-    command: sh -lc "npm ci --include=dev && npm run prisma:deploy && npm run build && npm start"
+    # Reinstalls/rebuilds only what changed (scripts/container-start.sh);
+    # scripts/deploy.sh builds before restarting, so restarts take seconds.
+    command: sh scripts/container-start.sh start build
     env_file:
       - .env
     dns:
@@ -67,7 +69,7 @@ services:
   radius_worker:
     image: node:22-alpine
     working_dir: /app
-    command: sh -lc "npm ci --include=dev && npm run prisma:deploy && npm run build && npm run radius:worker"
+    command: sh scripts/container-start.sh radius:worker wait
     env_file:
       - .env
     environment:
@@ -108,7 +110,7 @@ services:
   wifi_governor:
     image: node:22-alpine
     working_dir: /app
-    command: sh -lc "npm ci --include=dev && npm run prisma:deploy && npm run build && npm run governor:worker"
+    command: sh scripts/container-start.sh governor:worker wait
     profiles:
       - governor
     env_file:
