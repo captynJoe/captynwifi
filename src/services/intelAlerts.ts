@@ -74,7 +74,7 @@ export async function collectAlertCandidates(prisma: PrismaClient, now = new Dat
     SELECT upper(r.callingstationid) AS mac, array_agg(DISTINCT r.username) AS usernames, count(DISTINCT e."customerPhone")::int AS phones
     FROM radacct r JOIN "WifiEntitlement" e ON e.username = r.username
     WHERE coalesce(r.acctstoptime, r.acctupdatetime, r.acctstarttime) >= ${since} AND coalesce(r.callingstationid, '') <> ''
-      AND e."customerPhone" ~ '^\+?254[17][0-9]{8}$'
+      AND e."customerPhone" ~ '^[+]?254[17][0-9]{8}$'
     GROUP BY 1 HAVING count(DISTINCT e."customerPhone") >= 2`;
   for (const row of shared) {
     candidates.push({

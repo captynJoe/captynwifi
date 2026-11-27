@@ -595,22 +595,54 @@ export type WaitingHotspotHost = { deviceMac: string; address: string; identity:
 
 // Devices on the hotspot network that aren't signed in, with what their DHCP
 // lease says about them -- one router conversation for the whole list.
+type HostRow = Record<string, string>;
+
+// A phone briefly sends from another network's address (mobile data, a VPN)
+// and the router adds a second, unauthorized host entry for the same MAC on
+// that address -- a ghost that's gone moments later, while the real entry
+// stays signed in. A device is only waiting if it isn't signed in under any
+// entry and the waiting entry is on the address its DHCP lease gave it.
+export function waitingHostRows(hosts: HostRow[], leases: Map<string, HostRow>): HostRow[] {
+  const signedIn = new Set(hosts.filter((row) => row.authorized === "true").map((row) => row["mac-address"].toUpperCase()));
+  return hosts.filter((row) => {
+    if (row.authorized === "true" || row.bypassed === "true") return false;
+    const mac = row["mac-address"].toUpperCase();
+    if (signedIn.has(mac)) return false;
+    const lease = leases.get(mac);
+    return Boolean(lease?.address) && lease!.address === row.address;
+  });
+}
+
+// Pure: one entry per MAC for the device collector -- the signed-in one, else
+// the one on the lease address, else the first. Ghost entries never win.
+export function realHostRows(hosts: HostRow[], leases: Map<string, HostRow>): HostRow[] {
+  const byMac = new Map<string, HostRow[]>();
+  for (const row of hosts) {
+    const mac = row["mac-address"].toUpperCase();
+    byMac.set(mac, [...(byMac.get(mac) ?? []), row]);
+  }
+  return [...byMac.entries()].map(([mac, rows]) =>
+    rows.find((row) => row.authorized === "true") ??
+    rows.find((row) => row.address && row.address === leases.get(mac)?.address) ??
+    rows[0]);
+}
+
 export async function listWaitingHotspotHosts(): Promise<WaitingHotspotHost[] | null> {
   if (missingRouterConfig()) return null;
   const client = new RouterOsApiClient();
   try {
     await client.connect();
     await client.login();
-    const hosts = sentencesToRows(await client.command([
+    const allHosts = sentencesToRows(await client.command([
       "/ip/hotspot/host/print",
-      "=.proplist=mac-address,address,authorized,bypassed",
-      "?authorized=false"
-    ])).filter((row) => row["mac-address"] && row.address && row.bypassed !== "true");
-    if (hosts.length === 0) return [];
+      "=.proplist=mac-address,address,authorized,bypassed"
+    ])).filter((row) => row["mac-address"] && row.address);
     const leases = new Map(sentencesToRows(await client.command([
       "/ip/dhcp-server/lease/print",
-      "=.proplist=mac-address,host-name,class-id,client-id"
+      "=.proplist=mac-address,address,host-name,class-id,client-id"
     ])).map((row) => [(row["mac-address"] || "").toUpperCase(), row]));
+    const hosts = waitingHostRows(allHosts, leases);
+    if (hosts.length === 0) return [];
     return hosts.map((row) => {
       const deviceMac = row["mac-address"].toUpperCase();
       const lease = leases.get(deviceMac);
@@ -663,11 +695,14 @@ export async function listNetworkHosts(): Promise<NetworkHost[] | null> {
   try {
     await client.connect();
     await client.login();
-    const hosts = sentencesToRows(await client.command(["/ip/hotspot/host/print", "=.proplist=mac-address,address"]));
     const leases = new Map(sentencesToRows(await client.command([
-      "/ip/dhcp-server/lease/print", "=.proplist=mac-address,host-name,class-id"
+      "/ip/dhcp-server/lease/print", "=.proplist=mac-address,address,host-name,class-id"
     ])).map((row) => [(row["mac-address"] || "").toUpperCase(), row]));
-    return hosts.filter((row) => row["mac-address"]).map((row) => {
+    const hosts = realHostRows(
+      sentencesToRows(await client.command(["/ip/hotspot/host/print", "=.proplist=mac-address,address,authorized"])).filter((row) => row["mac-address"]),
+      leases
+    );
+    return hosts.map((row) => {
       const deviceMac = row["mac-address"].toUpperCase();
       const lease = leases.get(deviceMac);
       return { deviceMac, address: row.address || null, hostName: lease?.["host-name"] || null, dhcpClassId: lease?.["class-id"] || null };
