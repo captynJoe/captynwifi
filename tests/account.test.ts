@@ -25,3 +25,13 @@ test("SMS codes are 6 digits and stored only as a per-phone hash", () => {
   assert.equal(smsCodeHash("254712345678", "123456"), smsCodeHash("254712345678", "123456"));
   assert.notEqual(smsCodeHash("254712345678", "123456"), smsCodeHash("254700000000", "123456"));
 });
+
+test("Village Inn link codes are 7 characters, so they never clash with device codes or vouchers", async () => {
+  const { generateLinkCode, normalizeLinkCode, LINK_CODE_LENGTH } = await import("../src/services/linkCode.js");
+  const code = generateLinkCode();
+  assert.equal(code.length, LINK_CODE_LENGTH);
+  assert.equal(LINK_CODE_LENGTH, 7);
+  assert.equal(normalizeLinkCode(` ${code.slice(0, 3)}-${code.slice(3).toLowerCase()} `), code);
+  assert.equal(normalizeLinkCode("ABC123"), null);
+  assert.equal(normalizeLinkCode("ABCDEF0"), null, "0 isn't in the code alphabet");
+});

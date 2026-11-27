@@ -2453,6 +2453,40 @@ haveCodeBtn?.addEventListener("click", () => {
     checkoutPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, 40);
 });
+// Links this device to the tenant's phone and house (no SMS: Housing vouched
+// for them), then starts the house-link reward here if one was given.
+async function redeemHousingLinkCode(code: string) {
+  if (!state.hotspot?.login || !state.hotspot.mac) {
+    setConnectState(voucherLoginStatus, null, "failed", "Connect to CAPTYN WiFi first, then reopen this page and enter your code.");
+    return;
+  }
+  setConnectState(voucherLoginStatus, voucherLoginForm, "connecting", "Checking your code...");
+  try {
+    const response = await fetch(api("/account/link-code"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, deviceMac: state.hotspot.mac })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload?.data?.token) throw new Error(payload.error || "That code isn't valid.");
+    try { localStorage.setItem("captyn-wifi-account", payload.data.token); } catch (_error) {}
+    const reward = payload.data.linkReward;
+    const house = payload.data.houseNumber;
+    if (reward?.status === "granted" && reward.creditId) {
+      setConnectState(voucherLoginStatus, voucherLoginForm, "connecting", `House ${house} linked. Starting your ${reward.hours} hours of free WiFi...`);
+      await activateCredit(reward.creditId);
+      return;
+    }
+    const note = reward?.status === "declined_overdue"
+      ? `House ${house} linked. It has something overdue, so the free hours weren't given. Offers unlock once it's clear.`
+      : `House ${house} linked. Village Inn offers will reach this device.`;
+    setConnectState(voucherLoginStatus, voucherLoginForm, "connected", note);
+    void loadAccountCredits();
+  } catch (error) {
+    setConnectState(voucherLoginStatus, voucherLoginForm, "failed", friendlyError(error, "That code isn't valid."));
+  }
+}
+
 voucherLoginForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const code = voucherCodeInput.value.trim().toUpperCase();
@@ -2460,6 +2494,11 @@ voucherLoginForm?.addEventListener("submit", async (event) => {
   // Device codes (shown on an already-connected device) are 6 characters;
   // vouchers are 8+, so length alone tells them apart.
   const deviceCode = code.replace(/[\s-]/g, "");
+  // 7 characters: a Village Inn code from the Housing app's "Get free WiFi".
+  if (deviceCode.length === 7) {
+    await redeemHousingLinkCode(deviceCode);
+    return;
+  }
   if (deviceCode.length === 6) {
     if (!state.hotspot?.login) {
       setConnectState(voucherLoginStatus, null, "failed", "Connect to this WiFi network first, then reopen this page to enter your code.");

@@ -3,7 +3,7 @@ import { Prisma } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
 
 // No 0/O, 1/I/L: the code is read off one screen and typed on another.
-const CONNECT_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+export const CONNECT_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 export const CONNECT_CODE_LENGTH = 6;
 
 export function generateConnectCode(): string {

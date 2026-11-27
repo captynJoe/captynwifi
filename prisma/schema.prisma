@@ -729,3 +729,21 @@ model WifiLinkReward {
   creditId    String?
   createdAt   DateTime @default(now())
 }
+
+// One-time code a tenant gets in the CAPTYN Housing resident app ("Get free
+// WiFi") and types on the WiFi portal: it proves the phone and house without
+// SMS, because Housing already knows who they are.
+model WifiLinkCode {
+  id          String    @id @default(uuid())
+  code        String    @unique
+  phone       String
+  buildingId  String
+  houseNumber String
+  tenancyId   String
+  createdAt   DateTime  @default(now())
+  expiresAt   DateTime
+  usedAt      DateTime?
+  deviceMac   String?
+
+  @@index([phone, createdAt])
+}

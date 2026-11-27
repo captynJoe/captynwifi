@@ -12,7 +12,7 @@ export const LINK_REWARD_SECONDS = 12 * 3600;
 const ACTIVATE_WITHIN_MS = 30 * 24 * 3600 * 1000;
 
 export type LinkRewardResult =
-  | { status: "granted"; houseNumber: string; hours: number }
+  | { status: "granted"; houseNumber: string; hours: number; creditId: string }
   | { status: "declined_overdue"; houseNumber: string }
   | { status: "already"; houseNumber: string };
 
@@ -57,5 +57,5 @@ export async function rewardHousingLink(prisma: PrismaClient, phone: string): Pr
     createdBy: "housing-link"
   });
   await prisma.wifiLinkReward.update({ where: { id: reward.id }, data: { creditId: credit.id } });
-  return { status: "granted", houseNumber, hours: LINK_REWARD_SECONDS / 3600 };
+  return { status: "granted", houseNumber, hours: LINK_REWARD_SECONDS / 3600, creditId: credit.id };
 }

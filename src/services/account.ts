@@ -79,6 +79,11 @@ export async function verifyPhoneCode(prisma: PrismaClient, phone: string, code:
     throw new AccountError("That code isn't right. Check the SMS and try again.", 400, "code_wrong");
   }
   await prisma.wifiPhoneVerification.update({ where: { id: pending.id }, data: { consumedAt: now } });
+  return createAccountSession(prisma, phone, deviceMac, now);
+}
+
+// A confirmed phone (by SMS code, or by a Housing link code) gets a session.
+export async function createAccountSession(prisma: PrismaClient, phone: string, deviceMac: string | null, now = new Date()) {
   const token = crypto.randomBytes(32).toString("base64url");
   await prisma.wifiAccountSession.create({
     data: { phone, tokenHash: sha256(token), deviceMac, expiresAt: new Date(now.getTime() + SESSION_TTL_MS) }

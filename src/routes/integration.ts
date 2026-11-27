@@ -1,8 +1,10 @@
 import { Router } from "express";
 import type { Prisma, WifiEntitlementStatus } from "@prisma/client";
 import { z } from "zod";
+import { createLinkCode } from "../services/linkCode.js";
 import { config } from "../config.js";
 import { prisma } from "../prisma.js";
+import { formatDarajaMsisdn } from "../services/mpesa.js";
 import {
   buildRadiusProjection,
   createRadiusSecret,
@@ -319,6 +321,27 @@ integrationRouter.post("/housing/payments/confirmed", async (req, res, next) => 
     });
 
     return res.status(result.alreadyProcessed ? 200 : 201).json({ data: result });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// Housing resident app "Get free WiFi": Housing vouches for the tenant's
+// phone and house and gets a one-time code to type on the WiFi portal.
+const linkCodeSchema = z.object({
+  phone: z.string().trim().min(7),
+  buildingId: z.string().trim().min(1),
+  houseNumber: z.string().trim().min(1),
+  tenancyId: z.string().trim().min(1)
+});
+
+integrationRouter.post("/housing/link-codes", async (req, res, next) => {
+  try {
+    const parsed = linkCodeSchema.parse(req.body);
+    const phone = formatDarajaMsisdn(parsed.phone);
+    if (!phone) return res.status(400).json({ error: "The tenant's phone number isn't a valid Kenyan number." });
+    const record = await createLinkCode(prisma, { ...parsed, phone });
+    return res.status(201).json({ data: { code: record.code, expiresAt: record.expiresAt } });
   } catch (error) {
     return next(error);
   }

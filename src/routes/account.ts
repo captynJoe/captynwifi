@@ -8,9 +8,10 @@ import { ensureConnectCode, normalizeConnectCode } from "../services/connectCode
 import { deviceCap, publicDevice } from "../services/deviceLedger.js";
 import { forgetHotspotDeviceForUser, kickHotspotDevice } from "../services/routeros.js";
 import {
-  AccountError, accountFromToken, codeSignInIsLocked, recordCodeSignIn, revokeAccountToken,
+  AccountError, accountFromToken, codeSignInIsLocked, createAccountSession, recordCodeSignIn, revokeAccountToken,
   startPhoneVerification, verifyPhoneCode
 } from "../services/account.js";
+import { redeemLinkCode } from "../services/linkCode.js";
 import { maskPhone } from "../services/clientTrace.js";
 import { rewardHousingLink } from "../services/linkReward.js";
 import { smsConfigured } from "../services/sms.js";
@@ -79,6 +80,27 @@ accountRouter.post("/phone/verify", siteLimit, phoneLimit("wifi-account-verify",
       return null;
     });
     return res.json({ data: { token, expiresAt, phone: maskPhone(phone), linkReward } });
+  } catch (error) {
+    return sendAccountError(error, res, next);
+  }
+});
+
+// Code from the Housing resident app's "Get free WiFi": links this device's
+// browser to the tenant's phone and house, then gives the once-per-tenancy
+// reward if nothing is overdue. Limited per device: codes are 7 characters.
+const linkCodeLimit = clientRateLimit({
+  name: "wifi-account-link-code", windowMs: 15 * 60 * 1000, max: 10, key: bodyFieldKey("deviceMac"), message: "Too many tries. Wait a few minutes."
+});
+accountRouter.post("/link-code", siteLimit, linkCodeLimit, async (req, res, next) => {
+  try {
+    const deviceMac = normalizeDeviceMac(typeof req.body?.deviceMac === "string" ? req.body.deviceMac : null);
+    const record = await redeemLinkCode(prisma, String(req.body?.code ?? ""), deviceMac);
+    const { token, expiresAt } = await createAccountSession(prisma, record.phone, deviceMac);
+    const linkReward = await rewardHousingLink(prisma, record.phone).catch((error) => {
+      console.error("Link reward failed:", error);
+      return null;
+    });
+    return res.json({ data: { token, expiresAt, phone: maskPhone(record.phone), houseNumber: record.houseNumber, linkReward } });
   } catch (error) {
     return sendAccountError(error, res, next);
   }
