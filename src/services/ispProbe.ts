@@ -108,3 +108,17 @@ export async function fairShareWatchdog(prisma: PrismaClient, now = new Date()) 
   if (set && set.previous !== String(FAIR_SHARE_OPEN_MBPS * 1_000_000)) console.warn(`Fair share watchdog: no line measurement for 70 min, queue opened ${set.previous} -> ${set.next}`);
   return set;
 }
+
+// Pure: the download capacity to judge "how busy" against -- the line as
+// measured in the last 45 minutes, else the configured figure. The fixed
+// 80 Mbps read a full ~22 Mbps evening line as "quiet", so the dynamic plan
+// menu got cheaper and faster exactly when the line was full.
+export function lineCapacityMbps(latest: { at: Date; totalMbps: number | null } | null, fallbackMbps: number, now = new Date()) {
+  if (latest?.totalMbps && now.getTime() - latest.at.getTime() <= 45 * 60 * 1000) return latest.totalMbps;
+  return fallbackMbps;
+}
+
+export async function measuredLineCapacityMbps(prisma: PrismaClient, fallbackMbps: number, now = new Date()) {
+  const latest = await prisma.wifiIspProbe.findFirst({ where: { totalMbps: { not: null } }, orderBy: { at: "desc" }, select: { at: true, totalMbps: true } });
+  return lineCapacityMbps(latest, fallbackMbps, now);
+}

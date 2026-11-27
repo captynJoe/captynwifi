@@ -58,3 +58,11 @@ test("an evening slot runs once, and the first probe runs straight away", () => 
 test("10 MB in 4 seconds is 20 Mbps", () => {
   assert.equal(mbps(10_000_000, 4), 20);
 });
+
+test("'how busy' is judged against the measured line, not a fixed 80 Mbps", async () => {
+  const { lineCapacityMbps } = await import("../src/services/ispProbe.js");
+  const now = new Date("2026-11-27T19:00:00Z");
+  assert.equal(lineCapacityMbps({ at: new Date("2026-11-27T18:40:00Z"), totalMbps: 22 }, 80, now), 22);
+  assert.equal(lineCapacityMbps({ at: new Date("2026-11-27T17:00:00Z"), totalMbps: 22 }, 80, now), 80, "stale reading: fall back");
+  assert.equal(lineCapacityMbps(null, 80, now), 80);
+});

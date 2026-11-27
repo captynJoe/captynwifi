@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { config } from "../config.js";
+import { measuredLineCapacityMbps } from "./ispProbe.js";
 import { prisma } from "../prisma.js";
 import { kickHotspotUser } from "./routeros.js";
 import { parseMikrotikRateLimit, rateLimitEquals, scaleMikrotikRateLimit, withBurst } from "./rateLimit.js";
@@ -199,7 +200,9 @@ export class WifiDynamicGovernor {
       { uploadBps: 0, downloadBps: 0 }
     );
 
-    const downloadUtilization = totals.downloadBps / (config.governor.wanDownloadMbps * 1_000_000);
+    // Judge against the line as measured (ISP probe), not a fixed figure.
+    const lineDownloadMbps = await measuredLineCapacityMbps(prisma, config.governor.wanDownloadMbps);
+    const downloadUtilization = totals.downloadBps / (lineDownloadMbps * 1_000_000);
     const uploadUtilization = totals.uploadBps / (config.governor.wanUploadMbps * 1_000_000);
     const utilizationScore = Math.max(downloadUtilization, uploadUtilization, 0);
     const nextState = this.transitionState(desiredState(utilizationScore));
@@ -216,7 +219,8 @@ export class WifiDynamicGovernor {
         uploadMbps: totals.uploadBps / 1_000_000,
         downloadMbps: activeDemandMbps,
         configuredWanUploadMbps: config.governor.wanUploadMbps,
-        configuredWanDownloadMbps: config.governor.wanDownloadMbps
+        configuredWanDownloadMbps: config.governor.wanDownloadMbps,
+        lineDownloadMbps
       }
     });
 
