@@ -15,7 +15,7 @@ import { accountFromToken } from "../services/account.js";
 import { creditMessage, formatCreditDuration } from "../services/credits.js";
 import { bodyFieldKey, clientRateLimit, ipKey } from "../middleware/rateLimitGuard.js";
 import { ensureConnectCode, normalizeConnectCode } from "../services/connectCode.js";
-import { forgetHotspotDeviceForUser, isCurrentHotspotHost, kickHotspotDevice } from "../services/routeros.js";
+import { forgetHotspotDeviceForUser, isCurrentHotspotHost, isHotspotDeviceSignedIn, kickHotspotDevice } from "../services/routeros.js";
 import { signInEntitlementDevice } from "../services/deviceSignIn.js";
 import { deviceCap, payingDeviceNeedsSlot, publicDevice } from "../services/deviceLedger.js";
 import { MAX_DEVICES, addDeviceQuote, deviceOptions, devicePrice, maxDevicesFor } from "../services/devicePricing.js";
@@ -1337,6 +1337,22 @@ publicRouter.post("/entitlements/connect-code/redeem", publicConnectCodeLimit, a
         deviceLimit: entitlement.deviceLimit
       }
     });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// Whether the router has this device signed in. The portal uses it instead
+// of "can I reach the internet?", which a phone on mobile data passes while
+// its WiFi is still not signed in.
+const publicDeviceOnlineLimit = clientRateLimit({
+  name: "wifi-public-device-online", windowMs: 60_000, max: 30, key: bodyFieldKey("deviceMac"), message: "Too many checks. Try again shortly."
+});
+publicRouter.post("/hotspot/device-online", publicDeviceOnlineLimit, async (req, res, next) => {
+  try {
+    const mac = normalizeDeviceMac(typeof req.body?.deviceMac === "string" ? req.body.deviceMac : null);
+    if (!mac) return res.status(400).json({ error: "Device MAC required" });
+    return res.json({ data: { signedIn: await isHotspotDeviceSignedIn(mac) } });
   } catch (error) {
     return next(error);
   }

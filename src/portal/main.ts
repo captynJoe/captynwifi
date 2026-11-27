@@ -903,9 +903,51 @@ function checkInternetReachable(timeoutMs: number): Promise<boolean> {
       .catch(() => { clearTimeout(timer); resolve(false); });
   });
 }
+// Is this device signed in on CAPTYN WiFi? The router decides: a phone that
+// also has mobile data reaches the internet with its WiFi not signed in,
+// and used to be told "You're connected". Reaching the internet is only the
+// fallback when the router can't be asked (or there's no device MAC).
+async function deviceSignedInOnRouter(): Promise<boolean | null> {
+  const mac = state.hotspot?.mac;
+  if (!mac) return null;
+  try {
+    const response = await fetch(api("/hotspot/device-online"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deviceMac: mac })
+    });
+    if (!response.ok) return null;
+    const signedIn = (await response.json())?.data?.signedIn;
+    return typeof signedIn === "boolean" ? signedIn : null;
+  } catch (_error) {
+    return null;
+  }
+}
+async function isOnlineOnWifi(timeoutMs: number): Promise<boolean> {
+  const router = await deviceSignedInOnRouter();
+  if (router !== null) return router;
+  return checkInternetReachable(timeoutMs);
+}
+// After "You're connected": check again, and if the router says this device
+// isn't signed in after all, offer Tap to connect instead of leaving the
+// customer staring at a connected screen with no internet.
+function verifyConnectedLater(username: string, password: string, statusEl, formEl) {
+  if (!state.hotspot?.mac) return;
+  for (const delay of [5000, 15000]) {
+    setTimeout(async () => {
+      if ((await deviceSignedInOnRouter()) !== false) return;
+      setConnectState(statusEl, formEl, "failed", "This device isn't signed in yet. Tap to connect.");
+      showManualConnectFallback(username, password, {
+        placement: manualConnectPlacement(),
+        message: "Not connected yet. Tap to connect.",
+        buttonLabel: "Tap to connect"
+      });
+    }, delay);
+  }
+}
 async function waitForConnection(maxAttempts, intervalMs, checkTimeoutMs = 1500) {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    if (await checkInternetReachable(checkTimeoutMs)) return true;
+    if (await isOnlineOnWifi(checkTimeoutMs)) return true;
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
   return false;
@@ -1327,7 +1369,7 @@ function startSignInTiming(trigger: SignInTrigger) {
 
 async function attemptAutoConnect(username, password, statusEl, formEl, { freshGrant = false, holdBeforeConnect = freshGrant, rejoin = freshGrant } = {}) {
   const timing = startSignInTiming(freshGrant ? "new_access" : rejoin ? "manual" : "returning");
-  const alreadyOnline = freshGrant ? false : await checkInternetReachable(900);
+  const alreadyOnline = freshGrant ? false : await isOnlineOnWifi(900);
   timing.mark("online_check");
   if (!alreadyOnline && state.hotspot?.login) {
     setConnectState(statusEl, formEl, "connecting", "Signing this device in...");
@@ -1389,6 +1431,7 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
     clearError();
     // Say so the moment it's true; the package details below fill in after.
     setConnectState(statusEl, formEl, "connected", "You're connected.");
+    verifyConnectedLater(username, password, statusEl, formEl);
     let expiresAt = null;
     let deviceLimit;
     let devices: EntitlementDevice[] = [];

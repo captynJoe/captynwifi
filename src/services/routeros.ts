@@ -750,6 +750,27 @@ export async function isCurrentHotspotHost(deviceMac: string, deviceIp: string):
   }
 }
 
+// Is this device signed in on the router right now? The only reliable
+// answer to "is it online on CAPTYN WiFi": a phone that also has mobile
+// data reaches the internet without being signed in. null = router didn't
+// answer.
+export async function isHotspotDeviceSignedIn(deviceMac: string): Promise<boolean | null> {
+  if (missingRouterConfig()) return null;
+  const client = new RouterOsApiClient();
+  try {
+    await client.connect();
+    await client.login();
+    const rows = sentencesToRows(await client.command([
+      "/ip/hotspot/active/print", "=.proplist=mac-address", `?mac-address=${deviceMac.toUpperCase()}`
+    ]));
+    return rows.some((row) => row["mac-address"]?.toUpperCase() === deviceMac.toUpperCase());
+  } catch {
+    return null;
+  } finally {
+    client.close();
+  }
+}
+
 export type IspProbeReading = { customerMbps: number | null; bytes: number; seconds: number };
 
 // Downloads a fixed file through the router itself (nothing kept) and times
