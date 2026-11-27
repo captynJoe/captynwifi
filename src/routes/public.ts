@@ -10,7 +10,7 @@ import { buildRadiusProjection, createRadiusSecret, normalizeDeviceMac, normaliz
 import { applyRadiusProjectionRows } from "../services/radiusSqlApply.js";
 import { PromoClaimError, assignHouseGrant, claimPromoGrant, getLivePromo, releaseMovedGrant } from "../services/promo.js";
 import { accountFromToken } from "../services/account.js";
-import { formatCreditDuration } from "../services/credits.js";
+import { creditMessage, formatCreditDuration } from "../services/credits.js";
 import { bodyFieldKey, clientRateLimit, ipKey } from "../middleware/rateLimitGuard.js";
 import { ensureConnectCode, normalizeConnectCode } from "../services/connectCode.js";
 import { forgetHotspotDeviceForUser, isCurrentHotspotHost, kickHotspotDevice } from "../services/routeros.js";
@@ -318,6 +318,8 @@ function activeCreditWhere(now: Date): Prisma.WifiCreditWhereInput {
 }
 
 function creditActivationBody(credit: WifiCredit): string {
+  const custom = creditMessage(credit.metadata, "message");
+  if (custom) return custom;
   const expiryHint = credit.expiresAt ? ` Activate within ${formatCreditDuration(Math.max(0, Math.round((credit.expiresAt.getTime() - Date.now()) / 1000)))}.` : "";
   if (credit.reason === "LOYALTY_REWARD") return `Thanks for being a regular: ${formatCreditDuration(credit.durationSeconds)} free. Tap Activate when you want it to start.${expiryHint}`;
   return `${formatCreditDuration(credit.durationSeconds)} of free WiFi is ready. Tap Activate when you want it to start.${expiryHint}`;
@@ -328,7 +330,7 @@ function publicCreditNotification(credit: WifiCredit, now = new Date()) {
   return {
     id: `credit-${credit.id}`,
     type: "credit_available",
-    title: credit.reason === "LOYALTY_REWARD" || credit.reason === "HOUSING_LINK_REWARD" ? "Free WiFi, on us" : "Free internet waiting",
+    title: creditMessage(credit.metadata, "title") ?? (credit.reason === "LOYALTY_REWARD" || credit.reason === "HOUSING_LINK_REWARD" ? "Free WiFi, on us" : "Free internet waiting"),
     body: creditActivationBody(credit),
     readAt: null,
     createdAt: credit.createdAt,

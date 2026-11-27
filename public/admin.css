@@ -655,3 +655,16 @@ img.brand-mark { background: none; border-radius: 10px; object-fit: contain; }
 .status-chip.unresolved { background: rgba(214, 150, 20, .16); color: #a46a00; }
 .trace-reveal { margin-left: 8px; font-size: 12px; }
 @media (max-width: 720px) { .trace-chain li { grid-template-columns: 1fr; gap: 2px; } }
+
+/* Payments → Needs attention */
+.attention-list { display: grid; gap: 12px; padding: 0 16px 16px; }
+.attention-item { display: grid; grid-template-columns: minmax(200px, 1fr) 2fr; gap: 14px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; }
+.attention-facts { display: grid; gap: 4px; align-content: start; font-size: 13px; }
+.attention-facts strong { font-size: 15px; }
+.attention-reason { color: var(--muted); }
+.attention-credit { display: grid; grid-template-columns: 100px 1fr; gap: 10px; align-items: start; }
+.attention-credit .field.wide { grid-column: 1 / -1; }
+.attention-credit textarea { width: 100%; resize: vertical; font: inherit; }
+.attention-actions { grid-column: 1 / -1; display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
+.nav-badge { margin-left: 6px; padding: 1px 7px; border-radius: 999px; background: var(--red, #d33); color: #fff; font-size: 11px; font-weight: 800; }
+@media (max-width: 720px) { .attention-item { grid-template-columns: 1fr; } }

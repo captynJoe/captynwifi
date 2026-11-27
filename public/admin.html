@@ -7,7 +7,7 @@
     <script src="theme.js?v=2026080402"></script>
     <link rel="icon" href="captyn-mark.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="theme.css?v=2026103102" />
-    <link rel="stylesheet" href="admin.css?v=2026112402" />
+    <link rel="stylesheet" href="admin.css?v=2026112701" />
   </head>
   <body>
     <header class="topbar">
@@ -89,7 +89,7 @@
               <button class="nav-item" type="button" data-page="setup">Setup</button>
               <button class="nav-item" type="button" data-page="packages">Packages</button>
               <button class="nav-item" type="button" data-page="vouchers">Vouchers</button>
-              <button class="nav-item" type="button" data-page="payments">Payments</button>
+              <button class="nav-item" type="button" data-page="payments">Payments<span id="attention-badge" class="nav-badge hidden"></span></button>
               <button class="nav-item" type="button" data-page="access">Access</button>
               <button class="nav-item hidden" type="button" data-page="trace">Trace</button>
               <button class="nav-item" type="button" data-page="pppoe">PPPoE</button>
@@ -249,6 +249,10 @@
         </section>
 
         <section class="page-grid hidden" data-page-panel="payments">
+          <article id="attention-panel" class="surface span-12 hidden">
+            <div class="panel-head"><h2>Needs attention</h2><span id="attention-count"></span></div>
+            <div id="attention-list" class="attention-list"></div>
+          </article>
           <article class="surface span-12 table-panel">
             <div class="panel-head"><h2>Payments</h2><span id="payments-count"></span></div>
             <div class="table-wrap"><table><thead><tr><th>Reference</th><th>Site</th><th>Package</th><th>Phone</th><th>Status</th><th>Amount</th><th>Created</th></tr></thead><tbody id="payments-body"></tbody></table></div>
@@ -471,6 +475,6 @@
       </section>
     </main>
 
-    <script src="admin.js?v=2026112501" defer data-cfasync="false"></script>
+    <script src="admin.js?v=2026112701" defer data-cfasync="false"></script>
   </body>
 </html>

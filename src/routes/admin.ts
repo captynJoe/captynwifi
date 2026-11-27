@@ -17,6 +17,7 @@ import { issueVoucher } from "../services/voucherIssuance.js";
 import { normalizeKenyaPhone } from "../lib/phone.js";
 import { PROMO_PLAN_SOURCE, endPromo, getActivePromo, startPromo } from "../services/promo.js";
 import { housingConfigured } from "../services/housingStanding.js";
+import { closeUnappliedPayment, creditUnappliedPayment, listUnappliedPayments } from "../services/unappliedPayments.js";
 import { getLoyaltySetting, monthStandings, pickLoyaltyRound, releaseLoyaltyRound, tierForRank } from "../services/loyalty.js";
 import { DYNAMIC_PLAN_SOURCE, refreshMirrorForBaseline } from "../services/dynamicPlanEngine.js";
 import { ensureConnectCode } from "../services/connectCode.js";
@@ -304,6 +305,44 @@ adminRouter.post("/trace/reveal", async (req, res, next) => {
     });
     return sendData(res, { phone: intent.customerPhone });
   } catch (error) {
+    return next(error);
+  }
+});
+
+// Payments → Needs attention: paid but never applied (see unappliedPayments.ts).
+const adminActor = (req: { wifiAdminSession?: { sub?: string; name?: string | null; email?: string | null } }) =>
+  ({ id: req.wifiAdminSession?.sub ?? "admin", name: req.wifiAdminSession?.name ?? req.wifiAdminSession?.email ?? null });
+
+adminRouter.get("/payments/attention", async (_req, res, next) => {
+  try {
+    return sendData(res, await listUnappliedPayments(prisma));
+  } catch (error) {
+    return next(error);
+  }
+});
+
+const creditUnappliedSchema = z.object({
+  hours: z.coerce.number().min(0.25).max(24 * 30),
+  title: z.string().trim().min(1).max(80),
+  message: z.string().trim().min(1).max(300)
+});
+adminRouter.post("/payments/:id/credit", async (req, res, next) => {
+  try {
+    const input = creditUnappliedSchema.parse(req.body ?? {});
+    return sendData(res, await creditUnappliedPayment(prisma, req.params.id, { ...input, actor: adminActor(req) }));
+  } catch (error) {
+    if ((error as { status?: number }).status === 409) return res.status(409).json({ error: (error as Error).message });
+    return next(error);
+  }
+});
+
+adminRouter.post("/payments/:id/close", async (req, res, next) => {
+  try {
+    const note = z.string().trim().min(1).max(300).parse(req.body?.note);
+    await closeUnappliedPayment(prisma, req.params.id, { note, actor: adminActor(req) });
+    return sendData(res, { closed: true });
+  } catch (error) {
+    if ((error as { status?: number }).status === 409) return res.status(409).json({ error: (error as Error).message });
     return next(error);
   }
 });

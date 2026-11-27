@@ -26,6 +26,13 @@ export type GrantCreditInput = {
   metadata?: Prisma.InputJsonValue;
 };
 
+// A credit can carry its own title/message (metadata.title, metadata.message),
+// e.g. "For your 11 Nov payment", so the customer knows what it's for.
+export function creditMessage(metadata: unknown, key: "title" | "message"): string | null {
+  const value = metadata && typeof metadata === "object" ? (metadata as Record<string, unknown>)[key] : null;
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
 export function formatCreditDuration(totalSeconds: number): string {
   const totalMinutes = Math.round(totalSeconds / 60);
   const hours = Math.floor(totalMinutes / 60);
@@ -75,8 +82,8 @@ export async function grantWifiCredit(prisma: PrismaClient, input: GrantCreditIn
       data: {
         customerPhone: input.customerPhone,
         type: "credit_granted",
-        title: input.reason === "LOYALTY_REWARD" || input.reason === "HOUSING_LINK_REWARD" ? "Free WiFi, on us" : "We've credited your account",
-        body: creditNotificationBody(input.durationSeconds, input.reason, input.expiresAt),
+        title: creditMessage(input.metadata, "title") ?? (input.reason === "LOYALTY_REWARD" || input.reason === "HOUSING_LINK_REWARD" ? "Free WiFi, on us" : "We've credited your account"),
+        body: creditMessage(input.metadata, "message") ?? creditNotificationBody(input.durationSeconds, input.reason, input.expiresAt),
         data: {
           creditId: credit.id,
           durationSeconds: input.durationSeconds,

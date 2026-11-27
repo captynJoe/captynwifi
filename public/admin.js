@@ -1651,6 +1651,7 @@ function setPage(page) {
   clearInterval(capacityRefreshTimer);
   clearInterval(capacityHistoryTimer);
   if (state.activePage === "trace") void loadTraceAlerts();
+  if (state.activePage === "payments") void loadAttention();
   if (state.activePage === "capacity") {
     void loadCapacityStatus();
     void loadCapacityHistory();
@@ -2388,3 +2389,87 @@ document.getElementById("trace-alerts-body")?.addEventListener("click", (event) 
 fetch(adminApi("/trace?q="), { headers: { "x-captyn-wifi-admin-session": state.sessionToken || "" } })
   .then((response) => { if (response.status !== 404) document.querySelector('[data-page="trace"]')?.classList.remove("hidden"); })
   .catch(() => {});
+
+
+// ---------- Payments → Needs attention ----------
+// Payments taken but never applied. Credit the customer (they see it in their
+// WiFi notifications with Activate, with this message) or close it after
+// sorting it another way. Both are recorded with the admin's name.
+async function loadAttention() {
+  const panel = document.getElementById("attention-panel");
+  const list = document.getElementById("attention-list");
+  const count = document.getElementById("attention-count");
+  const badge = document.getElementById("attention-badge");
+  if (!panel || !list || !count) return;
+  let rows;
+  try {
+    rows = await api(adminApi("/payments/attention"));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (/404/.test(message)) return;
+    panel.classList.remove("hidden");
+    list.innerHTML = `<p class="empty-state">${escapeHtml(message || "Couldn't load payments that need attention.")}</p>`;
+    return;
+  }
+  badge?.classList.toggle("hidden", !rows.length);
+  if (badge) badge.textContent = String(rows.length);
+  panel.classList.toggle("hidden", !rows.length);
+  count.textContent = rows.length ? `${rows.length} to resolve` : "";
+  list.innerHTML = rows.map((row) => `
+    <form class="attention-item" data-attention-id="${escapeHtml(row.paymentIntentId)}">
+      <div class="attention-facts">
+        <strong>${escapeHtml(row.phone)}</strong>
+        <span>${fmtMoney(row.amountKsh)}${row.receipt ? ` · ${escapeHtml(row.receipt)}` : ""} · ${escapeHtml(fmtDate(row.paidAt))}</span>
+        <span>${escapeHtml(row.purpose)}${row.packageName ? `: ${escapeHtml(row.packageName)}` : ""}${row.forPackage && row.forPackage !== row.packageName ? ` (on ${escapeHtml(row.forPackage)})` : ""}</span>
+        <span class="attention-reason">${escapeHtml(row.reason)}</span>
+      </div>
+      <div class="attention-credit">
+        <label class="field compact"><span>Hours</span><input name="hours" type="number" min="0.25" step="0.25" value="${escapeHtml(row.suggested.hours)}" required /></label>
+        <label class="field wide"><span>Title</span><input name="title" type="text" maxlength="80" value="${escapeHtml(row.suggested.title)}" required /></label>
+        <label class="field wide"><span>Message they'll see</span><textarea name="message" rows="3" maxlength="300" required>${escapeHtml(row.suggested.message)}</textarea></label>
+        <div class="attention-actions">
+          <span class="inline-status" data-attention-status></span>
+          <button class="secondary" type="button" data-attention-close>Close without credit</button>
+          <button type="submit">Credit</button>
+        </div>
+      </div>
+    </form>`).join("");
+}
+
+document.getElementById("attention-list")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.target instanceof HTMLFormElement ? event.target : null;
+  if (!form) return;
+  const status = form.querySelector("[data-attention-status]");
+  const data = new FormData(form);
+  form.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+  setInlineStatus(status, "Crediting");
+  try {
+    await writeApi(adminApi(`/payments/${encodeURIComponent(form.dataset.attentionId)}/credit`), "POST", {
+      hours: Number(data.get("hours")), title: String(data.get("title") || ""), message: String(data.get("message") || "")
+    });
+    setInlineStatus(status, "Credited", "ok");
+    await loadAttention();
+  } catch (error) {
+    setInlineStatus(status, error instanceof Error ? error.message : "Failed", "bad");
+    form.querySelectorAll("button").forEach((b) => { b.disabled = false; });
+  }
+});
+
+document.getElementById("attention-list")?.addEventListener("click", async (event) => {
+  const button = event.target instanceof Element ? event.target.closest("[data-attention-close]") : null;
+  const form = button?.closest("form");
+  if (!button || !form) return;
+  const note = window.prompt("Why are you closing it? (e.g. refunded KSh 12 by M-PESA)");
+  if (!note || !note.trim()) return;
+  const status = form.querySelector("[data-attention-status]");
+  try {
+    await writeApi(adminApi(`/payments/${encodeURIComponent(form.dataset.attentionId)}/close`), "POST", { note: note.trim() });
+    setInlineStatus(status, "Closed", "ok");
+    await loadAttention();
+  } catch (error) {
+    setInlineStatus(status, error instanceof Error ? error.message : "Failed", "bad");
+  }
+});
+
+void loadAttention();
