@@ -1,6 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { config } from "../config.js";
-import { fairShareHeartbeat, probeIspThroughput, setFairShareLimit } from "./routeros.js";
+import { probeIspThroughput, setFairShareLimit } from "./routeros.js";
 
 // Pure: the fair queue's ceiling for a measured line speed. 90% keeps the
 // queue at the router (not the ISP), so the router decides who gets what.
@@ -67,7 +67,8 @@ export async function runIspProbe(prisma: PrismaClient, now = new Date(), { forc
     const reading = await probeIspThroughput(PROBE_URL);
     const probeMbps = mbps(reading.bytes, reading.seconds);
     const customerMbps = reading.customerMbps === null ? null : Math.round(reading.customerMbps * 10) / 10;
-    const totalMbps = probeMbps !== null && customerMbps !== null ? Math.round((probeMbps + customerMbps) * 10) / 10 : null;
+    const measured = probeMbps !== null && customerMbps !== null ? Math.round((probeMbps + customerMbps) * 10) / 10 : null;
+    const totalMbps = measured !== null && reading.linkMbps ? Math.min(measured, reading.linkMbps) : measured;
     const probe = await prisma.wifiIspProbe.create({
       data: { probeMbps, customerMbps, totalMbps, bytes: reading.bytes, seconds: reading.seconds }
     });
@@ -76,7 +77,6 @@ export async function runIspProbe(prisma: PrismaClient, now = new Date(), { forc
       const target = decideFairShareLimit(limitBefore, fairShareLimitMbps(totalMbps), recentPrevious);
       const set = await setFairShareLimit(target);
       if (set) {
-        await fairShareHeartbeat();
         console.log(`Fair share: line ${totalMbps} Mbps, queue ${limitBefore ?? "?"}M -> ${set.next}${target === limitBefore && fairShareLimitMbps(totalMbps) < target ? " (held: lowers need two tests in a row)" : ""}`);
       } else console.warn("Fair share: queue captyn-fair-down not found or router unavailable");
     }
@@ -94,4 +94,17 @@ export async function runIspProbe(prisma: PrismaClient, now = new Date(), { forc
 
 export async function pruneIspProbes(prisma: PrismaClient, now = new Date()) {
   await prisma.wifiIspProbe.deleteMany({ where: { at: { lt: new Date(now.getTime() - RETENTION_DAYS * 86400 * 1000) } } });
+}
+
+// Watchdog run by the API process: if the RADIUS worker (which runs the
+// probes) hasn't measured the line for 70 minutes, open the fair queue so a
+// stuck worker can't leave everyone on a stale, low limit. The router's
+// Netwatch covers the whole server being unreachable (docs/fair-share.rsc).
+export async function fairShareWatchdog(prisma: PrismaClient, now = new Date()) {
+  if (!config.routeros.fairShare) return null;
+  const lastGood = await prisma.wifiIspProbe.findFirst({ where: { totalMbps: { not: null } }, orderBy: { at: "desc" }, select: { at: true } });
+  if (lastGood && now.getTime() - lastGood.at.getTime() < 70 * 60 * 1000) return null;
+  const set = await setFairShareLimit(FAIR_SHARE_OPEN_MBPS);
+  if (set && set.previous !== String(FAIR_SHARE_OPEN_MBPS * 1_000_000)) console.warn(`Fair share watchdog: no line measurement for 70 min, queue opened ${set.previous} -> ${set.next}`);
+  return set;
 }

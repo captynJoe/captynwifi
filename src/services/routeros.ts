@@ -771,7 +771,7 @@ export async function isHotspotDeviceSignedIn(deviceMac: string): Promise<boolea
   }
 }
 
-export type IspProbeReading = { customerMbps: number | null; bytes: number; seconds: number };
+export type IspProbeReading = { customerMbps: number | null; bytes: number; seconds: number; linkMbps?: number | null };
 
 // Downloads a fixed file through the router itself (nothing kept) and times
 // it, after reading the customer traffic already on the WAN. Together they
@@ -801,14 +801,29 @@ export async function probeIspThroughput(url: string, timeoutMs = 60_000): Promi
     const started = Date.now();
     const rows = sentencesToRows(await client.command(["/tool/fetch", `=url=${url}`, "=keep-result=no"], timeoutMs));
     const seconds = (Date.now() - started) / 1000;
+    // Read again only once the test's own traffic has left the 1 s average
+    // (reading straight after counted the test twice: 132 Mbps on a 100 Mbps port).
+    await new Promise((resolve) => setTimeout(resolve, 3000));
     const after = await customerNow();
     const customerMbps = before === null && after === null ? null : Math.max(before ?? 0, after ?? 0);
+    // The line can't carry more than its ports' link speed.
+    let linkMbps: number | null = null;
+    try {
+      let sum = 0;
+      for (const port of wanPorts.length ? wanPorts : ["ether1"]) {
+        const row = sentencesToRows(await client.command(["/interface/ethernet/monitor", `=numbers=${port}`, "=once="]))[0] || {};
+        sum += rateMbps(row.rate) ?? 0;
+      }
+      linkMbps = sum > 0 ? sum : null;
+    } catch {
+      // Not an ethernet port (e.g. PPPoE/LTE WAN): no cap.
+    }
     const last = rows[rows.length - 1] || {};
     if (last.status && last.status !== "finished") throw new Error(`Download ${last.status}`);
     // RouterOS reports "downloaded" in KiB.
     const bytes = Math.round(Number(last.downloaded) * 1024);
     if (!Number.isFinite(bytes) || bytes <= 0) throw new Error("Download returned no data");
-    return { customerMbps, bytes, seconds };
+    return { customerMbps, bytes, seconds, linkMbps };
   } finally {
     client.close();
   }
@@ -850,23 +865,6 @@ export async function getFairShareLimit(): Promise<string | null> {
     return Number.isFinite(limit) && limit > 0 ? `${Math.round(limit / 1_000_000)} Mbps` : null;
   } catch {
     return null;
-  } finally {
-    client.close();
-  }
-}
-
-// Tells the router's watchdog the server is alive (docs/fair-share.rsc): if
-// it hears nothing for 70 minutes it opens the fair queue by itself, so a
-// stopped server can never leave everyone on a stale, low limit.
-export async function fairShareHeartbeat(): Promise<void> {
-  if (missingRouterConfig()) return;
-  const client = new RouterOsApiClient();
-  try {
-    await client.connect();
-    await client.login();
-    await client.command(["/system/script/run", "=number=captyn-fair-heartbeat"]);
-  } catch {
-    // No watchdog installed yet: nothing to tell.
   } finally {
     client.close();
   }

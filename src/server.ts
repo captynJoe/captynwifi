@@ -10,6 +10,7 @@ import { integrationRouter } from "./routes/integration.js";
 import { adminRouter } from "./routes/admin.js";
 import { adminAuthRouter } from "./routes/adminAuth.js";
 import { publicRouter, reconcilePendingMpesaPayments } from "./routes/public.js";
+import { fairShareWatchdog } from "./services/ispProbe.js";
 import { accountRouter } from "./routes/account.js";
 import { runLoyaltyCycle } from "./services/loyalty.js";
 import { captureNetworkCapacitySample } from "./services/networkCapacityMonitor.js";
@@ -75,6 +76,11 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
 app.listen(config.port, () => {
   console.log(`CAPTYN Wi-Fi API running on port ${config.port}`);
 });
+
+// Fair queue safety net (see ispProbe.ts): opens it if the worker stops measuring.
+setInterval(() => {
+  fairShareWatchdog(prisma).catch((error) => console.error("Fair share watchdog error:", error));
+}, 10 * 60 * 1000);
 
 setInterval(() => {
   reconcilePendingMpesaPayments()
