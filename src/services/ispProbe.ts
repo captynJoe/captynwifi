@@ -5,6 +5,7 @@ import { probeIspThroughput, setFairShareLimit } from "./routeros.js";
 // Pure: the fair queue's ceiling for a measured line speed. 90% keeps the
 // queue at the router (not the ISP), so the router decides who gets what.
 export const FAIR_SHARE_OPEN_MBPS = 90;
+const FAIR_SHARE_OPEN_SETTLE_MS = 4000;
 export function fairShareLimitMbps(lineMbps: number) {
   return Math.min(90, Math.max(8, Math.round(lineMbps * 0.9)));
 }
@@ -38,6 +39,15 @@ export async function runIspProbe(prisma: PrismaClient, now = new Date(), { forc
   const last = await prisma.wifiIspProbe.findFirst({ orderBy: { at: "desc" }, select: { at: true } });
   if (!force && !ispProbeDue(now, last?.at ?? null)) return null;
   try {
+    // Measure the LINE, not our own queue: while the fair queue is limiting
+    // customers, "customers + one test download" only ever reads about the
+    // current limit, so the limit chased itself downward (27 Nov: held at
+    // 20-26 Mbps on a line giving 65). Open it for the test, let customers'
+    // traffic grow into the room, then measure.
+    if (config.routeros.fairShare) {
+      await setFairShareLimit(FAIR_SHARE_OPEN_MBPS);
+      await new Promise((resolve) => setTimeout(resolve, FAIR_SHARE_OPEN_SETTLE_MS));
+    }
     const reading = await probeIspThroughput(PROBE_URL);
     const probeMbps = mbps(reading.bytes, reading.seconds);
     const customerMbps = reading.customerMbps === null ? null : Math.round(reading.customerMbps * 10) / 10;
