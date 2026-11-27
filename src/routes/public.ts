@@ -8,6 +8,8 @@ import { prisma } from "../prisma.js";
 import { formatDarajaMsisdn, getMpesaStatus, initiateWifiStkPush, isSuccessfulStkQuery, queryWifiStkPush } from "../services/mpesa.js";
 import { buildRadiusProjection, createRadiusSecret, normalizeDeviceMac, normalizeWifiUsername } from "../services/radiusProjection.js";
 import { applyRadiusProjectionRows } from "../services/radiusSqlApply.js";
+import { startPendingVoucher } from "../services/voucherIssuance.js";
+import { packageEndedMessage } from "../services/packageEnded.js";
 import { PromoClaimError, assignHouseGrant, claimPromoGrant, getLivePromo, releaseMovedGrant } from "../services/promo.js";
 import { accountFromToken } from "../services/account.js";
 import { creditMessage, formatCreditDuration } from "../services/credits.js";
@@ -1354,8 +1356,20 @@ publicRouter.post("/entitlements/sign-in-device", publicDeviceSignInLimit, async
     const parsed = signInDeviceSchema.parse(req.body);
     const mac = normalizeDeviceMac(parsed.deviceMac);
     if (!mac) return res.status(400).json({ error: "Device MAC required" });
-    const entitlement = await authenticateEntitlementOwner(parsed.username, parsed.password);
-    if (!entitlement) return res.status(404).json({ error: "No matching active access record" });
+    let entitlement = await authenticateEntitlementOwner(parsed.username, parsed.password);
+    if (!entitlement) {
+      // The right login for a package that has ended: say so, with when.
+      const ended = await prisma.wifiEntitlement.findFirst({
+        where: { username: parsed.username }, orderBy: { createdAt: "desc" }, include: { plan: { select: { name: true } } }
+      });
+      if (ended && ended.cleartextSecret === parsed.password && ended.expiresAt <= new Date()) {
+        return res.status(409).json({ error: "SIGN_IN_REFUSED", message: packageEndedMessage(ended.plan?.name ?? null, ended.expiresAt) });
+      }
+      return res.status(404).json({ error: "No matching active access record" });
+    }
+    // A voucher that starts on first use starts now, so the device is signed
+    // in with its real end time.
+    if (entitlement.startsOnFirstUseSeconds) entitlement = (await startPendingVoucher(prisma, entitlement.id)) ?? entitlement;
 
     const result = await signInEntitlementDevice(prisma, entitlement, mac);
     if (result.refusedReason) {
@@ -1504,8 +1518,10 @@ publicRouter.get("/entitlements/:username/status", async (req, res, next) => {
     const entitlement = await findCurrentEntitlementForUsername(username);
     if (!entitlement) return res.status(404).json({ error: "Not found" });
     const deviceCount = await prisma.wifiEntitlementDevice.count({ where: { entitlementId: entitlement.id } });
+    const plan = await prisma.wifiPlan.findUnique({ where: { id: entitlement.planId }, select: { name: true } });
     return res.json({
       data: toJsonSafe({
+        planName: plan?.name ?? null,
         status: entitlement.status,
         startsAt: entitlement.startsAt,
         expiresAt: entitlement.expiresAt,

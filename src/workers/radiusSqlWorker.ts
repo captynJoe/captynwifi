@@ -10,6 +10,7 @@ import { sweepExpiredSessions, sweepHotspotCookies } from "../services/cookieSwe
 import { runAutoReconnect } from "../services/autoReconnect.js";
 import { collectDevices, pruneDeviceHistory } from "../services/deviceCollector.js";
 import { pruneIspProbes, runIspProbe } from "../services/ispProbe.js";
+import { startVouchersOnFirstUse } from "../services/voucherIssuance.js";
 import { runIntelAlerts } from "../services/intelAlerts.js";
 
 async function applyProjection(id: string) {
@@ -264,6 +265,8 @@ async function closeStaleSessions() {
 }
 
 async function tick() {
+  const startedVouchers = await startVouchersOnFirstUse(prisma).catch((error) => { console.error("Voucher first-use start error:", error); return 0; });
+  if (startedVouchers > 0) console.log(`Started ${startedVouchers} voucher(s) on first use`);
   await expireEntitlements();
   const staleRadiusCredentials = await removeStaleExpiredRadiusCredentials();
   if (staleRadiusCredentials > 0) console.log(`Removed stale RADIUS credentials for ${staleRadiusCredentials} expired or suspended WiFi username(s)`);

@@ -7,7 +7,7 @@
     <script src="theme.js?v=2026080402"></script>
     <link rel="icon" href="captyn-mark.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="theme.css?v=2026103102" />
-    <link rel="stylesheet" href="admin.css?v=2026112701" />
+    <link rel="stylesheet" href="admin.css?v=2026112702" />
   </head>
   <body>
     <header class="topbar">
@@ -239,7 +239,7 @@
           </form>
           <article class="surface span-7 table-panel">
             <div class="panel-head"><h2>Bulk Voucher Results</h2><span id="bulk-voucher-summary"></span></div>
-            <div class="table-wrap"><table><thead><tr><th>Phone</th><th>Status</th><th>Code / Error</th><th>Expires</th></tr></thead><tbody id="bulk-voucher-body"><tr><td colspan="4" class="empty-state">Gift vouchers to see per-phone results here.</td></tr></tbody></table></div>
+            <div class="table-wrap"><table><thead><tr><th>Phone</th><th>Status</th><th>Code / Error</th><th>Use by</th></tr></thead><tbody id="bulk-voucher-body"><tr><td colspan="4" class="empty-state">Gift vouchers to see per-phone results here.</td></tr></tbody></table></div>
           </article>
 
           <article class="surface span-12 table-panel">
@@ -249,6 +249,16 @@
         </section>
 
         <section class="page-grid hidden" data-page-panel="payments">
+          <article class="surface span-12">
+            <div class="panel-head"><h2>Give free time</h2></div>
+            <form id="give-time-form" class="setup-body give-time-form">
+              <label class="field" for="give-time-phone"><span>Phone</span><input id="give-time-phone" type="tel" inputmode="tel" placeholder="0712 345 678" required /></label>
+              <label class="field compact" for="give-time-hours"><span>Hours</span><input id="give-time-hours" type="number" min="0.25" step="0.25" value="2" required /></label>
+              <label class="field wide" for="give-time-title"><span>Title</span><input id="give-time-title" type="text" maxlength="80" value="Free WiFi, on us" required /></label>
+              <label class="field wide" for="give-time-message"><span>Message they'll see</span><textarea id="give-time-message" rows="2" maxlength="300" required>Here's some free WiFi from CAPTYN. Tap Activate when you want it to start.</textarea></label>
+              <div class="attention-actions wide"><span id="give-time-status" class="inline-status"></span><button type="submit">Give free time</button></div>
+            </form>
+          </article>
           <article id="attention-panel" class="surface span-12 hidden">
             <div class="panel-head"><h2>Needs attention</h2><span id="attention-count"></span></div>
             <div id="attention-list" class="attention-list"></div>
@@ -475,6 +485,6 @@
       </section>
     </main>
 
-    <script src="admin.js?v=2026112701" defer data-cfasync="false"></script>
+    <script src="admin.js?v=2026112702" defer data-cfasync="false"></script>
   </body>
 </html>

@@ -2387,6 +2387,8 @@ state.hotspot = readHotspotParams();
 // what to do next. The raw reasons are FreeRADIUS / captyn.policy replies.
 type HotspotRefusal = { message: string; action: "buy" | "code" | "none" };
 function hotspotRefusal(raw: string): HotspotRefusal {
+  // The server already said which package ended and when.
+  if (/^Your .+ ended at /.test(raw)) return { message: raw, action: "buy" };
   if (/already logged in|simultaneous/i.test(raw)) return { message: "This package is in use on its other devices. Sign one out there, or add this device.", action: "none" };
   if (/signed out of the package/i.test(raw)) return { message: "This device was signed out of the package. Enter the device code to use it here.", action: "code" };
   if (/device limit/i.test(raw)) return { message: "This package has reached its device limit. Use a device it's been on before, or choose a package.", action: "buy" };
@@ -2429,7 +2431,26 @@ function autoSignInAllowed(): boolean {
 function noteAutoSignIn() {
   try { sessionStorage.setItem(AUTO_SIGN_IN_KEY, String(Date.now())); } catch (_error) {}
 }
-if (state.hotspot?.error) showHotspotRefusal(decodeURIComponent(state.hotspot.error));
+if (state.hotspot?.error) {
+  showHotspotRefusal(decodeURIComponent(state.hotspot.error));
+  void explainEndedPackage();
+}
+// The router just refused this device. If the package saved on this device
+// has run out, say which one and when instead of the router's bare refusal.
+async function explainEndedPackage() {
+  const remembered = loadRememberedAccess();
+  if (!remembered?.username) return;
+  try {
+    const response = await fetch(api(`/entitlements/${encodeURIComponent(remembered.username)}/status`));
+    const data = response.ok ? (await response.json())?.data : null;
+    if (!data?.expiresAt || new Date(data.expiresAt).getTime() > Date.now()) return;
+    const end = new Date(data.expiresAt);
+    const sameDay = end.toDateString() === new Date().toDateString();
+    const time = end.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    const day = sameDay ? "today" : `on ${end.toLocaleDateString(undefined, { day: "numeric", month: "short" })}`;
+    showHotspotRefusal(`Your ${data.planName || "package"} ended at ${time} ${day}. Choose a package to get back online.`);
+  } catch (_error) {}
+}
 
 voucherLoginToggle?.addEventListener("click", () => {
   voucherLoginForm.classList.toggle("hidden");

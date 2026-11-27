@@ -217,6 +217,10 @@ model WifiEntitlement {
   startsAt         DateTime
   expiresAt        DateTime
   deviceLimit      Int                   @default(1)
+  // Vouchers that start on first use: their hours (seconds) until first
+  // connection, when expiresAt (a use-by date until then) becomes
+  // first use + these seconds and this is cleared. See voucherIssuance.ts.
+  startsOnFirstUseSeconds Int?
   rateLimit        String?
   acctInterimSeconds Int                 @default(120)
   outagePausedAt   DateTime?

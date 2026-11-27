@@ -2270,7 +2270,10 @@ const grantCreditSchema = z.object({
   sourceReference: z.string().trim().min(1).optional(),
   expiresInHours: z.coerce.number().int().positive().max(24 * 31).optional(),
   expiresInDays: z.coerce.number().int().positive().optional(),
-  note: z.string().trim().min(1).max(500).optional()
+  note: z.string().trim().min(1).max(500).optional(),
+  // What the customer sees in their WiFi notifications (else the standard text).
+  title: z.string().trim().min(1).max(80).optional(),
+  message: z.string().trim().min(1).max(300).optional()
 });
 
 async function creditTemplatePlan(customerPhone: string, planId?: string) {
@@ -2319,9 +2322,19 @@ adminRouter.post("/credits/grant", async (req, res, next) => {
       sourceReference: data.sourceReference,
       expiresAt,
       createdBy: req.wifiAdminSession?.email ?? null,
-      metadata: { ...(data.note ? { note: data.note } : {}), templatePlanName: plan.name }
+      metadata: {
+        ...(data.note ? { note: data.note } : {}),
+        ...(data.title ? { title: data.title } : {}),
+        ...(data.message ? { message: data.message } : {}),
+        templatePlanName: plan.name
+      }
     });
-    return sendData(res, credit);
+    const actor = adminActor(req);
+    await prisma.wifiAuditEvent.create({
+      data: { actorId: actor.id, actorName: actor.name, action: "credit.given", target: customerPhone, detail: { creditId: credit.id, hours: data.durationSeconds / 3600, title: data.title ?? null, message: data.message ?? null } }
+    });
+    const knownCustomer = await prisma.wifiPaymentIntent.count({ where: { customerPhone, status: "activated" } });
+    return sendData(res, { ...credit, knownCustomer: knownCustomer > 0 });
   } catch (error) {
     return next(error);
   }

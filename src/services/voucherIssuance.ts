@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { Prisma, WifiPlan } from "@prisma/client";
+import type { Prisma, PrismaClient, WifiPlan } from "@prisma/client";
 import { prisma } from "../prisma.js";
 import { config } from "../config.js";
 import { buildRadiusProjection } from "./radiusProjection.js";
@@ -19,7 +19,14 @@ export interface IssueVoucherInput {
   deviceMac?: string | null;
   // Who issued it (admin or integration), kept on the voucher's payment record.
   issuedBy?: { id: string; name: string | null };
+  // Hours start when the voucher first connects (default), not at issue;
+  // until then it's usable up to a use-by date. Housing's resident-portal
+  // vouchers connect immediately, so they start at issue.
+  startOnFirstUse?: boolean;
 }
+
+// How long an unused voucher stays usable before its hours start.
+export const VOUCHER_USE_BY_MS = 7 * 24 * 3600 * 1000;
 
 export interface IssuedVoucher {
   entitlement: Prisma.WifiEntitlementGetPayload<{ include: { site: true; plan: true } }>;
@@ -34,7 +41,8 @@ export interface IssuedVoucher {
  */
 export async function issueVoucher(plan: WifiPlan, input: IssueVoucherInput): Promise<IssuedVoucher> {
   const startsAt = new Date();
-  const expiresAt = new Date(startsAt.getTime() + plan.durationSeconds * 1000);
+  const startOnFirstUse = input.startOnFirstUse ?? true;
+  const expiresAt = new Date(startsAt.getTime() + (startOnFirstUse ? VOUCHER_USE_BY_MS : plan.durationSeconds * 1000));
   const customerPhone = input.customerPhone ?? "";
   const deviceMac = input.deviceMac ?? null;
 
@@ -79,7 +87,8 @@ export async function issueVoucher(plan: WifiPlan, input: IssueVoucherInput): Pr
             expiresAt,
             deviceLimit: plan.deviceLimit,
             rateLimit: plan.rateLimit,
-            acctInterimSeconds: config.defaultAcctInterimSeconds
+            acctInterimSeconds: config.defaultAcctInterimSeconds,
+            startsOnFirstUseSeconds: startOnFirstUse ? plan.durationSeconds : null
           },
           include: { site: true, plan: true }
         });
@@ -133,4 +142,58 @@ class VoucherCodeCollisionError extends Error {
   constructor() {
     super("Voucher code collision");
   }
+}
+
+// A start-on-first-use voucher just connected (or is about to): its hours
+// start now. expiresAt becomes start + hours, the RADIUS login gets the real
+// end time, and the field is cleared so this happens once. Safe to call twice.
+export async function startPendingVoucher(prisma: PrismaClient, entitlementId: string, startedAt = new Date()) {
+  return prisma.$transaction(async (tx) => {
+    const pending = await tx.wifiEntitlement.findFirst({ where: { id: entitlementId, startsOnFirstUseSeconds: { not: null }, status: "active" } });
+    if (!pending?.startsOnFirstUseSeconds) return null;
+    const expiresAt = new Date(startedAt.getTime() + pending.startsOnFirstUseSeconds * 1000);
+    const started = await tx.wifiEntitlement.update({
+      where: { id: pending.id },
+      data: { startsAt: startedAt, expiresAt, startsOnFirstUseSeconds: null }
+    });
+    const projection = buildRadiusProjection({
+      entitlementId: started.id,
+      phone: started.customerPhone,
+      username: started.username,
+      password: started.cleartextSecret,
+      deviceMac: started.deviceMac,
+      expiresAt,
+      durationSeconds: pending.startsOnFirstUseSeconds,
+      rateLimit: started.rateLimit,
+      deviceLimit: started.deviceLimit
+    });
+    await applyRadiusProjectionRows(tx, projection.username, projection.checkItems, projection.replyItems);
+    await tx.wifiRadiusProjection.updateMany({
+      where: { entitlementId: started.id },
+      data: { checkItems: projection.checkItems, replyItems: projection.replyItems, status: "applied", appliedAt: startedAt }
+    });
+    return started;
+  });
+}
+
+// Vouchers that connected through the router's own login page: their first
+// accounting record is the first use. Run by the RADIUS worker.
+export async function startVouchersOnFirstUse(prisma: PrismaClient) {
+  const pending = await prisma.wifiEntitlement.findMany({
+    where: { startsOnFirstUseSeconds: { not: null }, status: "active" },
+    select: { id: true, username: true },
+    take: 200
+  });
+  if (pending.length === 0) return 0;
+  const firstUse = await prisma.$queryRaw<Array<{ username: string; first: Date }>>`
+    SELECT username, min(acctstarttime) AS first FROM radacct
+    WHERE username = ANY(${pending.map((p) => p.username)}) GROUP BY username`;
+  const firstByUser = new Map(firstUse.map((row) => [row.username, row.first]));
+  let started = 0;
+  for (const voucher of pending) {
+    const first = firstByUser.get(voucher.username);
+    if (!first) continue;
+    if (await startPendingVoucher(prisma, voucher.id, first)) started += 1;
+  }
+  return started;
 }

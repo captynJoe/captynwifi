@@ -505,7 +505,8 @@ function renderVouchers() {
     escapeHtml(item.plan?.name),
     text(item.customerPhone, "Not linked"),
     status(item.entitlement?.status || item.status),
-    fmtDate(item.entitlement?.expiresAt)
+    // Not used yet: its hours start on first connection; until then this is a use-by date.
+    item.entitlement?.startsOnFirstUseSeconds ? `Not used yet · use by ${fmtDate(item.entitlement?.expiresAt)}` : fmtDate(item.entitlement?.expiresAt)
   ], 5);
 }
 
@@ -1913,8 +1914,11 @@ function renderVoucherResult(data) {
   voucherResult.innerHTML = `
     <div class="voucher-credential voucher-code"><span>Voucher Code</span><strong class="mono">${escapeHtml(data.code)}</strong></div>
     <div class="voucher-credential"><span>Package</span><strong>${escapeHtml(data.entitlement?.plan?.name)}</strong></div>
-    <div class="voucher-credential"><span>Expires</span><strong>${fmtDate(data.expiresAt)}</strong></div>
-    <p class="field-hint">Give the customer just this code — at captyn.shop/wifi they tap "Have a voucher code?" and enter it. No phone or payment needed.</p>
+    ${data.entitlement?.startsOnFirstUseSeconds
+      ? `<div class="voucher-credential"><span>Hours start</span><strong>On first use</strong></div>
+    <div class="voucher-credential"><span>Use by</span><strong>${fmtDate(data.expiresAt)}</strong></div>`
+      : `<div class="voucher-credential"><span>Expires</span><strong>${fmtDate(data.expiresAt)}</strong></div>`}
+    <p class="field-hint">Give the customer just this code: at captyn.shop/wifi they tap Enter a code and type it. No phone or payment needed.</p>
   `;
 }
 
@@ -2473,3 +2477,36 @@ document.getElementById("attention-list")?.addEventListener("click", async (even
 });
 
 void loadAttention();
+
+
+// ---------- Payments → Give free time ----------
+// Free hours on any customer's number. Unlike a voucher, the time starts
+// only when they tap Activate in their WiFi notifications (60 days to use it).
+document.getElementById("give-time-form")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.target;
+  const status = document.getElementById("give-time-status");
+  const phone = document.getElementById("give-time-phone").value.trim();
+  const hours = Number(document.getElementById("give-time-hours").value);
+  const button = form.querySelector("button[type=submit]");
+  button.disabled = true;
+  setInlineStatus(status, "Giving");
+  try {
+    const result = await writeApi(adminApi("/credits/grant"), "POST", {
+      customerPhone: phone,
+      durationSeconds: Math.round(hours * 3600),
+      reason: "MANUAL_ADJUSTMENT",
+      expiresInDays: 60,
+      title: document.getElementById("give-time-title").value.trim(),
+      message: document.getElementById("give-time-message").value.trim()
+    });
+    setInlineStatus(status, result.knownCustomer
+      ? `Given: ${hours} h to ${phone}`
+      : `Given: ${hours} h to ${phone}. This number hasn't bought WiFi yet, so they'll see it once they confirm it in My WiFi or buy a package.`, "ok");
+    document.getElementById("give-time-phone").value = "";
+  } catch (error) {
+    setInlineStatus(status, error instanceof Error ? error.message : "Failed", "bad");
+  } finally {
+    button.disabled = false;
+  }
+});

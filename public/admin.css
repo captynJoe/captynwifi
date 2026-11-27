@@ -668,3 +668,6 @@ img.brand-mark { background: none; border-radius: 10px; object-fit: contain; }
 .attention-actions { grid-column: 1 / -1; display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
 .nav-badge { margin-left: 6px; padding: 1px 7px; border-radius: 999px; background: var(--red, #d33); color: #fff; font-size: 11px; font-weight: 800; }
 @media (max-width: 720px) { .attention-item { grid-template-columns: 1fr; } }
+.give-time-form { display: grid; grid-template-columns: 1fr 110px; gap: 10px; padding: 0 16px 16px; }
+.give-time-form .wide { grid-column: 1 / -1; }
+.give-time-form textarea { width: 100%; resize: vertical; font: inherit; }
