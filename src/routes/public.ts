@@ -2326,7 +2326,17 @@ publicRouter.post("/loyalty/rewards/:id/free", publicCreditActivationLimit, asyn
         createdBy: "loyalty"
       }
     });
-    const activated = await activateWifiCredit(credit.id, { username: body.username, password: body.password, deviceMac });
+    let activated;
+    try {
+      const account = await accountFromToken(prisma, req.header("x-captyn-wifi-account") || undefined);
+      activated = await activateWifiCredit(credit.id, { username: body.username, password: body.password, deviceMac }, account?.phone ?? null);
+    } catch (error) {
+      // Starting the free time failed: give the reward back instead of
+      // leaving it marked used with nothing to show for it.
+      await prisma.wifiCredit.deleteMany({ where: { id: credit.id, consumedAt: null } }).catch(() => {});
+      await prisma.wifiLoyaltyReward.updateMany({ where: { id: reward.id, status: "claimed" }, data: { status: "available", choice: null, claimedAt: null } }).catch(() => {});
+      throw error;
+    }
     return res.status(201).json({
       data: toJsonSafe({
         id: activated.intent.id,
