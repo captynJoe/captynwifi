@@ -164,8 +164,21 @@ const freeAccessSchema = z.object({
 const creditActivationSchema = z.object({
   username: z.string().trim().optional().nullable(),
   password: z.string().min(1).optional().nullable(),
-  deviceMac: z.string().trim().optional().nullable()
+  deviceMac: z.string().trim().optional().nullable(),
+  deviceIp: z.string().trim().optional().nullable()
 });
+
+// The number behind a device that's on the network right now: the one that
+// last paid by M-PESA from it, and only if the router confirms this MAC and
+// IP are on its hotspot. Lets a customer whose package ended (so the phone
+// forgot its login) still see and use credits on their number.
+async function provenDevicePhone(deviceMacRaw: string | null | undefined, deviceIpRaw: string | null | undefined) {
+  const mac = normalizeDeviceMac(deviceMacRaw ?? null);
+  const ip = String(deviceIpRaw ?? "").trim();
+  if (!mac || !ip) return null;
+  if (!(await isCurrentHotspotHost(mac, ip))) return null;
+  return confirmedPhoneForDevice(prisma, mac);
+}
 
 type CallbackMetadata = {
   Item?: Array<{ Name?: string; Value?: string | number }>;
@@ -2410,6 +2423,23 @@ publicRouter.post("/credits/redeemable", publicCreditActivationLimit, async (req
   } catch (error) { return next(error); }
 });
 
+// Credits on the number that last paid from this device, for a device whose
+// package has ended (the portal forgot its login). See provenDevicePhone.
+publicRouter.post("/credits/by-device", publicDeviceLookupLimit, async (req, res, next) => {
+  try {
+    const phone = await provenDevicePhone(req.body?.deviceMac, req.body?.deviceIp);
+    if (!phone) return res.json({ data: { notifications: [], unreadCount: 0 } });
+    const now = new Date();
+    const mac = normalizeDeviceMac(String(req.body?.deviceMac ?? ""));
+    const credits = await prisma.wifiCredit.findMany({
+      where: { AND: [activeCreditWhere(now), { customerPhone: phone }, { OR: [{ deviceMac: null }, ...(mac ? [{ deviceMac: mac }] : [])] }] },
+      orderBy: { createdAt: "desc" }, take: 20
+    });
+    const notifications = credits.map((credit) => publicCreditNotification(credit, now));
+    return res.json({ data: toJsonSafe({ notifications, unreadCount: notifications.length }) });
+  } catch (error) { return next(error); }
+});
+
 // Credits waiting on a phone confirmed in My WiFi (e.g. the house-link reward),
 // for a device that has no package login yet.
 publicRouter.get("/credits/account", publicCreditActivationLimit, async (req, res, next) => {
@@ -2431,7 +2461,8 @@ publicRouter.post("/credits/:id/activate", publicCreditActivationLimit, async (r
   try {
     const parsed = creditActivationSchema.parse(req.body);
     const account = await accountFromToken(prisma, req.header("x-captyn-wifi-account") || undefined);
-    const activated = await activateWifiCredit(req.params.id, parsed, account?.phone ?? null);
+    const proven = account?.phone ?? (await provenDevicePhone(parsed.deviceMac, parsed.deviceIp));
+    const activated = await activateWifiCredit(req.params.id, parsed, proven);
     return res.status(201).json({
       data: toJsonSafe({
         id: activated.intent.id,

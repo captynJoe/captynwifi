@@ -405,6 +405,30 @@ async function loadRedeemableCredits(username = notifUsername) {
 function accountToken(): string | null {
   try { return localStorage.getItem("captyn-wifi-account"); } catch (_error) { return null; }
 }
+// Credits on the number that last paid from this device. A customer whose
+// package ended has no saved login here any more, so this is how they see
+// free time given to them (e.g. for a payment that didn't go through).
+async function loadDeviceCredits() {
+  const mac = state.hotspot?.mac;
+  const ip = state.hotspot?.ip;
+  if (!mac || !ip) return;
+  try {
+    const response = await fetch(api("/credits/by-device"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deviceMac: mac, deviceIp: ip })
+    });
+    if (!response.ok) return;
+    const items = (await response.json())?.data?.notifications || [];
+    if (!items.length) return;
+    mergeNotificationItems(items);
+    notifControl?.classList.remove("hidden");
+    renderNotifications();
+    // Free time waiting: open the list so it's seen, not hidden behind a badge.
+    setNotifMenuOpen(true);
+  } catch (_error) {}
+}
+
 async function loadAccountCredits() {
   const token = accountToken();
   if (!token) return;
@@ -459,7 +483,7 @@ async function activateCredit(creditId: string) {
     const response = await fetch(api(`/credits/${encodeURIComponent(creditId)}/activate`), {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(token ? { "x-captyn-wifi-account": token } : {}) },
-      body: JSON.stringify({ username: notifUsername || undefined, password: (state.currentEntitlement || loadRememberedAccess())?.password, deviceMac: state.hotspot.mac })
+      body: JSON.stringify({ username: notifUsername || undefined, password: (state.currentEntitlement || loadRememberedAccess())?.password, deviceMac: state.hotspot.mac, deviceIp: state.hotspot.ip || undefined })
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || "Unable to activate this credit.");
@@ -2892,6 +2916,7 @@ async function bootstrap() {
   }
 
   void loadRedeemableCredits(null);
+  void loadDeviceCredits();
   // My WiFi's "Use on this device" comes back here with the credit to start.
   const creditToActivate = new URLSearchParams(window.location.search).get("activateCredit");
   if (creditToActivate) {
