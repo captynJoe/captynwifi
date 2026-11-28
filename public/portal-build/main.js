@@ -282,6 +282,62 @@ async function loadRedeemableCredits(username = notifUsername) {
         // never worth surfacing an error for or blocking anything on.
     }
 }
+// Credits on a phone confirmed in My WiFi (the house-link reward, say) show
+// even on a device with no package yet.
+function accountToken() {
+    try {
+        return localStorage.getItem("captyn-wifi-account");
+    }
+    catch (_error) {
+        return null;
+    }
+}
+// Credits on the number that last paid from this device. A customer whose
+// package ended has no saved login here any more, so this is how they see
+// free time given to them (e.g. for a payment that didn't go through).
+async function loadDeviceCredits() {
+    const mac = state.hotspot?.mac;
+    const ip = state.hotspot?.ip;
+    if (!mac || !ip)
+        return;
+    try {
+        const response = await fetch(api("/credits/by-device"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ deviceMac: mac, deviceIp: ip })
+        });
+        if (!response.ok)
+            return;
+        const items = (await response.json())?.data?.notifications || [];
+        if (!items.length)
+            return;
+        mergeNotificationItems(items);
+        notifControl?.classList.remove("hidden");
+        renderNotifications();
+        // Free time waiting: open the list so it's seen, not hidden behind a badge.
+        setNotifMenuOpen(true);
+    }
+    catch (_error) { }
+}
+async function loadAccountCredits() {
+    const token = accountToken();
+    if (!token)
+        return;
+    try {
+        const mac = state.hotspot?.mac;
+        const response = await fetch(api(`/credits/account${mac ? `?deviceMac=${encodeURIComponent(mac)}` : ""}`), { headers: { "x-captyn-wifi-account": token } });
+        if (!response.ok)
+            return;
+        const payload = await response.json();
+        const items = payload?.data?.notifications || [];
+        if (!items.length)
+            return;
+        mergeNotificationItems(items);
+        notifControl?.classList.remove("hidden");
+        renderNotifications();
+    }
+    catch (_error) { }
+}
 async function loadNotifications(username, password) {
     notifUsername = username;
     const access = state.currentEntitlement || loadRememberedAccess();
@@ -318,10 +374,11 @@ async function activateCredit(creditId) {
     showError("");
     renderNotifications();
     try {
+        const token = accountToken();
         const response = await fetch(api(`/credits/${encodeURIComponent(creditId)}/activate`), {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ username: notifUsername || undefined, password: (state.currentEntitlement || loadRememberedAccess())?.password, deviceMac: state.hotspot.mac })
+            headers: { "Content-Type": "application/json", ...(token ? { "x-captyn-wifi-account": token } : {}) },
+            body: JSON.stringify({ username: notifUsername || undefined, password: (state.currentEntitlement || loadRememberedAccess())?.password, deviceMac: state.hotspot.mac, deviceIp: state.hotspot.ip || undefined })
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok)
@@ -345,7 +402,6 @@ async function activateCredit(creditId) {
 // ---------- Weekly rewards ----------
 // This month's live rank and this week's snapshotted free-time reward.
 const rewardsEl = document.getElementById("rewards");
-const LOYALTY_PROMO_SUSPENDED = true;
 let rewardsData = null;
 let rewardBusy = false;
 function rewardIdentity() {
@@ -376,16 +432,9 @@ function renderRewards() {
     if (!rewardsEl)
         return;
     const data = rewardsData;
-    if (!data?.known) {
-        rewardsEl.classList.add("hidden");
-        return;
-    }
-    if (LOYALTY_PROMO_SUSPENDED) {
-        rewardsEl.innerHTML = '<article class="rewards-card"><p class="rewards-next" role="status" aria-live="polite">Promo unavailable. Check back soon.</p></article>';
-        rewardsEl.classList.remove("hidden");
-        return;
-    }
-    if (!data.enabled || !data.standing) {
+    // Rewards on or off is the admin's Weekly rewards switch: when off, the
+    // card simply isn't shown (and no new rewards are created).
+    if (!data?.known || !data.enabled || !data.standing) {
         rewardsEl.classList.add("hidden");
         return;
     }
@@ -601,7 +650,7 @@ const servicePath = (path) => `${basePath}${path}`;
 // "Failed to fetch" and friends mean the request never got through -- say
 // that in plain words instead of showing the browser's error text.
 function friendlyError(error, fallback) {
-    const message = friendlyError(error, "");
+    const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
     if (!message)
         return fallback;
     if (/failed to fetch|networkerror|load failed|network request failed/i.test(message))
@@ -819,9 +868,57 @@ function checkInternetReachable(timeoutMs) {
             .catch(() => { clearTimeout(timer); resolve(false); });
     });
 }
+// Is this device signed in on CAPTYN WiFi? The router decides: a phone that
+// also has mobile data reaches the internet with its WiFi not signed in,
+// and used to be told "You're connected". Reaching the internet is only the
+// fallback when the router can't be asked (or there's no device MAC).
+async function deviceSignedInOnRouter() {
+    const mac = state.hotspot?.mac;
+    if (!mac)
+        return null;
+    try {
+        const response = await fetch(api("/hotspot/device-online"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ deviceMac: mac })
+        });
+        if (!response.ok)
+            return null;
+        const signedIn = (await response.json())?.data?.signedIn;
+        return typeof signedIn === "boolean" ? signedIn : null;
+    }
+    catch (_error) {
+        return null;
+    }
+}
+async function isOnlineOnWifi(timeoutMs) {
+    const router = await deviceSignedInOnRouter();
+    if (router !== null)
+        return router;
+    return checkInternetReachable(timeoutMs);
+}
+// After "You're connected": check again, and if the router says this device
+// isn't signed in after all, offer Tap to connect instead of leaving the
+// customer staring at a connected screen with no internet.
+function verifyConnectedLater(username, password, statusEl, formEl) {
+    if (!state.hotspot?.mac)
+        return;
+    for (const delay of [5000, 15000]) {
+        setTimeout(async () => {
+            if ((await deviceSignedInOnRouter()) !== false)
+                return;
+            setConnectState(statusEl, formEl, "failed", "This device isn't signed in yet. Tap to connect.");
+            showManualConnectFallback(username, password, {
+                placement: manualConnectPlacement(),
+                message: "Not connected yet. Tap to connect.",
+                buttonLabel: "Tap to connect"
+            });
+        }, delay);
+    }
+}
 async function waitForConnection(maxAttempts, intervalMs, checkTimeoutMs = 1500) {
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-        if (await checkInternetReachable(checkTimeoutMs))
+        if (await isOnlineOnWifi(checkTimeoutMs))
             return true;
         await new Promise((resolve) => setTimeout(resolve, intervalMs));
     }
@@ -932,6 +1029,9 @@ function renderOutageNote(entitlement) {
 function renderDeviceList(entitlement) {
     const devices = entitlement.devices || [];
     const limit = Number(entitlement.deviceLimit || 1);
+    // A full package: signing a device out doesn't free its slot (every device
+    // used counts), so no Sign out buttons -- the notice offers what works.
+    const atLimit = accessDevices.classList.contains("at-limit");
     accessDevices.classList.remove("hidden");
     accessDevicesFeedback.classList.add("hidden");
     // A 1-device package shows just its device: a count and a code for
@@ -956,7 +1056,7 @@ function renderDeviceList(entitlement) {
             ${isThisDevice ? '<span class="device-tag">This device</span>' : ""}
             ${device.signedOut
                 ? '<span class="device-tag signed-out">Signed out</span>'
-                : isThisDevice
+                : isThisDevice || atLimit
                     ? ""
                     : `<button class="link-btn" type="button" data-remove-device-mac="${esc(device.deviceMac)}">Sign out</button>`}
           </div>`;
@@ -970,25 +1070,47 @@ function hideDeviceLimitNotice() {
     accessDevicesNotice.classList.add("hidden");
     accessDevicesNotice.textContent = "";
     accessDevices.classList.remove("at-limit");
+    document.getElementById("access-devices-limit-actions")?.classList.add("hidden");
 }
 // state.currentEntitlement is normally set by showConnectedPanel, but
 // rememberDeviceForEntitlement can also fire from flows that haven't shown
 // that panel yet (manual login, receipt code, promo claim) -- synthesize a
 // minimal placeholder in that case so the device list still has
 // username/password to act on (e.g. for the Remove button).
-function showDeviceLimitNotice(message, devices, deviceLimit, username, password) {
+function showDeviceLimitNotice(message, devices, deviceLimit, username, password, deviceCap) {
     if (!state.currentEntitlement) {
         state.currentEntitlement = { username, password, expiresAt: "" };
     }
     state.currentEntitlement.devices = devices;
     if (deviceLimit)
         state.currentEntitlement.deviceLimit = deviceLimit;
+    if (deviceCap)
+        state.currentEntitlement.deviceCap = deviceCap;
     accessDevices.classList.remove("hidden");
     accessDevices.classList.add("at-limit");
-    accessDevicesNotice.textContent = message;
+    const active = devices.filter((device) => !device.signedOut).length;
+    accessDevicesNotice.textContent = devices.length && deviceCap
+        ? `Full: in use on ${active} device${active === 1 ? "" : "s"}, ${deviceCap} used in total. Or open it on one of these.`
+        : message;
     accessDevicesNotice.classList.remove("hidden");
+    const actions = document.getElementById("access-devices-limit-actions");
+    if (actions) {
+        actions.classList.remove("hidden");
+        // Hide the duplicate upgrade link below; "Add this device" is the upgrade.
+        packageUpgradeBtn.classList.add("hidden");
+    }
     renderDeviceList(state.currentEntitlement);
+    if (actions)
+        packageUpgradeBtn.classList.add("hidden");
 }
+document.getElementById("limit-add-device-btn")?.addEventListener("click", () => {
+    packageUpgradeBtn.click();
+    packageUpgradePanel.scrollIntoView({ behavior: "smooth", block: "center" });
+});
+document.getElementById("limit-buy-btn")?.addEventListener("click", () => {
+    hideDeviceLimitNotice();
+    showPackages();
+});
 async function removeDevice(mac) {
     const entitlement = state.currentEntitlement;
     if (!entitlement)
@@ -1114,7 +1236,7 @@ async function rememberDeviceForEntitlement(username, password, { rejoin = false
         if (response.status === 409 && payload.error === "DEVICE_SIGNED_OUT")
             return "signed_out";
         if (response.status === 409) {
-            showDeviceLimitNotice(payload.message || "This package has reached its device limit.", payload.data?.devices || [], payload.data?.deviceLimit, username, password);
+            showDeviceLimitNotice(payload.message || "This package has reached its device limit.", payload.data?.devices || [], payload.data?.deviceLimit, username, password, payload.data?.deviceCap);
             return;
         }
         hideDeviceLimitNotice();
@@ -1248,7 +1370,7 @@ function startSignInTiming(trigger) {
 }
 async function attemptAutoConnect(username, password, statusEl, formEl, { freshGrant = false, holdBeforeConnect = freshGrant, rejoin = freshGrant } = {}) {
     const timing = startSignInTiming(freshGrant ? "new_access" : rejoin ? "manual" : "returning");
-    const alreadyOnline = freshGrant ? false : await checkInternetReachable(900);
+    const alreadyOnline = freshGrant ? false : await isOnlineOnWifi(900);
     timing.mark("online_check");
     if (!alreadyOnline && state.hotspot?.login) {
         setConnectState(statusEl, formEl, "connecting", "Signing this device in...");
@@ -1309,6 +1431,7 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
         clearError();
         // Say so the moment it's true; the package details below fill in after.
         setConnectState(statusEl, formEl, "connected", "You're connected.");
+        verifyConnectedLater(username, password, statusEl, formEl);
         let expiresAt = null;
         let deviceLimit;
         let devices = [];
@@ -1336,7 +1459,7 @@ async function attemptAutoConnect(username, password, statusEl, formEl, { freshG
         }
         catch (_error) { }
         if (expiresAt) {
-            showConnectedPanel({ username, password, expiresAt, startsAt, deviceLimit, devices, connectCode, deviceCap }, { heading: "You're connected", message: "You're all set. You can browse now.", skipAutoConnect: true });
+            showConnectedPanel({ username, password, expiresAt, startsAt, deviceLimit, devices, connectCode, deviceCap }, { heading: "You're connected", message: "You're all set. You can browse now.", skipAutoConnect: true, confirmedOnline: true });
         }
         else {
             hideManualConnectFallback();
@@ -1974,7 +2097,7 @@ async function loadConnectCode(entitlement) {
     }
     catch (_error) { }
 }
-function showConnectedPanel(entitlement, { heading, skipAutoConnect, freshGrant, recoveryReference, hideCredentials } = {}) {
+function showConnectedPanel(entitlement, { heading, skipAutoConnect, confirmedOnline, freshGrant, recoveryReference, hideCredentials } = {}) {
     if (workspaceEl)
         workspaceEl.classList.add("hidden");
     hideManualConnectFallback();
@@ -2010,8 +2133,19 @@ function showConnectedPanel(entitlement, { heading, skipAutoConnect, freshGrant,
     startExpiryWatch(entitlement.expiresAt, entitlement.startsAt);
     saveRememberedAccess(entitlement);
     signOutDeviceBtn.classList.toggle("hidden", !currentDeviceMac());
-    if (skipAutoConnect)
+    if (skipAutoConnect) {
+        // No automatic sign-in this time (e.g. one was tried moments ago), but a
+        // device on the sign-in page that isn't online must still have a way on:
+        // without this the panel showed the package and nothing to tap.
+        if (!confirmedOnline && state.hotspot?.login) {
+            showManualConnectFallback(entitlement.username, entitlement.password, {
+                placement: manualConnectPlacement(),
+                message: "Your package is active.",
+                buttonLabel: "Connect now"
+            });
+        }
         return;
+    }
     if (state.hotspot?.login) {
         // attemptAutoConnect navigates to the router's login page (a hidden
         // iframe login is blocked as mixed content -- see there).
@@ -2350,6 +2484,9 @@ expiryRenewBtn?.addEventListener("click", () => {
 });
 state.hotspot = readHotspotParams();
 function hotspotRefusal(raw) {
+    // The server already said which package ended and when.
+    if (/^Your .+ ended at /.test(raw))
+        return { message: raw, action: "buy" };
     if (/already logged in|simultaneous/i.test(raw))
         return { message: "This package is in use on its other devices. Sign one out there, or add this device.", action: "none" };
     if (/signed out of the package/i.test(raw))
@@ -2403,8 +2540,29 @@ function noteAutoSignIn() {
     }
     catch (_error) { }
 }
-if (state.hotspot?.error)
+if (state.hotspot?.error) {
     showHotspotRefusal(decodeURIComponent(state.hotspot.error));
+    void explainEndedPackage();
+}
+// The router just refused this device. If the package saved on this device
+// has run out, say which one and when instead of the router's bare refusal.
+async function explainEndedPackage() {
+    const remembered = loadRememberedAccess();
+    if (!remembered?.username)
+        return;
+    try {
+        const response = await fetch(api(`/entitlements/${encodeURIComponent(remembered.username)}/status`));
+        const data = response.ok ? (await response.json())?.data : null;
+        if (!data?.expiresAt || new Date(data.expiresAt).getTime() > Date.now())
+            return;
+        const end = new Date(data.expiresAt);
+        const sameDay = end.toDateString() === new Date().toDateString();
+        const time = end.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+        const day = sameDay ? "today" : `on ${end.toLocaleDateString(undefined, { day: "numeric", month: "short" })}`;
+        showHotspotRefusal(`Your ${data.planName || "package"} ended at ${time} ${day}. Choose a package to get back online.`);
+    }
+    catch (_error) { }
+}
 voucherLoginToggle?.addEventListener("click", () => {
     voucherLoginForm.classList.toggle("hidden");
     if (!voucherLoginForm.classList.contains("hidden"))
@@ -2429,6 +2587,44 @@ haveCodeBtn?.addEventListener("click", () => {
         checkoutPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }, 40);
 });
+// Links this device to the tenant's phone and house (no SMS: Housing vouched
+// for them), then starts the house-link reward here if one was given.
+async function redeemHousingLinkCode(code) {
+    if (!state.hotspot?.login || !state.hotspot.mac) {
+        setConnectState(voucherLoginStatus, null, "failed", "Connect to CAPTYN WiFi first, then reopen this page and enter your code.");
+        return;
+    }
+    setConnectState(voucherLoginStatus, voucherLoginForm, "connecting", "Checking your code...");
+    try {
+        const response = await fetch(api("/account/link-code"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code, deviceMac: state.hotspot.mac })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload?.data?.token)
+            throw new Error(payload.error || "That code isn't valid.");
+        try {
+            localStorage.setItem("captyn-wifi-account", payload.data.token);
+        }
+        catch (_error) { }
+        const reward = payload.data.linkReward;
+        const house = payload.data.houseNumber;
+        if (reward?.status === "granted" && reward.creditId) {
+            setConnectState(voucherLoginStatus, voucherLoginForm, "connecting", `House ${house} linked. Starting your ${reward.hours} hours of free WiFi...`);
+            await activateCredit(reward.creditId);
+            return;
+        }
+        const note = reward?.status === "declined_overdue"
+            ? `House ${house} linked. It has something overdue, so the free hours weren't given. Offers unlock once it's clear.`
+            : `House ${house} linked. Village Inn offers will reach this device.`;
+        setConnectState(voucherLoginStatus, voucherLoginForm, "connected", note);
+        void loadAccountCredits();
+    }
+    catch (error) {
+        setConnectState(voucherLoginStatus, voucherLoginForm, "failed", friendlyError(error, "That code isn't valid."));
+    }
+}
 voucherLoginForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const code = voucherCodeInput.value.trim().toUpperCase();
@@ -2437,6 +2633,11 @@ voucherLoginForm?.addEventListener("submit", async (event) => {
     // Device codes (shown on an already-connected device) are 6 characters;
     // vouchers are 8+, so length alone tells them apart.
     const deviceCode = code.replace(/[\s-]/g, "");
+    // 7 characters: a Village Inn code from the Housing app's "Get free WiFi".
+    if (deviceCode.length === 7) {
+        await redeemHousingLinkCode(deviceCode);
+        return;
+    }
     if (deviceCode.length === 6) {
         if (!state.hotspot?.login) {
             setConnectState(voucherLoginStatus, null, "failed", "Connect to this WiFi network first, then reopen this page to enter your code.");
@@ -2494,6 +2695,28 @@ existingLoginForm?.addEventListener("submit", async (event) => {
         return;
     if (!state.hotspot?.login) {
         setConnectState(existingLoginStatus, null, "failed", "Connect to this WiFi network first, then reopen this page to log in.");
+        return;
+    }
+    // Phone + device code is the everyday login; a generated package login
+    // typed into the same boxes still works.
+    const phone = normalizeMpesaPhoneInput(username);
+    const deviceCode = password.replace(/[\s-]/g, "").toUpperCase();
+    if (phone && /^[A-Z0-9]{6}$/.test(deviceCode)) {
+        setConnectState(existingLoginStatus, existingLoginForm, "connecting", "Checking...");
+        try {
+            const response = await fetch(api("/account/code-sign-in"), {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ phone, code: deviceCode, deviceMac: state.hotspot?.mac || null })
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok || !payload?.data?.username)
+                throw new Error(payload.error || "That number and device code don't match an active package.");
+            await attemptAutoConnect(payload.data.username, payload.data.password, existingLoginStatus, existingLoginForm, { rejoin: true });
+        }
+        catch (error) {
+            setConnectState(existingLoginStatus, existingLoginForm, "failed", friendlyError(error, "That number and device code don't match an active package."));
+        }
         return;
     }
     await attemptAutoConnect(username, password, existingLoginStatus, existingLoginForm, { rejoin: true });
@@ -2617,6 +2840,8 @@ async function checkPromo() {
     catch (_error) {
         return false;
     }
+    if (promo.tenantsOnly)
+        return claimTenantsOnlyPromo(promo);
     if (workspaceEl)
         workspaceEl.classList.add("hidden");
     if (introRowEl)
@@ -2653,6 +2878,75 @@ async function checkPromo() {
     }
     return true;
 }
+// Tenants-only promo: check first, quietly. A tenant in good standing gets
+// the free-access screen; everyone else keeps the normal packages, and a
+// tenant with something overdue is told why (it stays until dismissed).
+async function claimTenantsOnlyPromo(promo, { move = false } = {}) {
+    const mac = state.hotspot?.mac;
+    if (!mac)
+        return false;
+    let payload;
+    const token = accountToken();
+    try {
+        const response = await fetch(api("/promo/claim"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...(token ? { "x-captyn-wifi-account": token } : {}) },
+            body: JSON.stringify({ deviceMac: mac, move })
+        });
+        payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            // Paying what's overdue unlocks it straight away: Check again asks
+            // Housing afresh, no reload needed.
+            // The house's one free device is elsewhere: offer to move it here.
+            if (payload.code === "promo_on_other_device" && payload.error) {
+                showError(payload.error, {
+                    action: { label: "Move it here", run: () => { clearError(); void claimTenantsOnlyPromo(promo, { move: true }); } }
+                });
+                return false;
+            }
+            // No confirmed phone links this device to a house yet.
+            if (payload.code === "no_phone" && payload.error) {
+                showError(payload.error, { action: { label: "Confirm my number", run: () => { window.location.href = `${basePath}/devices.html${window.location.search}`; } } });
+                return false;
+            }
+            if (["rent_overdue", "utilities_overdue", "housing_unavailable"].includes(payload.code) && payload.error) {
+                showError(payload.error, {
+                    action: {
+                        label: "Check again",
+                        run: () => {
+                            clearError();
+                            void claimTenantsOnlyPromo(promo);
+                        }
+                    }
+                });
+            }
+            return false;
+        }
+    }
+    catch (_error) {
+        return false;
+    }
+    const buildingName = promo.tenantsOnly.buildingName || "Village Inn";
+    if (workspaceEl)
+        workspaceEl.classList.add("hidden");
+    if (introRowEl)
+        introRowEl.classList.add("hidden");
+    access.classList.add("hidden");
+    promoHeading.textContent = promo.heading || `Thank you, ${buildingName}`;
+    promoMessage.textContent = promo.message || `Free access for ${buildingName} tenants with nothing overdue.`;
+    promoNote.textContent = "";
+    promoSection.classList.remove("hidden");
+    promoSection.scrollIntoView({ behavior: "smooth", block: "start" });
+    startPromoCountdown(promo.endsAt);
+    promoStatus.textContent = "Unlocking your free access...";
+    try {
+        await attemptAutoConnect(payload.data.username, payload.data.password, promoStatus, null, { freshGrant: true, holdBeforeConnect: false });
+    }
+    catch (error) {
+        promoStatus.textContent = friendlyError(error, "Couldn't activate free access.");
+    }
+    return true;
+}
 // The router's own Sign out (status page) only ends the router session. Its
 // "See you soon" page sends the device here with ?signedOut=1&mac=..., so
 // the sign-out sticks like the portal's button: the device is marked signed
@@ -2676,6 +2970,11 @@ async function finishRouterSignOut() {
     }
     catch (_error) { }
 }
+// My WiFi keeps the router's sign-in details (the URL this page was opened
+// with), so coming back from it still knows which device this is.
+document.querySelectorAll('a[href="devices.html"]').forEach((link) => {
+    link.href = `devices.html${window.location.search}`;
+});
 async function bootstrap() {
     await finishRouterSignOut();
     const loadPlansPromise = loadPlans().catch((error) => showError(friendlyError(error, "Unable to load packages.")));
@@ -2685,6 +2984,19 @@ async function bootstrap() {
         return;
     }
     void loadRedeemableCredits(null);
+    void loadDeviceCredits();
+    // My WiFi's "Use on this device" comes back here with the credit to start.
+    const creditToActivate = new URLSearchParams(window.location.search).get("activateCredit");
+    if (creditToActivate) {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("activateCredit");
+        try {
+            window.history.replaceState(null, "", url.toString());
+        }
+        catch (_error) { }
+    }
+    void loadAccountCredits().then(() => { if (creditToActivate && state.hotspot?.mac)
+        void activateCredit(creditToActivate); });
     void loadRewards();
     // Recognizes a returning device two ways, in order: this browser's own
     // remembered access (fast, no network call), then a server-side by-device

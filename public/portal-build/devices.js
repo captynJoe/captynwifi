@@ -34,12 +34,28 @@ const api = (path) => `${basePath}/api/public${path}`;
 const themeToggleBtn = requireElement("theme-toggle-btn");
 const settingsToggleBtn = requireElement("settings-toggle-btn");
 const settingsMenu = requireElement("settings-menu");
+const phoneSection = requireElement("account-phone");
 const loginSection = requireElement("devices-login");
 const loginForm = requireElement("devices-login-form");
 const usernameInput = requireElement("devices-username");
 const passwordInput = requireElement("devices-password");
 const loginSubmit = requireElement("devices-login-submit");
 const loginStatus = requireElement("devices-login-status");
+const loginToggle = requireElement("devices-login-toggle");
+const phoneForm = requireElement("account-phone-form");
+const phoneInput = requireElement("account-phone-input");
+const phoneSubmit = requireElement("account-phone-submit");
+const codeForm = requireElement("account-code-form");
+const codeInput = requireElement("account-code-input");
+const codeLabel = requireElement("account-code-label");
+const codeSubmit = requireElement("account-code-submit");
+const codeBack = requireElement("account-code-back");
+const phoneStatus = requireElement("account-phone-status");
+const homeSection = requireElement("account-home");
+const homePhone = requireElement("account-phone-label");
+const homePackages = requireElement("account-packages");
+const homeStatus = requireElement("account-status");
+const signOutBtn = requireElement("account-sign-out-btn");
 const manageSection = requireElement("devices-manage");
 const manageLimit = requireElement("devices-manage-limit");
 const manageList = requireElement("devices-manage-list");
@@ -151,7 +167,7 @@ manageList.addEventListener("click", (event) => {
 manageSwitchBtn.addEventListener("click", () => {
     session = null;
     manageSection.classList.add("hidden");
-    loginSection.classList.remove("hidden");
+    phoneSection.classList.remove("hidden");
     loginStatus.textContent = "";
     passwordInput.value = "";
 });
@@ -174,7 +190,7 @@ loginForm.addEventListener("submit", async (event) => {
             throw new Error(payload.error || "That username and password don't match an active plan.");
         session = { username, password };
         loginStatus.textContent = "";
-        loginSection.classList.add("hidden");
+        phoneSection.classList.add("hidden");
         manageSection.classList.remove("hidden");
         renderDevices(payload.data?.deviceLimit || 1, payload.data?.devices || [], payload.data?.connectCode, payload.data?.deviceCap);
     }
@@ -185,4 +201,239 @@ loginForm.addEventListener("submit", async (event) => {
         loginSubmit.disabled = false;
     }
 });
+const TOKEN_KEY = "captyn-wifi-account";
+const readToken = () => { try {
+    return localStorage.getItem(TOKEN_KEY);
+}
+catch (_error) {
+    return null;
+} };
+const writeToken = (token) => {
+    try {
+        if (token)
+            localStorage.setItem(TOKEN_KEY, token);
+        else
+            localStorage.removeItem(TOKEN_KEY);
+    }
+    catch (_error) { }
+};
+let pendingPhone = "";
+async function accountFetch(path, init = {}) {
+    const token = readToken();
+    const response = await fetch(api(`/account${path}`), {
+        ...init,
+        headers: { "Content-Type": "application/json", ...(token ? { "x-captyn-wifi-account": token } : {}), ...(init.headers || {}) }
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (response.status === 401) {
+        writeToken(null);
+        showPhoneStep();
+    }
+    if (!response.ok)
+        throw new Error(payload.error || "Something went wrong. Try again.");
+    return payload.data;
+}
+function showPhoneStep(message = "") {
+    homeSection.classList.add("hidden");
+    manageSection.classList.add("hidden");
+    phoneSection.classList.remove("hidden");
+    phoneForm.classList.remove("hidden");
+    codeForm.classList.add("hidden");
+    signOutBtn.classList.add("hidden");
+    phoneStatus.textContent = message;
+}
+function timeLeft(expiresAt, paused) {
+    if (paused)
+        return "Paused";
+    const ms = new Date(expiresAt).getTime() - Date.now();
+    if (!Number.isFinite(ms) || ms <= 0)
+        return "Ended";
+    const minutes = Math.floor(ms / 60000);
+    const days = Math.floor(minutes / 1440);
+    const hours = Math.floor((minutes % 1440) / 60);
+    return days > 0 ? `${days}d ${hours}h left` : hours > 0 ? `${hours}h ${minutes % 60}m left` : `${minutes}m left`;
+}
+function deviceStatus(device) {
+    if (device.signedOut)
+        return '<span class="device-tag signed-out">Signed out</span>';
+    if (device.online)
+        return '<span class="device-tag online">Online</span>';
+    return '<span class="device-tag offline">Offline</span>';
+}
+// Back to the WiFi page with the router's sign-in details it came with.
+function portalHref(extra = {}) {
+    const params = new URLSearchParams(window.location.search);
+    for (const [key, value] of Object.entries(extra))
+        params.set(key, value);
+    const query = params.toString();
+    return `${basePath}/${query ? `?${query}` : ""}`;
+}
+document.querySelectorAll("a.account-back").forEach((link) => { link.href = portalHref(); });
+// Free time waiting on this number. It's activated from the WiFi page on
+// the device that should get it, so that device is the one signed in.
+function renderCredits(credits) {
+    let el = document.getElementById("account-credits");
+    if (!el) {
+        el = document.createElement("div");
+        el.id = "account-credits";
+        el.className = "account-packages";
+        homePackages.before(el);
+    }
+    el.innerHTML = credits.map((credit) => {
+        const hours = Math.round(credit.durationSeconds / 3600);
+        const label = hours >= 1 ? `${hours} hour${hours === 1 ? "" : "s"}` : `${Math.round(credit.durationSeconds / 60)} minutes`;
+        return `<article class="account-package account-credit">
+      <div class="account-package-head"><strong>${esc(label)} free</strong>${credit.expiresAt ? `<span>Use by ${esc(new Date(credit.expiresAt).toLocaleDateString())}</span>` : ""}</div>
+      <a class="primary account-back" href="${esc(portalHref({ activateCredit: credit.id }))}">Use on this device</a>
+    </article>`;
+    }).join("");
+}
+function renderPackages(packages) {
+    homePackages.innerHTML = packages.length
+        ? packages.map((pkg) => `<article class="account-package">
+        <div class="account-package-head"><strong>${esc(pkg.name)}</strong><span>${esc(timeLeft(pkg.expiresAt, pkg.paused))}</span></div>
+        <button type="button" class="credential access-connect-code" data-copy-code="${esc(pkg.deviceCode)}"><span>Device code</span><strong class="mono">${esc(pkg.deviceCode)}</strong><em>Copy</em></button>
+        <div class="access-devices-head"><span>Devices</span><strong>${pkg.switchesLeft > 0 ? `${pkg.switchesLeft} more device${pkg.switchesLeft === 1 ? "" : "s"} allowed` : "Full"}</strong></div>
+        <div class="access-devices-list">${pkg.devices.length
+            ? pkg.devices.map((device) => `<div class="device-row">
+              <span class="mono" title="${esc(device.deviceMac)}">${esc(device.name || device.deviceMac)}</span>
+              ${deviceStatus(device)}
+              ${device.signedOut ? "" : `<button class="link-btn" type="button" data-sign-out-package="${esc(pkg.id)}" data-sign-out-mac="${esc(device.deviceMac)}">Sign out</button>`}
+            </div>`).join("")
+            : '<div class="device-row-empty">No devices yet.</div>'}</div>
+        <details class="login-details"><summary>Connection details</summary>
+          <p class="mono">${esc(pkg.login.username)}<br />${esc(pkg.login.password)}</p>
+        </details>
+      </article>`).join("")
+        : '<div class="device-row-empty">No active packages on this number.</div>';
+}
+async function loadAccount() {
+    homeStatus.textContent = "Loading...";
+    try {
+        const data = await accountFetch("/me");
+        phoneSection.classList.add("hidden");
+        manageSection.classList.add("hidden");
+        homeSection.classList.remove("hidden");
+        signOutBtn.classList.remove("hidden");
+        homePhone.textContent = data.house ? `${data.phone} · House ${data.house}` : data.phone || "";
+        renderCredits(data.credits || []);
+        renderPackages(data.packages || []);
+        homeStatus.textContent = "";
+    }
+    catch (error) {
+        if (readToken())
+            homeStatus.textContent = error instanceof Error ? error.message : "Couldn't load My WiFi.";
+    }
+}
+phoneForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const phone = phoneInput.value.trim();
+    if (!phone)
+        return;
+    phoneSubmit.disabled = true;
+    phoneStatus.textContent = "Sending code...";
+    try {
+        const data = await accountFetch("/phone/start", { method: "POST", body: JSON.stringify({ phone }) });
+        pendingPhone = phone;
+        phoneForm.classList.add("hidden");
+        codeForm.classList.remove("hidden");
+        codeLabel.textContent = `Code sent to ${data.sentTo}`;
+        phoneStatus.textContent = "";
+        codeInput.value = "";
+        codeInput.focus();
+    }
+    catch (error) {
+        phoneStatus.textContent = error instanceof Error ? error.message : "Couldn't send the code.";
+    }
+    finally {
+        phoneSubmit.disabled = false;
+    }
+});
+codeForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const code = codeInput.value.trim();
+    if (!/^\d{6}$/.test(code)) {
+        phoneStatus.textContent = "Enter the 6-digit code from the SMS.";
+        return;
+    }
+    codeSubmit.disabled = true;
+    phoneStatus.textContent = "Checking...";
+    try {
+        const data = await accountFetch("/phone/verify", { method: "POST", body: JSON.stringify({ phone: pendingPhone, code }) });
+        writeToken(data.token);
+        phoneStatus.textContent = "";
+        await loadAccount();
+        const reward = data.linkReward;
+        if (reward?.status === "granted")
+            homeStatus.textContent = `House ${reward.houseNumber} linked. ${reward.hours} hours of free WiFi is waiting below.`;
+        else if (reward?.status === "declined_overdue")
+            homeStatus.textContent = `House ${reward.houseNumber} linked. It has something overdue, so the linking reward wasn't given. Offers unlock once it's clear.`;
+        else if (reward?.houseNumber)
+            homeStatus.textContent = `House ${reward.houseNumber} linked.`;
+    }
+    catch (error) {
+        phoneStatus.textContent = error instanceof Error ? error.message : "Couldn't check the code.";
+    }
+    finally {
+        codeSubmit.disabled = false;
+    }
+});
+codeBack.addEventListener("click", () => showPhoneStep());
+homePackages.addEventListener("click", async (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    const copy = target?.closest("[data-copy-code]");
+    if (copy) {
+        try {
+            await navigator.clipboard.writeText(copy.dataset.copyCode || "");
+            const label = copy.querySelector("em");
+            if (label) {
+                label.textContent = "Copied";
+                setTimeout(() => { label.textContent = "Copy"; }, 1200);
+            }
+        }
+        catch (_error) { }
+        return;
+    }
+    const signOut = target?.closest("[data-sign-out-mac]");
+    if (!signOut)
+        return;
+    if (!window.confirm("Sign this device out? It keeps its place on the package."))
+        return;
+    signOut.disabled = true;
+    homeStatus.textContent = "Signing out...";
+    try {
+        await accountFetch("/devices/sign-out", { method: "POST", body: JSON.stringify({ packageId: signOut.dataset.signOutPackage, deviceMac: signOut.dataset.signOutMac }) });
+        await loadAccount();
+        homeStatus.textContent = "Device signed out.";
+    }
+    catch (error) {
+        signOut.disabled = false;
+        homeStatus.textContent = error instanceof Error ? error.message : "Couldn't sign that device out.";
+    }
+});
+signOutBtn.addEventListener("click", async () => {
+    try {
+        await accountFetch("/sign-out", { method: "POST" });
+    }
+    catch (_error) { }
+    writeToken(null);
+    showPhoneStep();
+});
+loginToggle.addEventListener("click", () => {
+    loginSection.classList.toggle("hidden");
+});
+// Phone sign-in shows only when SMS codes can be sent; until then the
+// package login stays the way in.
+void fetch(api("/account/status"))
+    .then((response) => (response.ok ? response.json() : null))
+    .then((payload) => {
+    if (!payload?.data?.sms)
+        return;
+    loginToggle.classList.remove("hidden");
+    loginSection.classList.add("hidden");
+    phoneForm.classList.remove("hidden");
+})
+    .catch(() => { });
+if (readToken())
+    void loadAccount();
 export {};

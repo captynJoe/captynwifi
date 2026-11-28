@@ -2560,6 +2560,15 @@ async function redeemHousingLinkCode(code: string) {
     try { localStorage.setItem("captyn-wifi-account", payload.data.token); } catch (_error) {}
     const reward = payload.data.linkReward;
     const house = payload.data.houseNumber;
+    // A tenants-only promo is running: claim it now that this device is
+    // linked. The linking reward (if any) stays in the notifications for later.
+    const livePromo = await fetch(api("/promo")).then((r) => (r.ok ? r.json() : null)).then((p) => p?.data).catch(() => null);
+    if (livePromo?.active && livePromo.tenantsOnly) {
+      clearError();
+      setConnectState(voucherLoginStatus, voucherLoginForm, "connected", `House ${house} linked.${reward?.status === "granted" ? ` Your ${reward.hours} free hours are saved for later.` : ""}`);
+      const granted = await claimTenantsOnlyPromo(livePromo);
+      if (granted) return;
+    }
     if (reward?.status === "granted" && reward.creditId) {
       setConnectState(voucherLoginStatus, voucherLoginForm, "connecting", `House ${house} linked. Starting your ${reward.hours} hours of free WiFi...`);
       await activateCredit(reward.creditId);
@@ -2841,7 +2850,7 @@ async function claimTenantsOnlyPromo(promo, { move = false } = {}): Promise<bool
       }
       // No confirmed phone links this device to a house yet.
       if (payload.code === "no_phone" && payload.error) {
-        showError(payload.error, { action: { label: "Confirm my number", run: () => { window.location.href = `${basePath}/devices.html${window.location.search}`; } } });
+        showError(payload.error, { action: { label: "Enter a code", run: openDeviceCodeForm } });
         return false;
       }
       if (["rent_overdue", "utilities_overdue", "housing_unavailable"].includes(payload.code) && payload.error) {

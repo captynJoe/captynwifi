@@ -58,7 +58,9 @@ export type PromoGate =
 // What the customer is told when a tenants-only promo turns them away.
 export function promoGateResult(buildingName: string, phone: string | null, standing: HousingStanding | null, unavailable = false): PromoGate {
   if (!phone) {
-    return { allowed: false, code: "no_phone", message: `This offer is for ${buildingName} tenants. Confirm the phone number you gave ${buildingName} to claim it.` };
+    // The CAPTYN Housing app's "Get free WiFi" code proves who they are (no
+    // SMS needed); entering it here links this device and claims the offer.
+    return { allowed: false, code: "no_phone", message: `This offer is for ${buildingName} tenants. In the CAPTYN Housing app, tap Get free WiFi, then enter the code here.` };
   }
   if (unavailable || !standing) {
     return { allowed: false, code: "housing_unavailable", message: `We couldn't check your ${buildingName} account just now. Try again in a minute.` };
