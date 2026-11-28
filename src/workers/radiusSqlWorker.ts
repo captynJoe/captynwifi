@@ -9,7 +9,7 @@ import { kickHotspotUser, kickPppoeUser } from "../services/routeros.js";
 import { sweepExpiredSessions, sweepHotspotCookies } from "../services/cookieSweep.js";
 import { runAutoReconnect } from "../services/autoReconnect.js";
 import { collectDevices, pruneDeviceHistory } from "../services/deviceCollector.js";
-import { pruneIspProbes, runIspProbe } from "../services/ispProbe.js";
+import { pruneIspProbes, runFairShareGuard, runIspProbe } from "../services/ispProbe.js";
 import { startVouchersOnFirstUse } from "../services/voucherIssuance.js";
 import { runIntelAlerts } from "../services/intelAlerts.js";
 
@@ -361,6 +361,15 @@ async function main() {
   setInterval(() => {
     pruneIspProbes(prisma).catch((error) => console.error("ISP probe prune error:", error));
   }, 24 * 3600 * 1000);
+
+  // Fair queue guard (see ispProbe.ts): every 30 s, raise the limit at once
+  // if the queue is full while the ISP line still has room.
+  let guarding = false;
+  setInterval(() => {
+    if (guarding) return;
+    guarding = true;
+    runFairShareGuard(prisma).catch((error) => console.error("Fair share guard error:", error)).finally(() => { guarding = false; });
+  }, 30 * 1000);
 
   // Client Intelligence alerts (see intelAlerts.ts), hourly.
   setInterval(() => {

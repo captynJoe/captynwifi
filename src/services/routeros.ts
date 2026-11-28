@@ -935,3 +935,44 @@ export async function getFairShareLimit(): Promise<string | null> {
     client.close();
   }
 }
+
+export type FairShareSample = { limitMbps: number; rateMbps: number; queuedBytes: number; pingMs: number | null };
+
+// One look at the fair queue and the line: the queue's limit, what it's
+// passing, its backlog, and the router's ping to 1.1.1.1 (through the ISP,
+// not through our queue -- router traffic isn't in it). Low ping with a full
+// queue = our queue is the bottleneck; rising ping = the ISP line is full.
+export async function sampleFairShare(): Promise<FairShareSample | null> {
+  if (missingRouterConfig()) return null;
+  const client = new RouterOsApiClient();
+  try {
+    await client.connect();
+    await client.login();
+    const tree = sentencesToRows(await client.command(["/queue/tree/print", "=stats="])).find((q) => q.name === FAIR_SHARE_QUEUE);
+    if (!tree) return null;
+    const pings = sentencesToRows(await client.command(["/ping", "=address=1.1.1.1", "=count=3", "=interval=0.2"], 8000))
+      .map((row) => parseRouterDurationMs(row.time)).filter((ms): ms is number => ms !== null);
+    return {
+      limitMbps: Math.round(Number(tree["max-limit"]) / 1_000_000),
+      rateMbps: Number(tree.rate) / 1_000_000,
+      queuedBytes: Number(tree["queued-bytes"]) || 0,
+      pingMs: pings.length ? pings.sort((a, b) => a - b)[Math.floor(pings.length / 2)] : null
+    };
+  } catch {
+    return null;
+  } finally {
+    client.close();
+  }
+}
+
+// "1ms846us" / "23ms" / "1s20ms" -> milliseconds.
+export function parseRouterDurationMs(value: string | undefined): number | null {
+  if (!value) return null;
+  let ms = 0;
+  let matched = false;
+  for (const [, num, unit] of value.matchAll(/(\d+(?:\.\d+)?)(us|ms|s)/g)) {
+    matched = true;
+    ms += unit === "s" ? Number(num) * 1000 : unit === "ms" ? Number(num) : Number(num) / 1000;
+  }
+  return matched ? ms : null;
+}

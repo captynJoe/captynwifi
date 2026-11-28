@@ -1,6 +1,6 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { config } from "../config.js";
-import { probeLines, setFairShareLimit, type LineReading } from "./routeros.js";
+import { probeLines, sampleFairShare, setFairShareLimit, type FairShareSample, type LineReading } from "./routeros.js";
 
 // Pure: the fair queue's ceiling for a measured line speed. 90% keeps the
 // queue at the router (not the ISP), so the router decides who gets what.
@@ -166,4 +166,62 @@ export async function lineSummaries(prisma: PrismaClient, now = new Date()) {
     monthReceivedGb: Math.round(counterUsageBytes(entry.counters) / 1e9),
     since: probes[0]?.at ?? null
   }));
+}
+
+// ---- Fair queue guard (every 30 s) ----------------------------------------
+// The queue must never be what holds customers back. If it's full while the
+// line's ping is still at its quiet baseline, the ISP has room: raise the
+// limit now (not at the next 30-minute test). If the ping climbs well above
+// baseline three looks in a row while the queue is busy, the ISP line is
+// full: settle just under what's actually flowing, never below half the last
+// measured line or 15 Mbps.
+export type GuardState = { baselineMs: number | null; recentPings: number[]; highPingRun: number; lastLowerAt?: number };
+// After settling under a full ISP line, wait before raising again, so the
+// guard doesn't cycle raise -> ISP fills -> lower every couple of minutes.
+const GUARD_RAISE_HOLD_MS = 10 * 60 * 1000;
+
+export function guardDecision(
+  sample: FairShareSample,
+  state: GuardState,
+  bounds: { maxMbps: number; minMbps: number },
+  now = Date.now()
+): { limit: number | null; reason: string } {
+  const { limitMbps, rateMbps, queuedBytes, pingMs } = sample;
+  if (pingMs === null || state.baselineMs === null) return { limit: null, reason: "no ping" };
+  const full = rateMbps >= limitMbps * 0.95 && queuedBytes > 0;
+  const lineQuiet = pingMs <= state.baselineMs + 8;
+  const lineBusy = pingMs >= state.baselineMs + 20;
+  const holdingAfterLower = state.lastLowerAt !== undefined && now - state.lastLowerAt < GUARD_RAISE_HOLD_MS;
+  if (full && lineQuiet && limitMbps < bounds.maxMbps && !holdingAfterLower) {
+    return { limit: Math.min(bounds.maxMbps, Math.max(limitMbps + 5, Math.round(limitMbps * 1.2))), reason: `queue full, line ping ${pingMs.toFixed(0)} ms (baseline ${state.baselineMs.toFixed(0)}): raise` };
+  }
+  if (lineBusy && rateMbps >= limitMbps * 0.8 && state.highPingRun >= 3) {
+    const target = Math.max(bounds.minMbps, Math.round(rateMbps * 0.9));
+    if (target < limitMbps) return { limit: target, reason: `line ping ${pingMs.toFixed(0)} ms (baseline ${state.baselineMs.toFixed(0)}): ISP full, settle under it` };
+  }
+  return { limit: null, reason: "steady" };
+}
+
+const guardState: GuardState = { baselineMs: null, recentPings: [], highPingRun: 0 };
+
+export async function runFairShareGuard(prisma: PrismaClient) {
+  if (!config.routeros.fairShare) return null;
+  const sample = await sampleFairShare();
+  if (!sample || sample.pingMs === null) return null;
+  // Baseline = the quietest ping in the last ~30 minutes of looks.
+  guardState.recentPings = [...guardState.recentPings, sample.pingMs].slice(-60);
+  guardState.baselineMs = Math.min(...guardState.recentPings);
+  guardState.highPingRun = sample.pingMs >= guardState.baselineMs + 20 ? guardState.highPingRun + 1 : 0;
+  const latest = await prisma.wifiIspProbe.findFirst({ where: { totalMbps: { not: null } }, orderBy: { at: "desc" }, select: { totalMbps: true, lines: true } });
+  const links = ((latest?.lines as unknown as LineReading[]) ?? []).reduce((sum, line) => sum + (line.linkMbps ?? 0), 0);
+  const bounds = {
+    maxMbps: links > 0 ? links : FAIR_SHARE_OPEN_MBPS,
+    minMbps: Math.max(FAIR_SHARE_FLOOR_MBPS, Math.round((latest?.totalMbps ?? 0) * 0.5))
+  };
+  const decision = guardDecision(sample, guardState, bounds);
+  if (decision.limit === null || decision.limit === sample.limitMbps) return { sample, decision };
+  const set = await setFairShareLimit(decision.limit);
+  if (set && decision.limit < sample.limitMbps) guardState.lastLowerAt = Date.now();
+  if (set) console.log(`Fair share guard: ${decision.reason}: ${sample.limitMbps}M -> ${set.next} (passing ${sample.rateMbps.toFixed(1)} Mbps)`);
+  return { sample, decision };
 }

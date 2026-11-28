@@ -80,3 +80,40 @@ test("data used per line counts across router restarts (counter drops to zero)",
   assert.equal(counterUsageBytes([100, 300, 50, 150]), 200 + 50 + 100, "after a reboot it counts from zero");
   assert.equal(counterUsageBytes([42]), 0);
 });
+
+test("router ping times are read in milliseconds", async () => {
+  const { parseRouterDurationMs } = await import("../src/services/routeros.js");
+  assert.equal(parseRouterDurationMs("1ms846us"), 1.846);
+  assert.equal(parseRouterDurationMs("23ms"), 23);
+  assert.equal(parseRouterDurationMs("1s20ms"), 1020);
+  assert.equal(parseRouterDurationMs(undefined), null);
+});
+
+test("fair queue guard: a full queue on a quiet line is raised at once", async () => {
+  const { guardDecision } = await import("../src/services/ispProbe.js");
+  const bounds = { maxMbps: 100, minMbps: 15 };
+  // Last night: queue at 26 and full, router ping 2 ms -> the ISP had room.
+  const raise = guardDecision({ limitMbps: 26, rateMbps: 26, queuedBytes: 200000, pingMs: 2 }, { baselineMs: 2, recentPings: [2], highPingRun: 0 }, bounds);
+  assert.equal(raise.limit, 31);
+  // Already at the port's speed: nothing more to give.
+  assert.equal(guardDecision({ limitMbps: 100, rateMbps: 99, queuedBytes: 1, pingMs: 2 }, { baselineMs: 2, recentPings: [2], highPingRun: 0 }, bounds).limit, null);
+});
+
+test("fair queue guard: settles under a full ISP line only after three high-ping looks", async () => {
+  const { guardDecision } = await import("../src/services/ispProbe.js");
+  const bounds = { maxMbps: 100, minMbps: 15 };
+  const busy = { limitMbps: 60, rateMbps: 24, queuedBytes: 0, pingMs: 80 };
+  assert.equal(guardDecision(busy, { baselineMs: 2, recentPings: [], highPingRun: 2 }, bounds).limit, null, "rate far below limit: not our concern");
+  const capped = { limitMbps: 26, rateMbps: 25, queuedBytes: 0, pingMs: 80 };
+  assert.equal(guardDecision(capped, { baselineMs: 2, recentPings: [], highPingRun: 2 }, bounds).limit, null, "two high looks: wait");
+  assert.equal(guardDecision(capped, { baselineMs: 2, recentPings: [], highPingRun: 3 }, bounds).limit, 23, "three: settle just under what flows");
+  assert.equal(guardDecision({ ...capped, rateMbps: 10, limitMbps: 12 }, { baselineMs: 2, recentPings: [], highPingRun: 3 }, bounds).limit, null, "never below the floor");
+});
+
+test("fair queue guard: after settling under a full line it waits 10 minutes before raising", async () => {
+  const { guardDecision } = await import("../src/services/ispProbe.js");
+  const full = { limitMbps: 22, rateMbps: 22, queuedBytes: 5000, pingMs: 2 };
+  const now = Date.parse("2026-11-28T18:00:00Z");
+  assert.equal(guardDecision(full, { baselineMs: 2, recentPings: [], highPingRun: 0, lastLowerAt: now - 5 * 60 * 1000 }, { maxMbps: 100, minMbps: 15 }, now).limit, null);
+  assert.equal(guardDecision(full, { baselineMs: 2, recentPings: [], highPingRun: 0, lastLowerAt: now - 11 * 60 * 1000 }, { maxMbps: 100, minMbps: 15 }, now).limit, 27);
+});
