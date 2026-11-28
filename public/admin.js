@@ -2390,6 +2390,11 @@ async function loadTraceAlerts() {
   panel.classList.remove("hidden");
   const open = alerts.filter((a) => !a.resolvedAt).length;
   count.textContent = open ? `${open} open` : "None open";
+  // Auto-reconnect's last 24 hours, next to the count.
+  api(adminApi("/trace/auto-reconnect")).then((r) => {
+    if (!r || r.mode === "off") return;
+    count.textContent += ` · Auto-reconnect 24 h: ${r.signedInDevices} device${r.signedInDevices === 1 ? "" : "s"} signed back in${r.failed ? `, ${r.failed} failed` : ""}${r.mode === "dry-run" ? " (dry run)" : ""}`;
+  }).catch(() => {});
   body.innerHTML = alerts.length
     ? alerts.map((a) => `<tr class="${a.resolvedAt ? "trace-alert-resolved" : ""}">
         <td>${escapeHtml(a.title)}${a.resolvedAt ? ` <span class="status-chip">Resolved ${escapeHtml(fmtDate(a.resolvedAt))}</span>` : ""}</td>

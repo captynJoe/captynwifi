@@ -35,3 +35,11 @@ test("Village Inn link codes are 7 characters, so they never clash with device c
   assert.equal(normalizeLinkCode("ABC123"), null);
   assert.equal(normalizeLinkCode("ABCDEF0"), null, "0 isn't in the code alphabet");
 });
+
+test("M-PESA query back-off: 30 s on the first 429, doubling, capped at 5 minutes", async () => {
+  const { nextStkBackoffMs } = await import("../src/services/mpesa.js");
+  assert.equal(nextStkBackoffMs(0), 30_000);
+  assert.equal(nextStkBackoffMs(30_000), 60_000);
+  assert.equal(nextStkBackoffMs(240_000), 300_000);
+  assert.equal(nextStkBackoffMs(300_000), 300_000);
+});

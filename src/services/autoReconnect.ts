@@ -120,6 +120,16 @@ export async function runAutoReconnect(prisma: PrismaClient) {
       failed += 1;
       console.warn(`[AutoReconnect] ${candidate.username} ${host.deviceMac}: ${result.error}`);
     }
+    // Recorded so the Trace page can say how often it rescued someone.
+    await prisma.wifiAuditEvent.create({
+      data: {
+        actorId: "auto-reconnect",
+        actorName: "Auto-reconnect",
+        action: result.ok ? "auto_reconnect.signed_in" : "auto_reconnect.failed",
+        target: host.deviceMac,
+        detail: { username: candidate.username, address: host.address, ...(result.ok ? {} : { error: result.error ?? null }) }
+      }
+    }).catch(() => {});
   }
   // Forget attempts long past the retry window so the map can't grow forever.
   for (const [mac, at] of lastAttemptAt) if (now.getTime() - at > RECONNECT_RETRY_MS * 5) lastAttemptAt.delete(mac);

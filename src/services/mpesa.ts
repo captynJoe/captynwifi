@@ -148,11 +148,32 @@ export function isSuccessfulStkQuery(response: DarajaStkQueryResponse | null | u
   return Number(response.ResultCode) === 0;
 }
 
-export async function queryWifiStkPush(checkoutRequestId: string): Promise<DarajaStkQueryResponse> {
+// Daraja rate-limits STK queries (429). The reconciler checked up to 25
+// payments in a burst every 90 s, so callbacks -- where a customer is
+// waiting -- got throttled too. Queries are now spaced >= 1 s apart; a 429
+// starts a back-off (30 s, doubling to 5 min, reset on success) during which
+// background checks don't run. Callback checks always go through.
+export class MpesaThrottledError extends Error {}
+const STK_QUERY_SPACING_MS = 1000;
+let stkCooldownUntil = 0;
+let stkBackoffMs = 0;
+let stkNextSlot = 0;
+
+export function nextStkBackoffMs(previousMs: number) {
+  return Math.min(300_000, Math.max(30_000, previousMs * 2));
+}
+
+export async function queryWifiStkPush(checkoutRequestId: string, { background = false } = {}): Promise<DarajaStkQueryResponse> {
   const status = getMpesaStatus();
   if (!status.configured) {
     throw new Error(`M-PESA is not configured for CAPTYN WiFi: ${status.missing.join(", ")}`);
   }
+  if (background && Date.now() < stkCooldownUntil) {
+    throw new MpesaThrottledError("M-PESA STK query backing off after 429");
+  }
+  const slot = Math.max(Date.now(), stkNextSlot);
+  stkNextSlot = slot + STK_QUERY_SPACING_MS;
+  if (slot > Date.now()) await new Promise((resolve) => setTimeout(resolve, slot - Date.now()));
 
   const token = await getAccessToken();
   const timestamp = toTimestamp();
@@ -173,7 +194,13 @@ export async function queryWifiStkPush(checkoutRequestId: string): Promise<Daraj
     signal: AbortSignal.timeout(12000)
   });
   const body = await parseJsonSafely<DarajaStkQueryResponse>(response);
+  if (response.status === 429) {
+    stkBackoffMs = nextStkBackoffMs(stkBackoffMs);
+    stkCooldownUntil = Date.now() + stkBackoffMs;
+    throw new MpesaThrottledError(`M-PESA STK query failed (429); background checks paused ${Math.round(stkBackoffMs / 1000)} s`);
+  }
   if (!response.ok || !body) throw new Error(`M-PESA STK query failed (${response.status})`);
+  stkBackoffMs = 0;
 
   console.log(
     `M-PESA STK query checked: checkoutRequestId=${checkoutRequestId} ` +

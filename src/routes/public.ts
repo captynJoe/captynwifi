@@ -5,7 +5,7 @@ import type { WifiCredit, WifiPaymentIntent, WifiPlan } from "@prisma/client";
 import { z } from "zod";
 import { config } from "../config.js";
 import { prisma } from "../prisma.js";
-import { formatDarajaMsisdn, getMpesaStatus, initiateWifiStkPush, isSuccessfulStkQuery, queryWifiStkPush } from "../services/mpesa.js";
+import { MpesaThrottledError, formatDarajaMsisdn, getMpesaStatus, initiateWifiStkPush, isSuccessfulStkQuery, queryWifiStkPush } from "../services/mpesa.js";
 import { buildRadiusProjection, createRadiusSecret, normalizeDeviceMac, normalizeWifiUsername } from "../services/radiusProjection.js";
 import { applyRadiusProjectionRows } from "../services/radiusSqlApply.js";
 import { startPendingVoucher } from "../services/voucherIssuance.js";
@@ -2546,8 +2546,11 @@ export async function reconcilePendingMpesaPayments(): Promise<{ queued: number;
     const checkoutRequestId = intent.providerReference as string;
     let query: Awaited<ReturnType<typeof queryWifiStkPush>>;
     try {
-      query = await queryWifiStkPush(checkoutRequestId);
-    } catch {
+      query = await queryWifiStkPush(checkoutRequestId, { background: true });
+    } catch (error) {
+      // Throttled: stop this round rather than hammer Daraja (and keep the
+      // budget for callbacks); the rest are checked next round.
+      if (error instanceof MpesaThrottledError) break;
       continue; // still processing, or Daraja unreachable -- try next round
     }
     if (query?.CheckoutRequestID !== checkoutRequestId || query.ResultCode === undefined || query.ResultCode === null || query.ResultCode === "") continue;

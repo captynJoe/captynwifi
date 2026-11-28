@@ -277,6 +277,27 @@ adminRouter.get("/trace", async (req, res, next) => {
   }
 });
 
+// Auto-reconnect over the last 24 hours: devices signed back in / failed.
+adminRouter.get("/trace/auto-reconnect", async (_req, res, next) => {
+  try {
+    const since = new Date(Date.now() - 24 * 3600 * 1000);
+    const events = await prisma.wifiAuditEvent.findMany({
+      where: { actorId: "auto-reconnect", createdAt: { gte: since } },
+      select: { action: true, target: true }
+    });
+    const devices = (action: string) => new Set(events.filter((e) => e.action === action).map((e) => e.target)).size;
+    return sendData(res, {
+      signedIn: events.filter((e) => e.action === "auto_reconnect.signed_in").length,
+      signedInDevices: devices("auto_reconnect.signed_in"),
+      failed: events.filter((e) => e.action === "auto_reconnect.failed").length,
+      failedDevices: devices("auto_reconnect.failed"),
+      mode: config.routeros.autoReconnect
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 // Client Intelligence alerts: open ones, plus anything resolved in the last day.
 adminRouter.get("/trace/alerts", async (_req, res, next) => {
   try {
@@ -1910,9 +1931,16 @@ adminRouter.get("/accounting-sessions", async (_req, res, next) => {
         acctsessiontime as "acctSessionTimeSeconds",
         acctinputoctets as "inputOctets",
         acctoutputoctets as "outputOctets",
-        coalesce(acctupdatetime, acctstoptime, acctstarttime) as "updatedAt"
-      from radacct
-      order by coalesce(acctupdatetime, acctstoptime, acctstarttime) desc nulls last
+        "updatedAt"
+      from (
+        -- Each session once: older FreeRADIUS restarts left duplicate rows
+        -- for the same session; keep its most recently updated row.
+        select distinct on (username, acctsessionid) *, coalesce(acctupdatetime, acctstoptime, acctstarttime) as "updatedAt"
+        from radacct
+        where acctstarttime > now() - interval '7 days'
+        order by username, acctsessionid, coalesce(acctupdatetime, acctstoptime, acctstarttime) desc nulls last
+      ) latest
+      order by "updatedAt" desc nulls last
       limit 100
     `);
     return sendData(res, rows);

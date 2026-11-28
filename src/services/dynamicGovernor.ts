@@ -2,7 +2,6 @@ import { Prisma } from "@prisma/client";
 import { config } from "../config.js";
 import { measuredLineCapacityMbps } from "./ispProbe.js";
 import { prisma } from "../prisma.js";
-import { kickHotspotUser } from "./routeros.js";
 import { parseMikrotikRateLimit, rateLimitEquals, scaleMikrotikRateLimit, withBurst } from "./rateLimit.js";
 
 type PressureState = "GREEN" | "YELLOW" | "RED" | "CRITICAL";
@@ -318,16 +317,10 @@ export class WifiDynamicGovernor {
 
     if (config.governor.dryRun || !config.governor.applyRadiusSql) return;
 
+    // Never disconnects anyone to apply a change (that used to be
+    // kickOnChange: in a busy evening it would have dropped 30+ customers at
+    // once). The new cap applies at the device's next sign-in; sharing the
+    // line fairly in the moment is the router's fair queue (docs/fair-share.rsc).
     await applyRadiusRateLimit(sample.username, targetRateLimit);
-    if (config.governor.kickOnChange) {
-      // The router only reads Mikrotik-Rate-Limit at login, so a failed kick
-      // leaves the device on its old speed until it reconnects on its own.
-      const kick = await kickHotspotUser(sample.username);
-      if (kick.error || kick.skippedReason || kick.removed === 0) {
-        console.warn(
-          `[WifiGovernor] kick ${sample.username} did not apply ${targetRateLimit}: ${kick.error || kick.skippedReason || "no active router session found"}`
-        );
-      }
-    }
   }
 }
