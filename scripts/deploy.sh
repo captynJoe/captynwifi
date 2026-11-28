@@ -86,7 +86,9 @@ ok "RADIUS worker running"
 step "Restarting the payment worker on the finished code"
 pay_at=$(date +%s)
 docker compose restart payment_activation_worker >/dev/null 2>&1
-for _ in $(seq 1 30); do
+# Node starts slowly right after a deploy (the API and worker are warming up
+# on a small CPU share): give it 3 minutes, not 1.
+for _ in $(seq 1 90); do
   docker logs --since "$(date -u -d @"$pay_at" +%Y-%m-%dT%H:%M:%S)" "$PAYMENTS" 2>&1 | grep -q "worker started" && break
   sleep 2
 done
