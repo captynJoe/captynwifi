@@ -66,3 +66,17 @@ test("'how busy' is judged against the measured line, not a fixed 80 Mbps", asyn
   assert.equal(lineCapacityMbps({ at: new Date("2026-11-27T17:00:00Z"), totalMbps: 22 }, 80, now), 80, "stale reading: fall back");
   assert.equal(lineCapacityMbps(null, 80, now), 80);
 });
+
+test("internet lines are read from config, with today's single line as the default", async () => {
+  const { readWanLines } = await import("../src/config.js");
+  assert.deepEqual(readWanLines("ether1||Mymanga"), [{ iface: "ether1", table: null, label: "Mymanga" }]);
+  assert.deepEqual(readWanLines("ether1|to-isp1|Mymanga, ether3|to-isp2|Safaricom").map((l) => [l.iface, l.table, l.label]), [["ether1", "to-isp1", "Mymanga"], ["ether3", "to-isp2", "Safaricom"]]);
+  assert.deepEqual(readWanLines("bad port|x|y"), [{ iface: "ether1", table: null, label: "ISP1" }], "nonsense falls back safely");
+});
+
+test("data used per line counts across router restarts (counter drops to zero)", async () => {
+  const { counterUsageBytes } = await import("../src/services/ispProbe.js");
+  assert.equal(counterUsageBytes([100, 300, 600]), 500);
+  assert.equal(counterUsageBytes([100, 300, 50, 150]), 200 + 50 + 100, "after a reboot it counts from zero");
+  assert.equal(counterUsageBytes([42]), 0);
+});

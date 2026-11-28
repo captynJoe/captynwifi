@@ -7,7 +7,7 @@
     <script src="theme.js?v=2026080402"></script>
     <link rel="icon" href="captyn-mark.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="theme.css?v=2026103102" />
-    <link rel="stylesheet" href="admin.css?v=2026112702" />
+    <link rel="stylesheet" href="admin.css?v=2026112801" />
   </head>
   <body>
     <header class="topbar">
@@ -333,6 +333,8 @@
           </article>
           <article class="surface span-12 table-panel hidden" id="isp-probe-panel">
             <div class="panel-head"><h2>ISP line speed</h2><span id="isp-probe-summary"></span><span id="isp-probe-status" class="inline-status"></span><button id="isp-probe-run" class="secondary" type="button">Test now</button></div>
+            <div id="isp-lines" class="isp-lines"></div>
+            <div id="router-setup" class="router-setup"></div>
             <div class="table-wrap"><table><thead><tr><th>Time (EAT)</th><th>Test download</th><th>Customer traffic</th><th>Line total</th></tr></thead><tbody id="isp-probe-body"></tbody></table></div>
             <p class="capacity-note">The router downloads a 10 MB test file every 30 minutes. Line total is the test plus customer traffic at that moment; the fair queue is then set to 90% of it, so everyone gets an equal share when the line is full.</p>
           </article>
@@ -485,6 +487,6 @@
       </section>
     </main>
 
-    <script src="admin.js?v=2026112801" defer data-cfasync="false"></script>
+    <script src="admin.js?v=2026112802" defer data-cfasync="false"></script>
   </body>
 </html>

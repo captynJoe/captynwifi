@@ -1056,6 +1056,20 @@ function renderIspProbes() {
     body.innerHTML = `<tr><td colspan="4" class="empty-state">${escapeHtml(data.error)}</td></tr>`;
     return;
   }
+  const linesEl = document.getElementById("isp-lines");
+  if (linesEl) {
+    linesEl.innerHTML = (data.lines || []).map((line) => {
+      const l = line.latest || {};
+      const speed = l.error ? `<span class="bad-text">${escapeHtml(l.error)}</span>` : `${escapeHtml(l.totalMbps ?? "?")} Mbps${l.linkMbps ? ` <small>(port ${escapeHtml(l.linkMbps)} Mbps)</small>` : ""}`;
+      return `<div class="isp-line"><strong>${escapeHtml(line.label)}</strong><span>${escapeHtml(line.iface)}</span><span>Line ${speed}</span><span>This month: <strong>${escapeHtml(line.monthReceivedGb)} GB</strong> received</span></div>`;
+    }).join("");
+  }
+  const setupEl = document.getElementById("router-setup");
+  if (setupEl) {
+    setupEl.innerHTML = (data.setup || []).map((check) =>
+      `<span class="setup-check ${check.ok === true ? "ok" : check.ok === false ? "bad" : "unknown"}" title="${escapeHtml(check.detail)}">${check.ok === true ? "✓" : check.ok === false ? "✗" : "?"} ${escapeHtml(check.name)}: ${escapeHtml(check.detail)}</span>`
+    ).join("");
+  }
   const probes = data.probes || [];
   const eatHour = (at) => (new Date(at).getUTCHours() + 3) % 24;
   const avg = (rows) => rows.length ? Math.round(rows.reduce((sum, p) => sum + p.totalMbps, 0) / rows.length) : null;

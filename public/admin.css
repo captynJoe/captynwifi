@@ -671,3 +671,13 @@ img.brand-mark { background: none; border-radius: 10px; object-fit: contain; }
 .give-time-form { display: grid; grid-template-columns: 1fr 110px; gap: 10px; padding: 0 16px 16px; }
 .give-time-form .wide { grid-column: 1 / -1; }
 .give-time-form textarea { width: 100%; resize: vertical; font: inherit; }
+
+/* Capacity → ISP lines and router setup */
+.isp-lines { display: grid; gap: 8px; padding: 0 16px 10px; }
+.isp-line { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: baseline; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; font-size: 13px; }
+.isp-line > span:nth-child(2) { color: var(--muted); }
+.router-setup { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 16px 12px; font-size: 12px; }
+.setup-check { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); }
+.setup-check.ok { color: var(--green, #1a7f4b); }
+.setup-check.bad { color: var(--red, #c0392b); border-color: var(--red, #c0392b); font-weight: 700; }
+.bad-text { color: var(--red, #c0392b); }

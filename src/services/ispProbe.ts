@@ -1,6 +1,6 @@
-import type { PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import { config } from "../config.js";
-import { probeIspThroughput, setFairShareLimit } from "./routeros.js";
+import { probeLines, setFairShareLimit, type LineReading } from "./routeros.js";
 
 // Pure: the fair queue's ceiling for a measured line speed. 90% keeps the
 // queue at the router (not the ISP), so the router decides who gets what.
@@ -64,13 +64,17 @@ export async function runIspProbe(prisma: PrismaClient, now = new Date(), { forc
       limitBefore = Number.isFinite(before) && before > 0 ? Math.round(before / 1_000_000) : null;
       await new Promise((resolve) => setTimeout(resolve, FAIR_SHARE_OPEN_SETTLE_MS));
     }
-    const reading = await probeIspThroughput(PROBE_URL);
-    const probeMbps = mbps(reading.bytes, reading.seconds);
-    const customerMbps = reading.customerMbps === null ? null : Math.round(reading.customerMbps * 10) / 10;
-    const measured = probeMbps !== null && customerMbps !== null ? Math.round((probeMbps + customerMbps) * 10) / 10 : null;
-    const totalMbps = measured !== null && reading.linkMbps ? Math.min(measured, reading.linkMbps) : measured;
+    // Each internet line on its own (config.routeros.wanLines); the fair
+    // queue gets their sum. A line that fails to test counts as 0 here.
+    const lines = await probeLines(PROBE_URL, config.routeros.wanLines);
+    const measuredLines = lines.filter((line) => line.totalMbps !== null);
+    if (measuredLines.length === 0) throw new Error(lines.map((line) => `${line.label}: ${line.error ?? "no reading"}`).join("; "));
+    const round1 = (value: number) => Math.round(value * 10) / 10;
+    const probeMbps = round1(measuredLines.reduce((sum, line) => sum + (line.testMbps ?? 0), 0));
+    const customerMbps = round1(measuredLines.reduce((sum, line) => sum + (line.customerMbps ?? 0), 0));
+    const totalMbps = round1(measuredLines.reduce((sum, line) => sum + (line.totalMbps ?? 0), 0));
     const probe = await prisma.wifiIspProbe.create({
-      data: { probeMbps, customerMbps, totalMbps, bytes: reading.bytes, seconds: reading.seconds }
+      data: { probeMbps, customerMbps, totalMbps, lines: lines as unknown as object }
     });
     if (config.routeros.fairShare && totalMbps !== null) {
       const recentPrevious = last?.totalMbps != null && now.getTime() - last.at.getTime() <= 45 * 60 * 1000 ? fairShareLimitMbps(last.totalMbps) : null;
@@ -121,4 +125,45 @@ export function lineCapacityMbps(latest: { at: Date; totalMbps: number | null } 
 export async function measuredLineCapacityMbps(prisma: PrismaClient, fallbackMbps: number, now = new Date()) {
   const latest = await prisma.wifiIspProbe.findFirst({ where: { totalMbps: { not: null } }, orderBy: { at: "desc" }, select: { at: true, totalMbps: true } });
   return lineCapacityMbps(latest, fallbackMbps, now);
+}
+
+// Pure: bytes received on one line between readings of its counter. The
+// counter restarts at 0 when the router reboots: a drop means "count from
+// zero again", not a negative amount.
+export function counterUsageBytes(readings: number[]): number {
+  let total = 0;
+  for (let i = 1; i < readings.length; i += 1) {
+    const delta = readings[i] - readings[i - 1];
+    total += delta >= 0 ? delta : readings[i];
+  }
+  return total;
+}
+
+// Per line: the latest reading and data received this month (from the
+// counters recorded with each probe; FUP early warning).
+export async function lineSummaries(prisma: PrismaClient, now = new Date()) {
+  const eat = new Date(now.getTime() + 3 * 3600 * 1000);
+  const monthStart = new Date(Date.UTC(eat.getUTCFullYear(), eat.getUTCMonth(), 1) - 3 * 3600 * 1000);
+  const probes = await prisma.wifiIspProbe.findMany({
+    where: { at: { gte: monthStart }, lines: { not: Prisma.DbNull } },
+    orderBy: { at: "asc" },
+    select: { at: true, lines: true }
+  });
+  const byIface = new Map<string, { label: string; latest: LineReading & { at: Date }; counters: number[] }>();
+  for (const probe of probes) {
+    for (const line of (probe.lines as unknown as LineReading[]) ?? []) {
+      const entry = byIface.get(line.iface) ?? { label: line.label, latest: { ...line, at: probe.at }, counters: [] };
+      entry.label = line.label;
+      entry.latest = { ...line, at: probe.at };
+      if (typeof line.rxBytes === "number") entry.counters.push(line.rxBytes);
+      byIface.set(line.iface, entry);
+    }
+  }
+  return [...byIface.entries()].map(([iface, entry]) => ({
+    iface,
+    label: entry.label,
+    latest: entry.latest,
+    monthReceivedGb: Math.round(counterUsageBytes(entry.counters) / 1e9),
+    since: probes[0]?.at ?? null
+  }));
 }

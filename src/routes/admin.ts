@@ -17,8 +17,8 @@ import { issueVoucher } from "../services/voucherIssuance.js";
 import { normalizeKenyaPhone } from "../lib/phone.js";
 import { PROMO_PLAN_SOURCE, endPromo, getActivePromo, startPromo } from "../services/promo.js";
 import { housingConfigured } from "../services/housingStanding.js";
-import { runIspProbe } from "../services/ispProbe.js";
-import { getFairShareLimit } from "../services/routeros.js";
+import { lineSummaries, runIspProbe } from "../services/ispProbe.js";
+import { getFairShareLimit, routerSetupHealth } from "../services/routeros.js";
 import { closeUnappliedPayment, creditUnappliedPayment, listUnappliedPayments } from "../services/unappliedPayments.js";
 import { getLoyaltySetting, monthStandings, pickLoyaltyRound, releaseLoyaltyRound, tierForRank } from "../services/loyalty.js";
 import { DYNAMIC_PLAN_SOURCE, refreshMirrorForBaseline } from "../services/dynamicPlanEngine.js";
@@ -535,8 +535,12 @@ adminRouter.get("/isp-probes", async (_req, res, next) => {
       orderBy: { at: "desc" },
       take: 200
     });
-    const fairShareLimit = config.routeros.fairShare ? await getFairShareLimit() : null;
-    return sendData(res, { enabled: config.routeros.ispProbe, probes, fairShare: { enabled: config.routeros.fairShare, limit: fairShareLimit } });
+    const [fairShareLimit, lines, setup] = await Promise.all([
+      config.routeros.fairShare ? getFairShareLimit() : Promise.resolve(null),
+      lineSummaries(prisma),
+      routerSetupHealth()
+    ]);
+    return sendData(res, { enabled: config.routeros.ispProbe, probes, lines, setup, fairShare: { enabled: config.routeros.fairShare, limit: fairShareLimit } });
   } catch (error) {
     return next(error);
   }

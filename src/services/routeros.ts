@@ -1,5 +1,5 @@
 import net from "node:net";
-import { config } from "../config.js";
+import { config, type WanLine } from "../config.js";
 
 export type RouterSessionKickResult = {
   enabled: boolean;
@@ -771,59 +771,125 @@ export async function isHotspotDeviceSignedIn(deviceMac: string): Promise<boolea
   }
 }
 
-export type IspProbeReading = { customerMbps: number | null; bytes: number; seconds: number; linkMbps?: number | null };
+export type LineReading = {
+  iface: string;
+  label: string;
+  testMbps: number | null;
+  customerMbps: number | null;
+  totalMbps: number | null;
+  linkMbps: number | null;
+  rxBytes: number | null;
+  error?: string;
+};
 
-// Downloads a fixed file through the router itself (nothing kept) and times
-// it, after reading the customer traffic already on the WAN. Together they
-// show what the ISP line can carry right now. Throws when it can't measure.
-export async function probeIspThroughput(url: string, timeoutMs = 60_000): Promise<IspProbeReading> {
+// Measures each internet line on its own: customer traffic on its port
+// (before and 3 s after the test, so the test isn't counted twice), a test
+// download sent out of THAT line (fetch src-address = the line's address,
+// with a routing rule sending that address to the line's table), capped at
+// the port's link speed. Lines are tested one after another.
+export async function probeLines(url: string, lines: WanLine[], timeoutMs = 60_000): Promise<LineReading[]> {
   const missing = missingRouterConfig();
   if (missing) throw new Error(missing);
   const client = new RouterOsApiClient();
   try {
     await client.connect();
     await client.login();
-    // Customer traffic on EVERY internet port (the router's WAN list, so a
-    // second ISP counts too), read before and after the test; the higher is
-    // kept, since a lull would understate the line.
-    const wanPorts = sentencesToRows(await client.command(["/interface/list/member/print", "=.proplist=interface", "?list=WAN"]))
-      .map((row) => row.interface).filter(Boolean);
-    const customerNow = async (): Promise<number | null> => {
+    const rxOf = async (iface: string) => {
       try {
-        const rows = sentencesToRows(await client.command(["/interface/monitor-traffic", `=interface=${(wanPorts.length ? wanPorts : ["ether1"]).join(",")}`, "=once="]));
-        const rx = rows.reduce((sum, row) => sum + (Number(row["rx-bits-per-second"]) || 0), 0);
-        return rx / 1_000_000;
+        const row = sentencesToRows(await client.command(["/interface/monitor-traffic", `=interface=${iface}`, "=once="]))[0] || {};
+        const rx = Number(row["rx-bits-per-second"]);
+        return Number.isFinite(rx) ? rx / 1_000_000 : null;
       } catch {
         return null;
       }
     };
-    const before = await customerNow();
-    const started = Date.now();
-    const rows = sentencesToRows(await client.command(["/tool/fetch", `=url=${url}`, "=keep-result=no"], timeoutMs));
-    const seconds = (Date.now() - started) / 1000;
-    // Read again only once the test's own traffic has left the 1 s average
-    // (reading straight after counted the test twice: 132 Mbps on a 100 Mbps port).
-    await new Promise((resolve) => setTimeout(resolve, 3000));
-    const after = await customerNow();
-    const customerMbps = before === null && after === null ? null : Math.max(before ?? 0, after ?? 0);
-    // The line can't carry more than its ports' link speed.
-    let linkMbps: number | null = null;
-    try {
-      let sum = 0;
-      for (const port of wanPorts.length ? wanPorts : ["ether1"]) {
-        const row = sentencesToRows(await client.command(["/interface/ethernet/monitor", `=numbers=${port}`, "=once="]))[0] || {};
-        sum += rateMbps(row.rate) ?? 0;
+    const results: LineReading[] = [];
+    for (const line of lines) {
+      const base = { iface: line.iface, label: line.label, testMbps: null, customerMbps: null, totalMbps: null, linkMbps: null, rxBytes: null };
+      try {
+        const address = sentencesToRows(await client.command(["/ip/address/print", "=.proplist=address", `?interface=${line.iface}`]))[0]?.address?.split("/")[0];
+        if (!address) throw new Error("no address (line down?)");
+        if (line.table) await ensureProbeRule(client, line, address);
+        const before = await rxOf(line.iface);
+        const started = Date.now();
+        const rows = sentencesToRows(await client.command(["/tool/fetch", `=url=${url}`, "=keep-result=no", `=src-address=${address}`], timeoutMs));
+        const seconds = (Date.now() - started) / 1000;
+        const last = rows[rows.length - 1] || {};
+        if (last.status && last.status !== "finished") throw new Error(`download ${last.status}`);
+        const bytes = Math.round(Number(last.downloaded) * 1024);
+        if (!Number.isFinite(bytes) || bytes <= 0) throw new Error("download returned no data");
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        const after = await rxOf(line.iface);
+        const customerMbps = before === null && after === null ? null : Math.max(before ?? 0, after ?? 0);
+        const testMbps = Math.round(((bytes * 8) / seconds / 1_000_000) * 10) / 10;
+        let linkMbps: number | null = null;
+        try {
+          const row = sentencesToRows(await client.command(["/interface/ethernet/monitor", `=numbers=${line.iface}`, "=once="]))[0] || {};
+          linkMbps = rateMbps(row.rate);
+        } catch {
+          // Not an ethernet port: no cap.
+        }
+        const measured = Math.round((testMbps + (customerMbps ?? 0)) * 10) / 10;
+        const stats = sentencesToRows(await client.command(["/interface/print", "=stats=", "=.proplist=rx-byte", `?name=${line.iface}`]))[0] || {};
+        const rxBytes = Number(stats["rx-byte"]);
+        results.push({
+          ...base,
+          testMbps,
+          customerMbps: customerMbps === null ? null : Math.round(customerMbps * 10) / 10,
+          totalMbps: linkMbps ? Math.min(measured, linkMbps) : measured,
+          linkMbps,
+          rxBytes: Number.isFinite(rxBytes) ? rxBytes : null
+        });
+      } catch (error) {
+        results.push({ ...base, error: error instanceof Error ? error.message : String(error) });
       }
-      linkMbps = sum > 0 ? sum : null;
-    } catch {
-      // Not an ethernet port (e.g. PPPoE/LTE WAN): no cap.
     }
-    const last = rows[rows.length - 1] || {};
-    if (last.status && last.status !== "finished") throw new Error(`Download ${last.status}`);
-    // RouterOS reports "downloaded" in KiB.
-    const bytes = Math.round(Number(last.downloaded) * 1024);
-    if (!Number.isFinite(bytes) || bytes <= 0) throw new Error("Download returned no data");
-    return { customerMbps, bytes, seconds, linkMbps };
+    return results;
+  } finally {
+    client.close();
+  }
+}
+
+// Keeps "test from this line's address -> this line's routing table" in
+// step with the line's current (DHCP) address.
+async function ensureProbeRule(client: RouterOsApiClient, line: WanLine, address: string) {
+  const comment = `CAPTYN probe ${line.iface}`;
+  const existing = sentencesToRows(await client.command(["/routing/rule/print", "=.proplist=.id,src-address,table,comment", `?comment=${comment}`]))[0];
+  const src = `${address}/32`;
+  if (existing && existing["src-address"] === src && existing.table === line.table) return;
+  if (existing) await client.command(["/routing/rule/remove", `=.id=${existing[".id"]}`]);
+  await client.command(["/routing/rule/add", `=src-address=${src}`, "=action=lookup-only-in-table", `=table=${line.table}`, `=comment=${comment}`]);
+}
+
+export type RouterSetupCheck = { name: string; ok: boolean | null; detail: string };
+
+// Is the router setup the server relies on still there and working?
+// (Fair queue, its packet marking, the Netwatch watchdog.) null = couldn't ask.
+export async function routerSetupHealth(): Promise<RouterSetupCheck[]> {
+  if (missingRouterConfig()) return [];
+  const client = new RouterOsApiClient();
+  try {
+    await client.connect();
+    await client.login();
+    const checks: RouterSetupCheck[] = [];
+    const tree = sentencesToRows(await client.command(["/queue/tree/print", "=stats="])).find((q) => q.name === FAIR_SHARE_QUEUE);
+    checks.push(tree
+      ? { name: "Fair queue", ok: tree.disabled !== "true", detail: `${Math.round(Number(tree["max-limit"]) / 1_000_000)} Mbps limit, ${(Number(tree.rate) / 1_000_000).toFixed(1)} Mbps now${tree.disabled === "true" ? ", DISABLED" : ""}` }
+      : { name: "Fair queue", ok: false, detail: "missing (docs/fair-share.rsc)" });
+    const marks = sentencesToRows(await client.command(["/ip/firewall/mangle/print", "=stats="])).filter((m) => /CAPTYN fair share/.test(m.comment || ""));
+    const activeMarks = marks.filter((m) => m.disabled !== "true");
+    checks.push({
+      name: "Traffic marking",
+      ok: activeMarks.length >= 2 && activeMarks.some((m) => Number(m.packets) > 0),
+      detail: activeMarks.length >= 2 ? `${activeMarks.length} rules, ${activeMarks.reduce((n, m) => n + Number(m.packets || 0), 0).toLocaleString()} packets marked` : `${activeMarks.length} of 2 rules active`
+    });
+    const watchdog = sentencesToRows(await client.command(["/tool/netwatch/print", "=.proplist=host,status,disabled"])).find((n) => n.host === "10.8.0.6");
+    checks.push(watchdog
+      ? { name: "Watchdog (Netwatch)", ok: watchdog.disabled !== "true", detail: `server ${watchdog.status ?? "unknown"}${watchdog.disabled === "true" ? ", DISABLED" : ""}` }
+      : { name: "Watchdog (Netwatch)", ok: false, detail: "missing (docs/fair-share.rsc)" });
+    return checks;
+  } catch (error) {
+    return [{ name: "Router", ok: null, detail: error instanceof Error ? error.message : "unreachable" }];
   } finally {
     client.close();
   }

@@ -1,6 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { config } from "../config.js";
-import { listActiveHotspotSessions } from "./routeros.js";
+import { listActiveHotspotSessions, routerSetupHealth } from "./routeros.js";
 
 // Client Intelligence alerts, checked hourly. Each rule reports what it sees
 // now; alerts no longer seen are resolved. Facts only: every alert names the
@@ -97,6 +97,19 @@ export async function collectAlertCandidates(prisma: PrismaClient, now = new Dat
         key: `router_without_radius:${session.user}:${session.deviceMac}`, rule: "router_without_radius", subject: session.deviceMac,
         title: `${session.deviceMac} is online as ${session.user} on the router with no open RADIUS session`,
         detail: { username: session.user }
+      });
+    }
+  }
+
+  // Router setup the server relies on (fair queue, marking, watchdog) gone
+  // or broken -- e.g. removed in Winbox or lost in a reset.
+  if (config.routeros.fairShare) {
+    for (const check of await routerSetupHealth()) {
+      if (check.ok !== false) continue;
+      candidates.push({
+        key: `router_setup:${check.name}`, rule: "router_setup", subject: "Router",
+        title: `Router setup: ${check.name} -- ${check.detail}`,
+        detail: { check: check.name, detail: check.detail }
       });
     }
   }

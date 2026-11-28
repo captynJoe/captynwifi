@@ -471,6 +471,8 @@ model WifiIspProbe {
   bytes        Int?
   seconds      Float?
   error        String?
+  // Per line (ISP): [{iface,label,testMbps,customerMbps,totalMbps,linkMbps,rxBytes,error}]
+  lines        Json?
 
   @@index([at])
 }

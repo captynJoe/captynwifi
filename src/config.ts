@@ -27,6 +27,15 @@ function readBoolean(name: string, fallback = false): boolean {
   return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
 }
 
+export type WanLine = { iface: string; table: string | null; label: string };
+export function readWanLines(raw: string): WanLine[] {
+  const lines = raw.split(",").map((part) => part.trim()).filter(Boolean).map((part) => {
+    const [iface, table, label] = part.split("|").map((value) => (value ?? "").trim());
+    return { iface, table: table || null, label: label || iface };
+  }).filter((line) => /^[A-Za-z0-9_.-]+$/.test(line.iface));
+  return lines.length ? lines : [{ iface: "ether1", table: null, label: "ISP1" }];
+}
+
 function readSweepMode(name: string): "off" | "dry-run" | "on" {
   const value = (process.env[name] ?? "").trim().toLowerCase();
   return value === "on" || value === "dry-run" ? value : "off";
@@ -124,7 +133,11 @@ export const config = {
     // Fair share: after each probe, set the router's shared fair queue
     // (queue tree "captyn-fair-down") to 90% of the measured line speed.
     // Off until that queue exists on the router (docs/fair-share.rsc).
-    fairShare: readBoolean("CAPTYN_WIFI_FAIR_SHARE")
+    fairShare: readBoolean("CAPTYN_WIFI_FAIR_SHARE"),
+    // Internet lines, "port|routing table|label" separated by commas, e.g.
+    // "ether1|to-isp1|Mymanga,ether3|to-isp2|Safaricom" (docs/dual-wan.rsc).
+    // No table = the router's main route (one line, today's setup).
+    wanLines: readWanLines(process.env.CAPTYN_WIFI_WAN_LINES ?? "ether1||Mymanga")
   },
   // CAPTYN Housing, asked whether a tenant's house is in good standing before
   // a tenants-only promo. Same shared token as Housing -> WiFi.
